@@ -125,7 +125,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /vault/secrets",
   "GET /vector-search",
   "GET /whiteboards/:viewId/state",
-  "GET /workers",
   "GET /workflows/:kind/:id/feed",
   "GET /workflows/:kind/:id/place",
   "GET /workspaces/:workspaceId",
@@ -136,4 +135,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 116;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 115;

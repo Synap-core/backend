@@ -12,8 +12,8 @@
  * different agent and acts as itself with its own key.
  *
  * Membership is NOT this module's concern, on purpose: nothing enrolls the AI
- * in a space silently. A write in a space it is not a member of goes to the
- * governance gate (a `workspace.join` proposal or a refusal with its reason).
+ * in a space: it acts through the membership of the person it serves, and a
+ * write where that person is not a member is refused with its reason.
  *
  * Lives in @synap/database so the routing package (`@synap/intelligence-
  * client`) and the API share ONE find-or-create. `database` is injectable so a

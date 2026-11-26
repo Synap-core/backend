@@ -777,7 +777,6 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "vault.vault.request" satisfies DirectProposalEventKey,
   "capability.capability.install" satisfies DirectProposalEventKey,
   "capability.capability.update" satisfies DirectProposalEventKey,
-  "workspace.join" satisfies DirectProposalEventKey,
   "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
   // Gate doors, live for an agent (founder, 21 Nov 2026, wave 9563b6f7): an
   // agent's tool can carry a credential (`credentialRef`), and adopting a
@@ -882,10 +881,14 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "automation/update": "floored",
   "cell/create": "floored",
   "cell/define": "floored",
+  // Installing a marketplace cell type, or retiring one (soft-delete of the
+  // `widget_definitions` row): what the pod can draw, for every view that uses it.
+  "cell/install": "floored",
+  "cell/retire": "floored",
   "playbook/create": "floored",
   "playbook/promote": "floored",
-  // Editing a playbook can switch on its schedule, which materialises an ACTIVE
-  // cron automation (services/playbooks/cron-automation.ts).
+  // Editing a playbook can switch on its schedule activator, which compiles an
+  // ACTIVE cron rule.
   "playbook/update": "floored",
   // Choosing who runs a playbook for the person from now on (run choice v3,
   // decision D7): an agent or a third-party app may ASK, the person approves it
@@ -1246,6 +1249,11 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // Choosing who runs a playbook is part of running it (run choice v3): the
   // grant that may run it may ask to remember who does.
   "playbook/set_run_choice": "run",
+  // Installing a marketplace cell type or retiring one writes the same
+  // `widget_definitions` row a define writes: a key that may define a cell may
+  // ASK to install or retire one. The doors govern it (both floored, 2.09).
+  "cell/install": "define",
+  "cell/retire": "define",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -2428,6 +2436,8 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "capability/renderer.set": "disruptive", // struct: how a capability renders everywhere
   "cell/create": "disruptive", // struct (2.09)
   "cell/define": "disruptive", // struct (2.09)
+  "cell/install": "disruptive", // struct (2.09)
+  "cell/retire": "disruptive", // struct (2.09): every view drawing it loses its renderer
   "cell/update": "reversible", // config patch of an existing placement
   "channel/bind": "disruptive", // scope: wires a room to a bridge
   "channel/create_branch": "disruptive", // struct: a new room the person must see
@@ -2704,6 +2714,10 @@ export const GATE_WRITE_DOORS = {
   "capability/renderer.set": "gate",
   "cell/create": "gate",
   "cell/define": "gate",
+  // `POST /cells/install` and `DELETE /cells/:typeKey` (Hub REST). Approved by
+  // `routers/proposals/executors/cell.ts`.
+  "cell/install": "gate",
+  "cell/retire": "gate",
   "cell/update": "gate",
   "channel/bind": "gate",
   "channel/create_branch": "gate",
@@ -3028,7 +3042,6 @@ export const DIRECT_PROPOSAL_DOORS = {
   // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
   // mints the source and hands its secret to the host, never to a person.
   "webhook/inbound_source.connect": "direct",
-  "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by
   // `routers/proposals/executors/trusted-issuer.ts` (pod admin, a person —
@@ -3107,7 +3120,7 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_skill: { subjectType: "skill", action: "create" },
   create_automation: { subjectType: "automation", action: "create" },
   create_rule: { subjectType: "rule", action: "create" },
-  // A DRAFT process from a capture — the `playbooks.create` door.
+  // A process — the `playbooks.create` door.
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
@@ -3116,6 +3129,13 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   // …and the page it shows on — the `profile/renderer.set` door, which binds
   // a playbook's or a view's own page too (per-object binding).
   bind_renderer: { subjectType: "profile", action: "renderer.set" },
+  // A plan's domain: its space and its kinds — the doors
+  // `synap_create_workspace` and `synap_define_kind` file through. The
+  // lifecycle door is direct (always pending, no gate pair): it gates on the
+  // kind's own schema door.
+  create_workspace: { subjectType: "workspace", action: "create" },
+  define_kind: { subjectType: "profile", action: "create" },
+  declare_lifecycle: { subjectType: "profile", action: "create" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },
@@ -3145,9 +3165,9 @@ export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
 const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_rule: 4,
   create_skill: 3,
-  // A process is configuration like an automation, and is likewise born
-  // inert (always `draft`); it outranks the automation because a process,
-  // once completed, ORCHESTRATES runs, sessions and their outputs.
+  // A process is configuration like an automation, born by the same rule
+  // (`statusAtCreate`); it outranks the automation because a process
+  // ORCHESTRATES runs, sessions and their outputs.
   create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
@@ -3161,6 +3181,12 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   // Changes how one object's page renders: presentational and revocable,
   // above a view (it replaces a page a person reads), below a record.
   bind_renderer: 0.8,
+  // A domain's structure, read by every space and every later write: a space
+  // and a kind outrank a rule's halves; a lifecycle changes how every thing
+  // of a kind moves.
+  create_workspace: 3.7,
+  define_kind: 3.6,
+  declare_lifecycle: 3.5,
   create_relation: 0,
   // An update rewrites a row a person already approved once: ranked with the
   // create of the same object, a hair below it (it mints no identity).

@@ -34,6 +34,7 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
@@ -124,7 +125,10 @@ import {
   buildRunSessionStartTitle,
   resolveSessionTitle,
 } from "@synap-core/types/focus-sessions";
-import { planSessionEdges } from "../../services/capture-agent/capture-plan.js";
+import {
+  planCrossKindEdges,
+  planSessionEdges,
+} from "../../services/capture-agent/capture-plan.js";
 import type {
   UpdateRequest,
   ProposalReviewGraph,
@@ -2703,6 +2707,20 @@ function buildConfigReviewItems(
   const views: NonNullable<ProposalReviewGraph["views"]> = [];
   const cells: NonNullable<ProposalReviewGraph["cells"]> = [];
   const updates: NonNullable<ProposalReviewGraph["updates"]> = [];
+  const workspaces: NonNullable<ProposalReviewGraph["workspaces"]> = [];
+  const kinds: NonNullable<ProposalReviewGraph["kinds"]> = [];
+  const lifecycles: NonNullable<ProposalReviewGraph["lifecycles"]> = [];
+  // The space a step names, when it names one (`ReviewStepSpace`).
+  const spaceOf = (op: { workspaceRef?: string; workspaceId?: string }) => ({
+    ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+    ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+  });
+  // A playbook naming a kind of this bundle shows that kind's slug.
+  const kindSlugByRef = new Map(
+    data.operations.flatMap((op) =>
+      op.op === "define_kind" ? [[op.ref, op.slug] as const] : []
+    )
+  );
   /** `bind_renderer` ops, drawn under their cell once every cell is listed. */
   const bindOps: Array<{
     index: number;
@@ -2764,12 +2782,22 @@ function buildConfigReviewItems(
       case "create_automation":
         renderedOpIndexes.add(index);
         automations.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          // Forced false at materialization — see CompositeCreateAutomationOp.
-          bornEnabled: false,
+          bornEnabled:
+            statusAtCreate({
+              requested:
+                op.enabled === undefined
+                  ? undefined
+                  : op.enabled
+                    ? "active"
+                    : "draft",
+              personApproved: true,
+              actorIsAgent: true,
+            }) === "active",
           ...(stepSkills
             ? { reach: flowReach(op.flowDefinition, stepSkills) }
             : {}),
@@ -2788,16 +2816,52 @@ function buildConfigReviewItems(
       case "create_playbook":
         renderedOpIndexes.add(index);
         playbooks.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           goalTemplate: op.goalTemplate,
-          subjectProfileSlug: op.subjectProfile.profileSlug,
-          ...(op.subjectProfile.statusProperty
+          subjectProfileSlug:
+            (op.subjectProfileRef
+              ? kindSlugByRef.get(op.subjectProfileRef)
+              : op.subjectProfile?.profileSlug) ?? "",
+          ...(op.subjectProfile?.statusProperty
             ? { statusProperty: op.subjectProfile.statusProperty }
             : {}),
-          // Forced at materialization — see CompositeCreatePlaybookOp.
-          bornStatus: "draft",
+          bornStatus: statusAtCreate({
+            requested: op.status,
+            personApproved: true,
+            actorIsAgent: true,
+          }),
+        });
+        return;
+      case "create_workspace":
+        renderedOpIndexes.add(index);
+        workspaces.push({ ref: op.ref, name: op.name });
+        return;
+      case "define_kind":
+        renderedOpIndexes.add(index);
+        kinds.push({
+          ref: op.ref,
+          slug: op.slug,
+          displayName: op.displayName,
+          fieldCount: op.fields?.length ?? 0,
+          ...(op.entityScope ? { entityScope: op.entityScope } : {}),
+          ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+        });
+        return;
+      case "declare_lifecycle":
+        renderedOpIndexes.add(index);
+        lifecycles.push({
+          ref: op.ref,
+          ...(op.kindRef ? { kindRef: op.kindRef } : {}),
+          ...(op.profileId ? { profileId: op.profileId } : {}),
+          property: op.property ?? "status",
+          options: (op.options ?? []).map((o) => ({
+            key: String(o.key ?? ""),
+            category: String(o.category ?? ""),
+          })),
+          ...(op.initialStatus ? { initialStatus: op.initialStatus } : {}),
         });
         return;
       case "create_view": {
@@ -2807,7 +2871,7 @@ function buildConfigReviewItems(
           typeof op.config?.profileSlug === "string"
             ? op.config.profileSlug
             : undefined;
-        const widgets =
+        const cells =
           op.viewType === "bento" && Array.isArray(op.config?.blocks)
             ? (op.config.blocks as Array<Record<string, unknown>>).flatMap(
                 (block) =>
@@ -2817,6 +2881,7 @@ function buildConfigReviewItems(
               )
             : undefined;
         views.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           viewType: op.viewType,
@@ -2826,7 +2891,8 @@ function buildConfigReviewItems(
           memberCount: op.entityRefs?.length ?? 0,
           ...(op.containerRef ? { containerRef: op.containerRef } : {}),
           ...(lifecycleOf ? { lifecycleOf } : {}),
-          ...(widgets ? { widgets } : {}),
+          // `widgets` is the old name of `cells`, kept one release.
+          ...(cells ? { cells, widgets: cells } : {}),
         });
         return;
       }
@@ -2834,6 +2900,7 @@ function buildConfigReviewItems(
         renderedOpIndexes.add(index);
         const source = op.rendererSource ?? "";
         cells.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
@@ -2861,7 +2928,8 @@ function buildConfigReviewItems(
     const binding = {
       ref: op.ref,
       targetKind: op.target.kind,
-      targetId: op.target.id,
+      targetId: op.target.id ?? op.target.ref ?? "",
+      ...(op.target.ref ? { targetRef: op.target.ref } : {}),
       slot: op.slot,
       scope: op.scope,
     };
@@ -2889,6 +2957,9 @@ function buildConfigReviewItems(
     ...(views.length ? { views } : {}),
     ...(cells.length ? { cells } : {}),
     ...(updates.length ? { updates } : {}),
+    ...(workspaces.length ? { workspaces } : {}),
+    ...(kinds.length ? { kinds } : {}),
+    ...(lifecycles.length ? { lifecycles } : {}),
   };
 }
 
@@ -2920,6 +2991,9 @@ function buildPlanReviewGraph(
   const projects: NonNullable<ProposalReviewGraph["projects"]> = [];
   const sessions: NonNullable<ProposalReviewGraph["sessions"]> = [];
   const documents: NonNullable<ProposalReviewGraph["documents"]> = [];
+  const tracks: NonNullable<ProposalReviewGraph["tracks"]> = [];
+  const sessionUpdates: NonNullable<ProposalReviewGraph["sessionUpdates"]> = [];
+  const linkRemovals: NonNullable<ProposalReviewGraph["linkRemovals"]> = [];
   const sessionLabelByRef = new Map<string, string>();
 
   data.operations.forEach((op, index) => {
@@ -2955,9 +3029,27 @@ function buildPlanReviewGraph(
           ...(op.subjectEntityId
             ? { subjectEntityId: op.subjectEntityId }
             : {}),
+          ...(op.trackRef ? { trackRef: op.trackRef } : {}),
+          ...(op.trackId ? { trackId: op.trackId } : {}),
         });
         return;
       }
+      case "create_track":
+        renderedOpIndexes.add(index);
+        tracks.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.direction ? { direction: op.direction } : {}),
+          ...(op.projectRef ? { projectRef: op.projectRef } : {}),
+          ...(op.projectId ? { projectId: op.projectId } : {}),
+          ...(op.parentRef ? { parentRef: op.parentRef } : {}),
+          ...(op.parentGoalId ? { parentGoalId: op.parentGoalId } : {}),
+          blockedBy: [
+            ...(op.blockedByRefs ?? []),
+            ...(op.blockedByTrackIds ?? []),
+          ],
+        });
+        return;
       case "create_document":
         renderedOpIndexes.add(index);
         documents.push({
@@ -2973,6 +3065,38 @@ function buildPlanReviewGraph(
       case "create_link":
         renderedOpIndexes.add(index);
         return;
+      case "update_session":
+        renderedOpIndexes.add(index);
+        sessionLabelByRef.set(
+          op.ref,
+          (typeof op.patch?.title === "string" && op.patch.title) ||
+            `session ${op.sessionId.slice(0, 8)}`
+        );
+        sessionUpdates.push({
+          ref: op.ref,
+          sessionId: op.sessionId,
+          ...(op.patch?.title !== undefined ? { title: op.patch.title } : {}),
+          ...(op.patch?.goal !== undefined ? { goal: op.patch.goal } : {}),
+          ...(op.patch?.status !== undefined
+            ? { status: op.patch.status }
+            : {}),
+        });
+        return;
+      case "remove_link": {
+        renderedOpIndexes.add(index);
+        const toKind = op.toEntityId
+          ? ("entity" as const)
+          : op.toTrackId
+            ? ("track" as const)
+            : ("session" as const);
+        linkRemovals.push({
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId: op.toEntityId ?? op.toTrackId ?? op.toSessionId ?? "",
+          itemRef: `$unlink${linkRemovals.length}`,
+        });
+        return;
+      }
       default:
         return;
     }
@@ -3004,18 +3128,58 @@ function buildPlanReviewGraph(
       itemRef: `$link${ordinal}`,
     };
   });
+  // A step that waits on a decision or a goal: the same list, its target
+  // kind named, so a reviewer sees what each step waits on.
+  const entityLabelByRef = new Map<string, string>();
+  for (const op of data.operations) {
+    if (op.op === "create_entity" && op.ref)
+      entityLabelByRef.set(op.ref, op.title ?? op.ref);
+  }
+  const trackLabelByRef = new Map(tracks.map((t) => [t.ref, t.name]));
+  for (const edge of planCrossKindEdges(data.operations)) {
+    const from = endpoint(edge.from);
+    const kindWord = edge.to.kind === "entity" ? "decision" : "goal";
+    const toLabel =
+      "ref" in edge.to
+        ? ((edge.to.kind === "entity"
+            ? entityLabelByRef.get(edge.to.ref)
+            : trackLabelByRef.get(edge.to.ref)) ?? edge.to.ref)
+        : `${kindWord} ${edge.to.id.slice(0, 8)}`;
+    links.push({
+      type: "blocked_by",
+      ...("ref" in from
+        ? { fromRef: from.ref }
+        : { fromSessionId: from.sessionId }),
+      toKind: edge.to.kind,
+      ...("ref" in edge.to
+        ? { toRef: edge.to.ref }
+        : edge.to.kind === "entity"
+          ? { toEntityId: edge.to.id }
+          : { toTrackId: edge.to.id }),
+      ...(edge.option ? { option: edge.option } : {}),
+      fromLabel: from.label,
+      toLabel,
+      itemRef: `$link${links.length}`,
+    });
+  }
 
   return {
     isPlan: true,
     planStepCount:
       projects.length +
+      tracks.length +
       sessions.length +
       documents.length +
+      sessionUpdates.length +
+      linkRemovals.length +
       data.operations.filter((op) => op.op === "create_link").length,
     projects,
     sessions,
     documents,
     links,
+    ...(tracks.length > 0 ? { tracks } : {}),
+    ...(sessionUpdates.length > 0 ? { sessionUpdates } : {}),
+    ...(linkRemovals.length > 0 ? { linkRemovals } : {}),
   };
 }
 
@@ -3244,7 +3408,7 @@ export function proposalPayloadTargetName(
  * pluralised, humanized, or raw). Nothing else. If even one word survives that
  * subtraction, the summary says something the metadata alone could not, and it
  * must be kept: a human wrote it, or it names the object, or it is a sentence
- * ({@link JOIN_GATE_SUMMARY}, a rule's `intent`) that a computed title would
+ * (a rule's `intent`) that a computed title would
  * destroy.
  *
  * Every word it subtracts comes from `@synap-core/types/vocabulary` — the same

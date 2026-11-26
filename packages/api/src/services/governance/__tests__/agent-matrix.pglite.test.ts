@@ -65,6 +65,7 @@ beforeAll(async () => {
     "users",
     "workspaces",
     "workspaceMembers",
+    "apiKeys",
     "podMembers",
     "playbooks",
     "governanceRules",

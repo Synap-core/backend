@@ -10,7 +10,9 @@
  *      (`workspaces.installFromCatalog`, `workspaceCatalogRouter` — catalog-resolved, never a
  *      caller-supplied definition; one space per domain is checked first, so a
  *      space that already holds the domain is USED, never twinned);
- *   2. move the entities whose kind has a home there (`entities.moveToWorkspace`);
+ *   2. move the entities whose kind has a home there (`entities.moveToWorkspace`),
+ *      then its playbooks (each with its automations), its other automations
+ *      and its views (`moveToSpace`, the one move door);
  *   3. archive the source ONLY when nothing is left in it (`workspaces.archive`).
  *      Otherwise it stays, and the result says what remains and why.
  *
@@ -38,7 +40,13 @@ import {
   getWorkspaceMembership,
   workspaces,
 } from "@synap/database";
-import { entities, profiles } from "@synap/database/schema";
+import {
+  automations,
+  entities,
+  playbooks,
+  profiles,
+  views,
+} from "@synap/database/schema";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import {
@@ -48,6 +56,7 @@ import {
 } from "./template-health.js";
 import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
 import { checkOneSpacePerDomain } from "./workspace-creation-service.js";
+import { applyMoveToSpace, type MovableObjectType } from "./move-to-space.js";
 import type { Context } from "../context.js";
 
 /** Why a retire-into cannot be planned. */
@@ -100,6 +109,8 @@ export interface RetireIntoPlan {
   /** What moves, by kind (most first). */
   moves: RetireIntoKindCount[];
   moveCount: number;
+  /** The configuration that moves with it, by object type. */
+  configMoves: RetireIntoKindCount[];
   /** What stays in the source, by kind, with the reason. */
   stays: RetireIntoKindStay[];
   stayCount: number;
@@ -116,6 +127,9 @@ export interface RetireIntoResult {
   /** Per-entity moves that became proposals (should be 0 for a human). */
   proposedMoves: number;
   failed: Array<{ entityId: string; error: string }>;
+  /** Playbooks, automations and views moved (a playbook's automations included). */
+  configMoved: number;
+  configFailed: Array<{ objectType: string; objectId: string; error: string }>;
   /** What is still in the source after the move, by kind, with the reason. */
   remaining: RetireIntoKindStay[];
   remainingCount: number;
@@ -310,6 +324,10 @@ export async function planRetireInto(input: {
     }
   }
 
+  const configMoves = (await configOf(ws.id))
+    .map(({ objectType, ids }) => ({ kind: objectType, count: ids.length }))
+    .filter((c) => c.count > 0);
+
   const targetName = target?.name ?? replacedBy;
   const stays = countByKind(stayedKinds).map((k) => ({
     ...k,
@@ -320,6 +338,11 @@ export async function planRetireInto(input: {
     target
       ? `Move ${movableIds.length} item${movableIds.length === 1 ? "" : "s"} from "${ws.name}" into "${target.name}".`
       : `Install "${replacedBy}", then move ${movableIds.length} item${movableIds.length === 1 ? "" : "s"} from "${ws.name}" into it.`,
+    ...(configMoves.length
+      ? [
+          `Its ${configMoves.map((c) => `${c.count} × ${resolveObjectNoun(c.kind).toLowerCase()}`).join(", ")} move too.`,
+        ]
+      : []),
     archiveSource
       ? `"${ws.name}" is then empty and gets archived (not deleted).`
       : `${stayedKinds.length} item${stayedKinds.length === 1 ? "" : "s"} stay in "${ws.name}", which is kept.`,
@@ -340,6 +363,7 @@ export async function planRetireInto(input: {
       },
       moves: countByKind(movedKinds),
       moveCount: movableIds.length,
+      configMoves,
       stays,
       stayCount: stayedKinds.length,
       archiveSource,
@@ -359,7 +383,53 @@ export interface RetireIntoSteps {
     proposed: Array<{ entityId: string; proposalId: string }>;
     errors: Array<{ entityId: string; error: string }>;
   }>;
+  moveConfig(
+    sourceWorkspaceId: string,
+    targetWorkspaceId: string
+  ): Promise<{
+    moved: number;
+    failed: RetireIntoResult["configFailed"];
+  }>;
   archive(workspaceId: string): Promise<{ archived: boolean }>;
+}
+
+/**
+ * The configuration homed in a space, in move order: playbooks (each takes the
+ * automations linked to it there), the automations still left, then views.
+ */
+async function configOf(
+  workspaceId: string
+): Promise<Array<{ objectType: MovableObjectType; ids: string[] }>> {
+  const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id);
+  return [
+    {
+      objectType: "playbook",
+      ids: ids(
+        await db
+          .select({ id: playbooks.id })
+          .from(playbooks)
+          .where(eq(playbooks.workspaceId, workspaceId))
+      ),
+    },
+    {
+      objectType: "automation",
+      ids: ids(
+        await db
+          .select({ id: automations.id })
+          .from(automations)
+          .where(eq(automations.workspaceId, workspaceId))
+      ),
+    },
+    {
+      objectType: "view",
+      ids: ids(
+        await db
+          .select({ id: views.id })
+          .from(views)
+          .where(eq(views.workspaceId, workspaceId))
+      ),
+    },
+  ];
 }
 
 /** The move door caps a call at 500 entities. */
@@ -398,6 +468,35 @@ export function retireIntoStepsFor(userId: string): RetireIntoSteps {
         workspaceId: targetWorkspaceId,
         reason: "Moved off a retired template",
       });
+    },
+    async moveConfig(sourceWorkspaceId, targetWorkspaceId) {
+      let moved = 0;
+      const failed: RetireIntoResult["configFailed"] = [];
+      // Read type by type: a playbook's move takes its automations along.
+      for (const objectType of ["playbook", "automation", "view"] as const) {
+        const group = (await configOf(sourceWorkspaceId)).find(
+          (g) => g.objectType === objectType
+        )!;
+        for (const objectId of group.ids) {
+          try {
+            const r = await applyMoveToSpace({
+              userId,
+              objectType,
+              objectId,
+              workspaceId: targetWorkspaceId,
+              movingWith: sourceWorkspaceId,
+            });
+            moved += 1 + r.carriedAutomationIds.length;
+          } catch (err) {
+            failed.push({
+              objectType,
+              objectId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+      return { moved, failed };
     },
     async archive(workspaceId) {
       const { workspacesRouter } = await import("../routers/workspaces.js");
@@ -459,8 +558,16 @@ export async function applyRetireInto(
     failed.push(...r.errors);
   }
 
+  const config = await steps.moveConfig(
+    plan.source.workspaceId,
+    targetWorkspaceId
+  );
+
   // Archive ONLY an empty source — read after the move, never from the plan.
   const left = await remainingKinds(plan.source.workspaceId);
+  const configLeft = (await configOf(plan.source.workspaceId)).filter(
+    (g) => g.ids.length > 0
+  );
   const plannedStay = new Map(plan.stays.map((k) => [k.kind, k.reason]));
   const remaining = countByKind(left).map((k) => ({
     ...k,
@@ -468,16 +575,29 @@ export async function applyRetireInto(
       plannedStay.get(k.kind) ??
       `${k.count === 1 ? "It" : "They"} could not be moved.`,
   }));
+  const empty = left.length === 0 && configLeft.length === 0;
   let archived = false;
-  if (left.length === 0) {
+  if (empty) {
     archived = (await steps.archive(plan.source.workspaceId)).archived;
   }
-  const keptBecause =
-    left.length === 0
-      ? archived
-        ? null
-        : "Archiving the space needs its owner or a pod admin."
-      : remaining.map((k) => `${k.count} × ${k.kind}: ${k.reason}`).join(" ");
+  const keptBecause = empty
+    ? archived
+      ? null
+      : "Archiving the space needs its owner or a pod admin."
+    : [
+        ...remaining.map((k) => `${k.count} × ${k.kind}: ${k.reason}`),
+        ...configLeft.map(
+          (g) =>
+            `${g.ids.length} × ${resolveObjectNoun(g.objectType).toLowerCase()} still here${
+              config.failed.some((f) => f.objectType === g.objectType)
+                ? `: ${config.failed
+                    .filter((f) => f.objectType === g.objectType)
+                    .map((f) => f.error)
+                    .join(" ")}`
+                : "."
+            }`
+        ),
+      ].join(" ");
 
   return {
     plan,
@@ -487,6 +607,8 @@ export async function applyRetireInto(
       moved,
       proposedMoves,
       failed,
+      configMoved: config.moved,
+      configFailed: config.failed,
       remaining,
       remainingCount: left.length,
       archived,

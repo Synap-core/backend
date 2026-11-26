@@ -814,8 +814,6 @@ export function registerMessagingRoutes(app: HubHono): void {
             status: "proposed" as const,
             proposalId: perm.proposalId,
             reviewUrl: perm.reviewUrl,
-            // A workspace-join gate files a join INSTEAD of the import: the
-            // sentence is derived from the proposal's type, never assumed.
             message: proposedMessageFor(
               perm.proposalType,
               "History import proposed: it runs once the account's owner approves it."

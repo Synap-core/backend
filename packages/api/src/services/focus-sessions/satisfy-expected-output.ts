@@ -706,6 +706,9 @@ function slotAttestedEventData(
     askMode: slot.ask?.mode ?? null,
     attestedBy,
     attestedAt,
+    // What the person's deed re-checks, as data (`SlotUnblocksTarget`), read
+    // from the slot as it was: the attestation hands it on.
+    ...(slot.unblocksTarget ? { unblocksTarget: slot.unblocksTarget } : {}),
   };
 }
 
@@ -856,6 +859,51 @@ export function selectClaimsWithEvidence(
   return out;
 }
 
+/** A claimed slot WITH evidence that its required criteria still hold. */
+export interface ClaimHeldByCriterion {
+  key: string;
+  label: string;
+  /** The required criteria naming it (`outputKey`), in declared order. */
+  criteria: Array<Pick<SessionCriterion, "key" | "statement" | "check">>;
+}
+
+/**
+ * The claims {@link selectClaimsWithEvidence} leaves open ONLY because a
+ * required criterion checks the slot: claimed, open, the agent's, evidence
+ * in place. Their reply must name that criterion, never say the evidence is
+ * missing (finding f301e997). Pure.
+ */
+export function selectClaimsHeldByCriterion(
+  outputs: readonly ExpectedOutput[],
+  evidenceByKey: ReadonlyMap<string, SlotEvidence>,
+  criteria: readonly SessionCriterion[]
+): ClaimHeldByCriterion[] {
+  const keys = deriveSlotKeys(outputs);
+  const out: ClaimHeldByCriterion[] = [];
+  outputs.forEach((slot, index) => {
+    const key = keys[index];
+    if (!slot || !key) return;
+    if (slot.claimedDone !== true) return;
+    if (slot.status === "done" || slot.retiredAt != null) return;
+    if (slot.owner === "human") return;
+    if (!(evidenceByKey.get(key) ?? refEvidence(slot))) return;
+    const holding = criteria.filter(
+      (c) => c.required !== false && c.outputKey === key
+    );
+    if (holding.length === 0) return;
+    out.push({
+      key,
+      label: slot.label,
+      criteria: holding.map((c) => ({
+        key: c.key,
+        statement: c.statement,
+        check: c.check,
+      })),
+    });
+  });
+  return out;
+}
+
 /**
  * The evidence stamp — status + the evidence it cites. Pure. Like
  * {@link stampSatisfied}, the `done` here always carries its lineage.
@@ -883,6 +931,8 @@ export interface SatisfyClaimsByEvidenceResult {
   satisfied: Array<{ key: string; label: string; evidence: SlotEvidence }>;
   /** The array as written, when anything was closed. */
   outputs?: ExpectedOutput[];
+  /** Claims with evidence left open for their required criteria. */
+  held?: ClaimHeldByCriterion[];
 }
 
 /**
@@ -949,7 +999,8 @@ export async function satisfyClaimsByEvidence(params: {
       evidenceByKey.set(key, { kind: "output", id: output.id });
     }
   }
-  const checkedKeys = checkedOutputKeys(readCriteria(session.criteria));
+  const criteria = readCriteria(session.criteria);
+  const checkedKeys = checkedOutputKeys(criteria);
 
   const now = params.now ?? new Date();
   return db
@@ -972,7 +1023,14 @@ export async function satisfyClaimsByEvidence(params: {
         evidenceByKey,
         checkedKeys
       );
-      if (picks.length === 0) return { satisfied: [] };
+      const held = selectClaimsHeldByCriterion(
+        current,
+        evidenceByKey,
+        criteria
+      );
+      if (picks.length === 0) {
+        return { satisfied: [], ...(held.length > 0 ? { held } : {}) };
+      }
       const next = stampEvidenced(current, picks, now);
       await tx
         .update(focusSessions)
@@ -993,6 +1051,7 @@ export async function satisfyClaimsByEvidence(params: {
           evidence: p.evidence,
         })),
         outputs: next,
+        ...(held.length > 0 ? { held } : {}),
       };
     })
     .then(async (r) => {
@@ -1124,31 +1183,45 @@ export async function satisfyPullRequestByMerge(params: {
 
 // ── THE FIFTH PATH: A CHILD RUN THAT DELIVERED (runner engine slice 4) ─────
 
-/** One parent slot a step that `uses` a playbook expects back, and its child label. */
+/**
+ * One parent slot a child is expected to deliver, and the child slot that
+ * answers it. A step that `uses` a playbook names both by label (`uses.outputs`,
+ * default the same label); a lane names both by key (`lane-rollup.ts`). A key,
+ * when given, is tried first (`findSlotIndex`).
+ */
 export interface ChildSlotWanted {
-  /** The parent stage's slot label (`stage.expectedOutputs[].label`). */
+  /** The parent's slot label (`stage.expectedOutputs[].label`). */
   parentLabel: string;
-  /** The child run's slot that answers it (`uses.outputs`, default the same label). */
+  /** The child's slot that answers it (`uses.outputs`, default the same label). */
   childLabel: string;
+  /** The parent's slot key, when the pair was matched by key. */
+  parentKey?: string;
+  /** The child's slot key, when the pair was matched by key. */
+  childKey?: string;
 }
 
 /**
  * WHICH parent slots a child run's delivered slots close. Pure. A parent slot
  * is closed only when ALL hold:
- *   - it is one the step expects back (`wanted`), found by label;
+ *   - it is one the child is expected to deliver (`wanted`), found by key,
+ *     else by label;
  *   - it is not already done, not retired, not the person's (`owner:
  *     'human'`), and no REQUIRED criterion checks it (`outputKey`: its
  *     evaluator does);
- *   - the child's slot of the mapped label is DONE (through one of the
+ *   - the child's slot of the mapped key or label is DONE (through one of the
  *     child's own doors) and not retired.
- * The evidence is the child slot's own pointer, else the child session.
+ * The evidence is the child slot's own pointer, else the child session. A
+ * child in ANOTHER SPACE than the parent (`crossSpace`) is cited by its
+ * session only: its slot's pointer may name what the parent's readers
+ * cannot see (a link, an object of that space), so it is not copied up.
  */
 export function selectSlotsDeliveredByChild(
   parent: readonly ExpectedOutput[],
   child: readonly ExpectedOutput[],
   wanted: readonly ChildSlotWanted[],
   checkedKeys: ReadonlySet<string>,
-  childSessionId: string
+  childSessionId: string,
+  opts: { crossSpace?: boolean } = {}
 ): Array<{ index: number; evidence: SlotEvidence; childSlot: ExpectedOutput }> {
   const keys = deriveSlotKeys(parent);
   const out: Array<{
@@ -1157,7 +1230,11 @@ export function selectSlotsDeliveredByChild(
     childSlot: ExpectedOutput;
   }> = [];
   for (const w of wanted) {
-    const index = findSlotIndex(parent, { label: w.parentLabel }, (s) => !!s);
+    const index = findSlotIndex(
+      parent,
+      { key: w.parentKey, label: w.parentLabel },
+      (s) => !!s
+    );
     const slot = parent[index];
     const key = keys[index];
     if (!slot || !key || out.some((o) => o.index === index)) continue;
@@ -1166,17 +1243,20 @@ export function selectSlotsDeliveredByChild(
     if (checkedKeys.has(key)) continue;
     const childIndex = findSlotIndex(
       child,
-      { label: w.childLabel },
+      { key: w.childKey, label: w.childLabel },
       (s) => !!s && s.status === "done" && s.retiredAt == null
     );
     const childSlot = child[childIndex];
     if (!childSlot) continue;
+    const childSession: SlotEvidence = {
+      kind: "ref",
+      id: `focus_session:${childSessionId}`,
+    };
     out.push({
       index,
-      evidence: refEvidence(childSlot) ?? {
-        kind: "ref",
-        id: `focus_session:${childSessionId}`,
-      },
+      evidence: opts.crossSpace
+        ? childSession
+        : (refEvidence(childSlot) ?? childSession),
       childSlot,
     });
   }
@@ -1184,22 +1264,33 @@ export function selectSlotsDeliveredByChild(
 }
 
 /**
- * THE CHILD VERDICT — a step that IS a playbook got its outputs from the run
- * that worked it (spec 7111934d §3.2). Called by the child-close reactor
- * (`playbooks/stage-child.ts`) only for a child that closed DELIVERED and
- * whose session is stamped `stageOf` this parent. The child's slots were made
- * done by the child's own doors; this door carries that verdict up, citing the
- * child's pointer (copied onto the parent slot when it has none). Owner-floored
- * on the parent; idempotent: a slot already done is never re-stamped.
+ * THE CHILD VERDICT — a child session delivered what its parent waits for.
+ * Two callers, each only for a child that closed DELIVERED:
+ *   - a step that IS a playbook got its outputs from the run that worked it
+ *     (spec 7111934d §3.2): the child-close reactor (`playbooks/stage-child.ts`),
+ *     for a child stamped `stageOf` this parent;
+ *   - a lane rolls up into its parent (work model W7): the lane rollup reactor
+ *     (`focus-sessions/lane-rollup.ts`), for any other `spawned_from` child.
+ * The child's slots were made done by the child's own doors; this door carries
+ * that verdict up, citing the child's pointer (copied onto the parent slot
+ * when it has none), or only the child session for a child in another space
+ * (`crossSpace`: refs only, nothing the parent's readers could not see).
+ * Never closes the parent. Owner-floored on the parent and the child;
+ * idempotent: a slot already done is never re-stamped.
  */
 export async function satisfyStageSlotsFromChild(params: {
   sessionId: string;
   userId: string;
   childSessionId: string;
   wanted: readonly ChildSlotWanted[];
+  /** The child sits in another space than the parent (see above). */
+  crossSpace?: boolean;
+  /** Why the slots moved, on their transitions. Default: a child run. */
+  reason?: string;
   now?: Date;
 }): Promise<SatisfyClaimsByEvidenceResult> {
   const { sessionId, userId, childSessionId, wanted } = params;
+  const crossSpace = params.crossSpace === true;
   if (wanted.length === 0) return { satisfied: [] };
   const now = params.now ?? new Date();
   const [child] = await db
@@ -1237,7 +1328,8 @@ export async function satisfyStageSlotsFromChild(params: {
         childSlots,
         wanted,
         checkedOutputKeys(readCriteria(locked.criteria)),
-        childSessionId
+        childSessionId,
+        { crossSpace }
       );
       if (picks.length === 0) return { satisfied: [] };
       const byIndex = new Map(picks.map((p) => [p.index, p]));
@@ -1248,7 +1340,9 @@ export async function satisfyStageSlotsFromChild(params: {
           ...o,
           status: "done" as const,
           satisfiedByEvidence: { ...pick.evidence, at: now.toISOString() },
-          ...(!o.ref && pick.childSlot.ref ? { ref: pick.childSlot.ref } : {}),
+          ...(!crossSpace && !o.ref && pick.childSlot.ref
+            ? { ref: pick.childSlot.ref }
+            : {}),
         };
       });
       await tx
@@ -1260,7 +1354,7 @@ export async function satisfyStageSlotsFromChild(params: {
         before: current,
         after: next,
         actor: { kind: "system" },
-        reason: "A child run delivered it.",
+        reason: params.reason ?? "A child run delivered it.",
       });
       const currentKeys = deriveSlotKeys(current);
       return {

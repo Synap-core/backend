@@ -35,6 +35,14 @@
  *     when its OWN run has ended: the automation run or every playbook run is
  *     terminal, or the intake is idle with nothing left to review (the receipt
  *     rule). The work reaper never stales a run (`runSessionWhere`, below).
+ *  5. A PLANNED step (`forming`) whose blockers delivered and whose date came
+ *     WAKES to active (`planned-wake.ts`, founder P3): the net under the
+ *     unblock reactor, and the only waker of a date.
+ *  6. A step on an arm NOT taken by an accepted decision is SKIPPED, or the
+ *     owner is told no arm matches (`decision-arms.ts`, founder P5): the net
+ *     under the unblock reactor. Before it, a decision past its `answerBy`
+ *     takes the default its PERSON set, else they are reminded
+ *     (`decision-timeout.ts`).
  *
  * Nothing here closes a session that owes the person something: every
  * selection carries the owed / waiting-on-person predicate the needs-you tray
@@ -455,6 +463,12 @@ export interface SessionLifecycleSweepResult {
   runsClosed: number;
   /** `forEach` steps with a batch whose run never started, pumped again. */
   fanOutsPumped: number;
+  /** Decisions past `answerBy` that took the default their person set. */
+  decisionsTimedOut: number;
+  /** Steps on a decision's arm not taken, closed as skipped. */
+  armsSkipped: number;
+  /** Planned steps (`forming`) whose blockers delivered and date came, woken. */
+  plannedWoken: number;
   failed: string[];
 }
 
@@ -466,6 +480,9 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     longStaleCancelled: 0,
     runsClosed: 0,
     fanOutsPumped: 0,
+    decisionsTimedOut: 0,
+    armsSkipped: 0,
+    plannedWoken: 0,
     failed: [],
   };
   const step = async (
@@ -488,6 +505,25 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     (n) => (result.fanOutsPumped = n)
   );
   await step("met", closeMetWorkSessions, (n) => (result.metClosed = n));
+  await step(
+    "decision-timeout",
+    async () =>
+      (
+        await import("../decisions/decision-timeout.js")
+      ).sweepDecisionTimeouts(),
+    (n) => (result.decisionsTimedOut = n)
+  );
+  await step(
+    "decision-arms",
+    async () => (await import("./decision-arms.js")).sweepDecisionArms(),
+    (n) => (result.armsSkipped = n)
+  );
+  await step(
+    "planned-wake",
+    async () =>
+      (await import("./planned-wake.js")).sweepPlannedSessions(new Date()),
+    (n) => (result.plannedWoken = n)
+  );
   await step(
     "merge-hold",
     holdSessionsWaitingOnMerge,

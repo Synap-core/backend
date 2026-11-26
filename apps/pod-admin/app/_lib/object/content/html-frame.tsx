@@ -52,6 +52,13 @@ import {
 } from "./html-frame-links";
 import { frameT } from "./frame-copy";
 import { withWidgetCompat } from "./widget-compat";
+import {
+  frameBrandCss,
+  frameContextAnswer,
+  useFrameContext,
+  type FrameAnchor,
+} from "./use-frame-context";
+import { useConsoleLocale } from "../../../../lib/i18n/locale-provider";
 import type { PreparedContent } from "./markdown-model";
 
 /**
@@ -138,11 +145,18 @@ export function HtmlFrame({
   refusedAction,
   fullSize,
   bridge = true,
+  anchor,
 }: {
   html: string;
   /** The page's space: the lens every read is stamped with. */
   workspaceId: string | null;
   title: string;
+  /**
+   * What the page is about (its document): the page's `window.synap.context()`
+   * and its project's brand, written after the console's tokens. Absent: no
+   * context, the console's tokens only.
+   */
+  anchor?: FrameAnchor | null;
   /** The door shown beside the reason when the page is not run. */
   refusedAction?: ReactNode;
   /** The box the section's Full size button shows full screen. */
@@ -168,10 +182,19 @@ export function HtmlFrame({
   // `var(--synap-…)` wears the reader's theme (`frameTokensCss`). Read again
   // when the console's theme changes, which runs the page again.
   const { resolvedTheme } = useTheme();
+  // A preview with no bridge reads nothing of the pod: no context either.
+  const context = useFrameContext(
+    bridge ? anchor : null,
+    resolvedTheme === "dark" ? "dark" : "light",
+    useConsoleLocale()
+  );
+  const brand = frameBrandCss(context);
   const srcDoc = useMemo(
     () =>
       wrapHtmlForFrame(withWidgetCompat(html, { sample: !bridge }), {
         links: true,
+        // The project's brand, after the console's tokens (contract v3).
+        brand,
         // A page's content is read in the browser, never on the server; the
         // guard keeps a server render from touching `document`.
         tokens:
@@ -183,19 +206,27 @@ export function HtmlFrame({
               ),
       }),
     // `resolvedTheme` is not read here: `getComputedStyle` reads its effect.
-    [html, bridge, resolvedTheme]
+    [html, bridge, resolvedTheme, brand]
   );
+  const answerContext = useMemo(() => frameContextAnswer(context), [context]);
+  // A new srcdoc (the theme, the brand) is a new first load, not the page
+  // leaving: count loads again from it.
+  const waiting = context.state === "loading";
+  useEffect(() => {
+    loads.current = 0;
+  }, [srcDoc, waiting]);
 
   useEffect(() => {
     if (!bridge || left || refusal) return;
     const host = createCellBridgeHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
       read: (op, params) => readForPage(client, op, params, { workspaceId }),
+      ...(answerContext ? { context: answerContext } : {}),
     });
     const onMessage = (event: MessageEvent) => void host(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [client, workspaceId, bridge, left, refusal, run]);
+  }, [client, workspaceId, bridge, left, refusal, run, answerContext]);
 
   // The link door and the "open this" intent: the page asks, the reader's
   // browser follows (or not). They answer with or without the data bridge: a
@@ -222,6 +253,16 @@ export function HtmlFrame({
         line={t("refused.line")}
         why={refusal}
         action={refusedAction}
+      />
+    );
+  }
+  // The context is read before the frame is built, so the page runs once,
+  // already in its brand (a rebuilt srcdoc would reload, and so tear down, it).
+  if (context.state === "loading") {
+    return (
+      <div
+        aria-busy="true"
+        className="h-[min(80vh,900px)] min-h-[420px] w-full rounded-lg bg-content2"
       />
     );
   }
@@ -310,6 +351,7 @@ export function HtmlPageBody({
   onShowSource,
   fullSize,
   bridge,
+  anchor,
 }: {
   view: HtmlPageView;
   html: string;
@@ -324,6 +366,8 @@ export function HtmlPageBody({
   fullSize?: FullSize;
   /** `HtmlFrame`'s `bridge`: `false` for a page nobody has approved yet. */
   bridge?: boolean;
+  /** `HtmlFrame`'s `anchor`: what the page is about. */
+  anchor?: FrameAnchor | null;
 }) {
   if (view === "source") return <>{sourceBody(source)}</>;
   const t = frameT();
@@ -352,6 +396,7 @@ export function HtmlPageBody({
       refusedAction={viewSource}
       fullSize={fullSize}
       bridge={bridge}
+      anchor={anchor}
     />
   );
 }
@@ -367,6 +412,7 @@ export function HtmlPageSection({
   sourceBody,
   footer,
   initialView = "page",
+  anchor,
 }: {
   title: string;
   html: string;
@@ -378,6 +424,8 @@ export function HtmlPageSection({
   /** Under the body (the "showing part of it" note for a cut source). */
   footer?: (view: HtmlPageView) => ReactNode;
   initialView?: HtmlPageView;
+  /** What the page is about (its document): its context and brand. */
+  anchor?: FrameAnchor | null;
 }) {
   const [view, setView] = useState<HtmlPageView>(initialView);
   const t = frameT();
@@ -435,6 +483,7 @@ export function HtmlPageSection({
         sourceBody={sourceBody}
         onShowSource={() => setView("source")}
         fullSize={fullSize}
+        anchor={anchor}
       />
       {footer?.(view)}
     </SectionCard>

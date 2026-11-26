@@ -260,14 +260,14 @@ const createPerson = (
 };
 
 describe("an app is governed like an agent (founder decision 2)", () => {
-  it("the app has its OWN ask-first agent user, a member of exactly the approved workspace", async () => {
+  it("the app has its OWN ask-first agent user, holding no space seat (it acts through its owner)", async () => {
     const members = (
       await q<{ workspace_id: string; role: string }>(
         `select workspace_id, role from workspace_members where user_id = $1`,
         [appAgent]
       )
     ).rows;
-    expect(members).toEqual([{ workspace_id: SALES, role: "editor" }]);
+    expect(members).toEqual([]);
     const rules = (
       await q<{ verdict: string }>(
         `select verdict from governance_rules where agent_user_id = $1 and revoked_at is null`,
@@ -523,7 +523,7 @@ describe("an app is governed like an agent (founder decision 2)", () => {
  * issueKey derives reach" is the narrowing: before the fix the key kept A+B.
  */
 describe("a re-approval re-derives the live key and the app's agent", () => {
-  it("approve A+B, issue key, re-approve C ⇒ grant == C, memberships == C", async () => {
+  it("approve A+B, issue key, re-approve C ⇒ grant == C, no agent seat ever", async () => {
     const OPS = randomUUID();
     await q(
       `insert into workspaces (id, name, owner_id) values ($1, 'Ops', $2)`,
@@ -562,7 +562,7 @@ describe("a re-approval re-derives the live key and the app's agent", () => {
       }));
     };
     expect(await scopesOf()).toHaveLength(2);
-    expect(await membershipsOf()).toHaveLength(2);
+    expect(await membershipsOf()).toEqual([]);
 
     // The owner approves a NEW request for C through the real executor.
     const proposalId = randomUUID();
@@ -608,9 +608,7 @@ describe("a re-approval re-derives the live key and the app's agent", () => {
     expect(await scopesOf()).toEqual([
       { permissions: ["entity.task.create"], workspaceIds: [OPS] },
     ]);
-    expect(await membershipsOf()).toEqual([
-      { workspace_id: OPS, role: "editor" },
-    ]);
+    expect(await membershipsOf()).toEqual([]);
     const [live] = (
       await q<{ is_active: boolean }>(
         `select is_active from api_keys where id = $1`,

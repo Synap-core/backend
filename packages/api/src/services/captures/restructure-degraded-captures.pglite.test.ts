@@ -106,6 +106,7 @@ import {
   proposals,
   relations,
   workspaceMembers,
+  apiKeys,
   workspaces,
   users,
 } from "@synap/database";
@@ -276,6 +277,7 @@ describe("the degraded-capture sweep", () => {
       projectMembers,
       workspaces,
       workspaceMembers,
+      apiKeys,
       podMembers,
       focusSessions,
       links,

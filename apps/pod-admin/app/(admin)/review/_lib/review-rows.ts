@@ -20,9 +20,10 @@
  *             anything else opens where it lives.
  *
  * Review later: a durable proposal untouched for 7 days, or an ask nobody
- * answered for 7 days, leaves the headline and the counts for its own fold —
- * the SHARED fold (`needsYouRows`), so the console folds exactly what the
- * badge leaves out and what the desktop and phone apps fold.
+ * answered for 7 days, is marked by the SHARED fold (`needsYouRows`), the one
+ * the badge and the desktop and phone apps read. The console does not fold
+ * it away (founder, 23 Nov 2026): it stays in the one list, counted and
+ * selectable like any row, so a pile is approved in one batch.
  *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
@@ -213,7 +214,7 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
-  /** In the Review later fold: out of the headline and the counts. */
+  /** Waited past the Review later age (the shared fold's mark); still listed. */
   reviewLater: boolean;
 }
 
@@ -628,13 +629,12 @@ export function liveAskSlot(
   return null;
 }
 
-/** Rows per chip: All and each group — the headline, as the badge counts it. */
+/** Rows per chip: All and each group — every listed row, Review later too. */
 export function reviewCounts(
   rows: readonly ReviewRow[]
 ): Record<"all" | ReviewGroup, number> {
   const out = { all: 0, access: 0, changes: 0, asks: 0 };
   for (const r of rows) {
-    if (r.reviewLater) continue;
     out.all += 1;
     out[r.group] += 1;
   }
@@ -643,14 +643,14 @@ export function reviewCounts(
 
 /**
  * What each chip SAYS — one number, one source (ui-composition §11). All is
- * the pod's count (`signals.count`, the nav badge's) when Review is not
- * narrowed; a group is counted from the page read, which stops at
+ * the pod's count (`signals.count`: the badge's `needsYou` plus its
+ * `reviewLater`, since the list holds both) when Review is not narrowed; a group is counted from the page read, which stops at
  * `NEEDS_YOU_PAGE_LIMIT`: on a full page a group's count is a floor ("N+"),
  * and a group with none on it is unknown (no count), never "0".
  */
 export function reviewChipCounts(
   rows: readonly ReviewRow[],
-  total: { needsYou: number; truncated: boolean } | null
+  total: { needsYou: number; reviewLater: number; truncated: boolean } | null
 ): Record<"all" | ReviewGroup, string | undefined> {
   const counts = reviewCounts(rows);
   const full = rows.length >= NEEDS_YOU_PAGE_LIMIT;
@@ -659,8 +659,8 @@ export function reviewChipCounts(
   return {
     all: total
       ? total.truncated
-        ? `${total.needsYou}+`
-        : String(total.needsYou)
+        ? `${total.needsYou + total.reviewLater}+`
+        : String(total.needsYou + total.reviewLater)
       : floor(counts.all),
     access: floor(counts.access),
     changes: floor(counts.changes),
@@ -669,19 +669,14 @@ export function reviewChipCounts(
 }
 
 /**
- * What a needs-you view shows ("history" is not one): its headline rows, and
- * the rows of its Review later fold.
+ * What a needs-you view shows ("history" is not one): ONE list, Review later
+ * rows in it, in the read's order.
  */
 export function rowsInView(
   rows: readonly ReviewRow[],
   filter: Exclude<ReviewFilter, "history">
-): { headline: ReviewRow[]; reviewLater: ReviewRow[] } {
-  const inView =
-    filter === "all" ? rows : rows.filter((r) => r.group === filter);
-  return {
-    headline: inView.filter((r) => !r.reviewLater),
-    reviewLater: inView.filter((r) => r.reviewLater),
-  };
+): ReviewRow[] {
+  return filter === "all" ? [...rows] : rows.filter((r) => r.group === filter);
 }
 
 /** The row a `?focus=<id>` names — by signal, target or member proposal id. */

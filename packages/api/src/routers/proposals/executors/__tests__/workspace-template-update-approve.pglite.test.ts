@@ -436,12 +436,12 @@ describe("an agent's template update of an installed space", () => {
       status: "approved",
       runResult: { finished: true },
     });
-    // The agent is still enrolled, so its follow-on writes don't become joins.
+    // The agent is given no seat: it acts through its person's membership.
     const { rows } = await q<{ role: string }>(
       `select role from workspace_members where workspace_id = $1 and user_id = $2`,
       [ws, AGENT]
     );
-    expect(rows).toHaveLength(1);
+    expect(rows).toEqual([]);
   });
 
   it("when the post-workspace layer does not land, the new version is NOT stamped", async () => {

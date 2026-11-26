@@ -16,6 +16,9 @@
  * the one image door; when the body document IS that media it is not read
  * again as text.
  *
+ * Its next step leads (`NextStepBlock`, the thing's next move from the same
+ * `statusOf` read) when it needs the reader.
+ *
  * The work on it (`WorkSection`, `statusOf` work): the sessions and runs on
  * it, a run that stopped early first with its Continue; omitted when none.
  *
@@ -37,6 +40,7 @@
 
 import { Chip } from "@heroui/react";
 import { planEntityFields } from "@synap-core/types/property-render";
+import { objectNextOf } from "@synap-core/types/units";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
@@ -61,7 +65,9 @@ import {
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { ConnectedObjects } from "../../_lib/object/connected-objects";
-import { WorkSection } from "../../_lib/object/views/work-section";
+import { useWorkRead, WorkSection } from "../../_lib/object/views/work-section";
+import { NextStepBlock } from "../../_lib/object/next-step";
+import { nextStepOf } from "../../_lib/object/next-step-model";
 import { objectPage } from "../../_lib/object/content/markdown-model";
 import { RulesAroundSection } from "../../_lib/object/views/rules-around-section";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
@@ -118,6 +124,15 @@ export function EntityView({ id }: { id: string }) {
     ? entityPageMedia({ ...loaded, id }, payload?.profile?.uiHints)
     : { media: null, bodyIsMedia: false };
   const body = useDocumentContent(bodyIsMedia ? null : loaded?.documentId);
+  // The work section's read (one request) carries the thing's next move; a
+  // failure of it is said there, once.
+  const answer = useWorkRead(id).query.data?.[0];
+  const next = answer
+    ? objectNextOf(
+        "entity",
+        "nextMove" in answer ? { nextMove: answer.nextMove } : {}
+      )
+    : null;
 
   if (query.isLoading) return <OpenLoading label="Loading entity…" />;
   const data = query.data as EntityPayload | undefined;
@@ -199,6 +214,9 @@ export function EntityView({ id }: { id: string }) {
         },
       }}
     >
+      <NextStepBlock
+        step={nextStepOf({ kind: "entity", id }, next, "itsPage")}
+      />
       {media && (
         <MediaView
           media={media}

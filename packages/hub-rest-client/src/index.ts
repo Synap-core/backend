@@ -102,6 +102,9 @@ export type {
   HubFileUrl,
   // Views
   HubView,
+  HubSurfaceAnchorKind,
+  HubSurfaceRow,
+  HubSurfacesForObject,
   HubBentoArrangementResult,
   HubWidgetDefinition,
   // Search

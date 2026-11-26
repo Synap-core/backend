@@ -90,17 +90,19 @@ the person; the answer lists `applied` / `proposed` / `denied` / `skipped` — a
 partial result is normal. Send `validate: true` first to see each verdict without
 writing, and an `idempotencyKey` so a retry never acts twice.
 
-**A write blocked on a space join is KEPT.** When you write into a space your
-agent has not joined (`synap_orient` marks it `joined: false`), the answer is
-`proposed` with `proposalType: "join"`, `deferred: true` and a `ref`: the write
-rides the join request and is replayed for you once it is approved. Do not
-resend it, and do not retry it into another space.
+**You work where your person is a member.** An agent is never a space member:
+it writes where the person it acts for is a member, within its key's grant.
+`synap_orient` marks a space they are not in `joined: false`; a write there is
+refused in words. Ask the person (an owner of the space adds them); do not
+retry it into another space.
 
 **Moving, not recreating.** A session into another space:
 `synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
 the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
-`synap_move_entities`. All three are reviewed.
+`synap_move_entities`; a playbook: its `playbookIds` (it carries its
+automations). To let another space use a playbook or skill without moving it:
+`synap_grant_profile_access` (`playbookId` / `skillId`). All are reviewed.
 
 **Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
 
@@ -189,7 +191,7 @@ PATCH /api/hub/documents/doc_abc
 // → a pending proposal; readers see the new HTML only once it is approved
 ```
 
-`html-doc` is **not** an agent-placeable bento widget: `arrange` rejects it. The
+`html-doc` is **not** an agent-placeable bento cell: `arrange` rejects it. The
 document renders where it is opened (the Files app, or the entity it is attached
 to). For HTML you want to embed elsewhere, create an HTML cell instance
 (`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.

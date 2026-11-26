@@ -23,6 +23,8 @@ const { renderers, answered } = vi.hoisted(() => ({
 }));
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     renderers: {
       status: answered(() => renderers.status),
       hostModules: answered(() => renderers.modules),
@@ -147,7 +149,7 @@ describe("/open/view: a view pod admin does not draw", () => {
       config: { blocks: BLOCKS },
     });
     const out = renderToStaticMarkup(<ViewView id="v1" />);
-    expect(out).toContain("A dashboard of 4 widgets over Finding.");
+    expect(out).toContain("A dashboard of 4 cells over Finding.");
   });
 
   it("a written description still wins over the derived sentence", () => {
@@ -319,7 +321,7 @@ describe("describeView: only what the row carries", () => {
   it("never invents a kind: a dashboard that names none says only its size", () => {
     expect(
       describeView({ type: "bento", config: { blocks: [{ config: {} }] } }, t())
-    ).toBe("A dashboard of 1 widget.");
+    ).toBe("A dashboard of 1 cell.");
     expect(widgetCount({ blocks: [{}, {}] })).toBe(2);
   });
 

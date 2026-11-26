@@ -178,7 +178,10 @@ import {
   OPEN_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "./session-statuses.js";
-import { closedNotDoneRecordedSql } from "./session-closed-as.js";
+import {
+  closedNotDoneRecordedSql,
+  notTakenRecordedSql,
+} from "./session-closed-as.js";
 import {
   projectSessionKind,
   sessionKindWhere,
@@ -402,6 +405,11 @@ export interface PacketChildItem {
    * ended. Absent on items of other sections.
    */
   closedAs?: SessionClosedAs | null;
+  /**
+   * It ended as a decision's arm not taken (P5): it holds none of its
+   * dependents (`classifyDependencyBlocker`). Absent otherwise.
+   */
+  skipped?: true;
 }
 
 /**
@@ -1482,6 +1490,7 @@ async function readInboundSessions(
         goal: focusSessions.goal,
         status: focusSessions.status,
         closedNotDone: closedNotDoneRecordedSql(),
+        skipped: notTakenRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1502,6 +1511,7 @@ async function readInboundSessions(
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
       closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })),
   };
 }
@@ -1543,6 +1553,7 @@ async function readOutboundSessions(
         goal: focusSessions.goal,
         status: focusSessions.status,
         closedNotDone: closedNotDoneRecordedSql(),
+        skipped: notTakenRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1562,6 +1573,7 @@ async function readOutboundSessions(
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
       closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })),
   };
 }

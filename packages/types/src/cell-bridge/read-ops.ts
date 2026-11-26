@@ -65,14 +65,17 @@ export const CELL_BRIDGE_READ_OPS = {
   "project.pillars": ["id"],
   // What a view adapter reads to draw (renderer bundles, decision c91d26dc):
   // a view's definition and its rows (`views.get`, `views.execute`, the
-  // stored query only: no ephemeral filters), a kind (`profiles.get`, by
+  // stored query only: no ephemeral filters; one PAGE of it with `limit` and
+  // `offset`, so a frame reads past the first 100 rows), a kind (`profiles.get`, by
   // slug or id), its fields (`propertyDefs.list`: with a profileId the host
   // asks `profileIds: [profileId]`, without one every field of its own
   // space) and its declared
   // lifecycle (`lifecycle.get`, in the host's space).
   "views.get": ["id"],
-  "views.execute": ["id"],
-  "profiles.get": ["identifier"],
+  "views.execute": ["id", "limit", "offset"],
+  // `fill`: how many of the kind's things carry each field, the tiebreaker a
+  // table's derived columns read (`useDerivedKindColumns`); opt-in, a boolean.
+  "profiles.get": ["identifier", "fill"],
   "propertyDefs.list": ["profileId"],
   "lifecycle.get": ["profileSlug"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
@@ -136,6 +139,33 @@ export function projectPillarsAnswer(answer: unknown): {
     mainGoal: read.mainGoal,
     pillars: read.pillars,
     rootHealth: read.rootHealth,
+  };
+}
+
+/** The largest page of a view's rows a frame reads at once (`views.execute` `limit`). */
+export const CELL_BRIDGE_VIEW_PAGE_MAX = 100;
+/** The deepest row a frame pages to (`views.execute` `offset`). */
+export const CELL_BRIDGE_VIEW_OFFSET_MAX = 100_000;
+
+/**
+ * The page a frame asked `views.execute` for, as every host forwards it:
+ * whole numbers CLAMPED into range (`limit` 1 to `CELL_BRIDGE_VIEW_PAGE_MAX`,
+ * `offset` 0 to `CELL_BRIDGE_VIEW_OFFSET_MAX`), a missing or non-number one
+ * left out so the view's stored pair applies.
+ */
+export function cellBridgeViewPage(params: Record<string, unknown>): {
+  limit?: number;
+  offset?: number;
+} {
+  const clamp = (v: unknown, min: number, max: number): number | undefined =>
+    typeof v === "number" && Number.isFinite(v)
+      ? Math.min(max, Math.max(min, Math.trunc(v)))
+      : undefined;
+  const limit = clamp(params.limit, 1, CELL_BRIDGE_VIEW_PAGE_MAX);
+  const offset = clamp(params.offset, 0, CELL_BRIDGE_VIEW_OFFSET_MAX);
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(offset !== undefined ? { offset } : {}),
   };
 }
 

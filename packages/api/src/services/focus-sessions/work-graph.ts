@@ -117,6 +117,10 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
+import {
+  WORK_GRAPH_EDGE_KINDS,
+  type WorkGraphEdgeKind,
+} from "@synap-core/types/focus-sessions";
 import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -160,6 +164,7 @@ import {
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
 import { projectTriage } from "./triage.js";
+import { notTakenRecorded } from "./session-closed-as.js";
 import {
   attachSessionHolder,
   type SessionHolderSection,
@@ -205,23 +210,18 @@ export type {
  *   - `serves`          from = a session or a goal (`fromKind: "track"`), to =
  *                       the goal it is done for (`toKind: "track"`).
  */
-export const WORK_GRAPH_EDGE_KINDS = [
-  "blocked_by",
-  "spawned_from",
-  "orchestrated_by",
-  "waits_on_output",
-  "triggered",
-  "updated",
-  "serves",
-] as const satisfies ReadonlyArray<
+export { WORK_GRAPH_EDGE_KINDS, type WorkGraphEdgeKind };
+// The list is declared once in `@synap-core/types/focus-sessions` (the apps
+// import it); a kind this read cannot produce stops the build here.
+const _kindsKnown: ReadonlyArray<
   | "blocked_by"
   | "spawned_from"
   | "orchestrated_by"
   | "waits_on_output"
   | SessionInteractionType
   | "serves"
->;
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+> = WORK_GRAPH_EDGE_KINDS;
+void _kindsKnown;
 // A new interaction type the graph does not list stops the build: it would
 // otherwise reach the wire as an edge kind no schema declares.
 type _InteractionsCovered = [
@@ -254,9 +254,12 @@ export interface WorkGraphEdge {
   lastAt?: string | null;
   /** `serves`: the goal criterion the session serves, when the edge names one. */
   criterionKey?: string;
-  // Decision arms (lane B2): the option a `blocked_by` edge to a decision
-  // waits for goes HERE, read from the edge's `links.metadata`, once B2 names
-  // its key. Not sent before then.
+  /**
+   * `blocked_by` to a decision (`toKind: "entity"`): the option this step is
+   * the ARM of (`links.metadata.option`, decision arms P5). Taken when the
+   * decision chooses it; another choice skips the step. Absent = a plain wait.
+   */
+  option?: string;
 }
 
 export type WorkGraphSection =
@@ -337,6 +340,11 @@ export type WorkGraphNode = Awaited<
    * narrowed). ABSENT without the narrow: there is nothing to match.
    */
   playbookMatch?: WorkGraphPlaybookMatch | null;
+  /**
+   * It ended as a decision's arm NOT taken (P5, `notTakenRecorded`): the
+   * readiness rule's `skipped`, never a plain cancel. Absent otherwise.
+   */
+  skipped?: true;
 };
 
 /** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
@@ -663,6 +671,7 @@ export async function buildWorkGraph(
   const playbookId = input.playbookId;
   const projected: WorkGraphNode[] = withHolder.map((n) => ({
     ...withViewerRole(n, userId),
+    ...(notTakenRecorded(n) ? { skipped: true as const } : {}),
     ...(playbookId
       ? {
           playbookMatch: !n.inWindow
@@ -784,6 +793,7 @@ export async function buildWorkGraph(
             : b.kind === "track"
               ? { toKind: "track" as const }
               : {}),
+          ...(b.option ? { option: b.option } : {}),
         });
       }
     }

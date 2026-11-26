@@ -20,6 +20,7 @@ import { eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   SLOT_STATUS_DECLARATION,
+  isGradeAwaitingOutput,
   slotStatusOf,
   slotSubjectId,
   type SlotStatusFacts,
@@ -85,8 +86,10 @@ export function slotTransitionsOf(input: {
     seen.add(name);
     const was = prior.get(name);
     if (!was) continue; // declared now: a birth, not a move
-    const from = slotStatusOf(was);
-    const to = slotStatusOf(slot);
+    // Read in their lists: a grade comes due (pending → owed) when the output
+    // it waits on is made, a write to ANOTHER slot.
+    const from = slotStatusOf(was, input.before ?? []);
+    const to = slotStatusOf(slot, input.after ?? []);
     if (from === to) continue;
     const subjectId = slotSubjectId(input.session.id, slot)!;
     out.push({
@@ -113,6 +116,67 @@ export function slotTransitionsOf(input: {
     });
   }
   return out;
+}
+
+/**
+ * The declared grade slots (work-model W5) this write made DUE: waiting on
+ * the output their criterion checks before (`isGradeAwaitingOutput`, read in
+ * `before`), owed by the person after (read in `after`) — the output was
+ * made by this write, a write to ANOTHER slot. Their names (key, else label).
+ * Pure.
+ */
+export function gradesComeDueOf(
+  before: readonly SlotForTransition[] | null | undefined,
+  after: readonly SlotForTransition[] | null | undefined
+): string[] {
+  const prior = new Map<string, SlotForTransition>();
+  for (const slot of before ?? []) {
+    const name = nameOf(slot);
+    if (name && !prior.has(name)) prior.set(name, slot);
+  }
+  const due: string[] = [];
+  for (const slot of after ?? []) {
+    const name = nameOf(slot);
+    const was = name ? prior.get(name) : undefined;
+    if (!name || !was || due.includes(name)) continue;
+    if (
+      isGradeAwaitingOutput(
+        was as Parameters<typeof isGradeAwaitingOutput>[0],
+        before ?? []
+      ) &&
+      slotStatusOf(slot, after ?? []) === "owed"
+    ) {
+      due.push(name);
+    }
+  }
+  return due;
+}
+
+/**
+ * The slots with `owedSince` stamped `at` on each slot named in `due` that
+ * IS due in `outputs` (owed, not waiting on its output: read in this list, so
+ * a list the write has not reached yet is left alone) — the moment it became
+ * the person's. Forward only: a stamp already at or after `at` is kept (ISO
+ * instants: text order is time order), so an age never moves back. `null`
+ * when nothing changes. Pure.
+ */
+export function stampOwedSinceOnDue<T>(
+  outputs: readonly T[],
+  due: readonly string[],
+  at: string
+): T[] | null {
+  let changed = false;
+  const next = outputs.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const slot = raw as SlotForTransition & { owedSince?: unknown };
+    const name = nameOf(slot);
+    if (!name || !due.includes(name)) return raw;
+    if (slotStatusOf(slot, outputs) !== "owed") return raw;
+    if (typeof slot.owedSince === "string" && slot.owedSince >= at) return raw;
+    changed = true;
+    return { ...slot, owedSince: at } as unknown as T;
+  });
+  return changed ? next : null;
 }
 
 /**
@@ -173,5 +237,43 @@ export async function oweSlotTransitions(
   }
   const transitions = slotTransitionsOf({ ...input, session });
   await insertTransitionOutbox(tx, transitions);
+  // A declared grade comes due when its output is made, not when it was
+  // declared: its age (`owedSince`, which needs-you reads in TypeScript and in
+  // SQL alike) starts now (finding f3c864cc). Every slot door calls this in
+  // its own write's transaction, on the row it locked, so it is the one
+  // place that sees the output made, whichever door made it. A door that
+  // owes before it writes (the update door) stamps its own list
+  // (`stampOwedSinceOnDue`): the stored row does not show the grade due yet,
+  // so the restamp below leaves it alone.
+  const due = gradesComeDueOf(input.before, input.after);
+  if (due.length > 0) {
+    await restampDueGrades(
+      tx,
+      input.sessionId,
+      due,
+      (input.occurredAt ?? new Date()).toISOString()
+    );
+  }
   return transitions;
+}
+
+/** Write {@link stampOwedSinceOnDue} onto the stored row (in `tx`). */
+async function restampDueGrades(
+  tx: Db | Tx,
+  sessionId: string,
+  due: readonly string[],
+  at: string
+): Promise<void> {
+  const [row] = await tx
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  if (!row || !Array.isArray(row.expectedOutputs)) return;
+  const next = stampOwedSinceOnDue(row.expectedOutputs, due, at);
+  if (!next) return;
+  await tx
+    .update(focusSessions)
+    .set({ expectedOutputs: next as typeof row.expectedOutputs })
+    .where(eq(focusSessions.id, sessionId));
 }

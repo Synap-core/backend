@@ -143,6 +143,20 @@ describe("the module frame host", () => {
     expect(on.resize.mock.calls).toEqual([[240]]);
   });
 
+  it("an error says why when the frame typed it: a renderer that does not draw this object", async () => {
+    const { on, send } = setup();
+    await send({
+      type: "synap:error",
+      message: "Not a list",
+      reason: "not-drawn",
+    });
+    await send({ type: "synap:error", message: "boom", reason: "made-up" });
+    expect(on.status.mock.calls).toEqual([
+      [{ state: "error", message: "Not a list", reason: "not-drawn" }],
+      [{ state: "error", message: "boom" }],
+    ]);
+  });
+
   it("forwards navigation and surface requests to the host, and nothing else", async () => {
     const { on, send } = setup();
     await send({

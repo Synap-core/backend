@@ -33,7 +33,7 @@ skills/
 ├── synap-design/             ← design principles, design system, design loop
 │   ├── SKILL.md
 │   ├── view-types.md         ← the 12 implemented view types + configs
-│   ├── widget-catalog.md     ← cells/widgets reference
+│   ├── widget-catalog.md     ← cell catalog reference
 │   └── bento-recipes.md      ← ready-to-adapt dashboard layouts
 │
 └── README.md                 ← this file

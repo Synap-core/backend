@@ -318,6 +318,186 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
     }
   });
 
+  it("records the parent output a child is spawned for only when the spawner may write the parent (W7)", async () => {
+    const parent = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'wave', 'active', $3::jsonb, $4, '{}'::jsonb, now(), now(), now())`,
+      [
+        parent,
+        USER,
+        JSON.stringify([
+          { key: "api", kind: "code", label: "API" },
+          {
+            key: "grade",
+            kind: "criterion",
+            label: "Grade",
+            criterionKey: "c",
+          },
+        ]),
+        ["agent-1"],
+      ]
+    );
+    const asked: Array<unknown> = [];
+    h.spawn = async (input) => {
+      asked.push(input.forOutput);
+      return { linked: true, suspendedIntentRecorded: false };
+    };
+    const start = (agentUserId: string | undefined, forOutput: string) =>
+      createFocusSession({
+        userId: USER,
+        ...(agentUserId ? { agentUserId } : {}),
+        goal: `lane ${randomUUID()}`,
+        parentSessionId: parent,
+        forOutput,
+      });
+
+    // The parent's owner, and an agent on the parent's roster: recorded.
+    expect(await start(undefined, "api")).toMatchObject({
+      parentLink: { forOutput: { status: "recorded", key: "api" } },
+    });
+    expect(await start("agent-1", "api")).toMatchObject({
+      parentLink: { forOutput: { status: "recorded", key: "api" } },
+    });
+    // An agent the parent does not hold: the link lands, the target does not.
+    expect(await start("agent-2", "api")).toMatchObject({
+      parentLink: {
+        status: "linked",
+        forOutput: { status: "refused", reason: "not_a_parent_writer" },
+      },
+    });
+    // A key the parent does not declare, or an input slot: refused.
+    expect(await start(undefined, "nope")).toMatchObject({
+      parentLink: {
+        forOutput: { status: "refused", reason: "no_such_output" },
+      },
+    });
+    expect(await start(undefined, "grade")).toMatchObject({
+      parentLink: {
+        forOutput: { status: "refused", reason: "no_such_output" },
+      },
+    });
+    expect(asked).toEqual(["api", "api", null, null, null]);
+  });
+
+  it("refuses in words a target output with no parent, or a blank one, before anything is written (W7)", async () => {
+    const parent = await seedSession(USER);
+    const before = await q<{ n: number }>(
+      `select count(*)::int as n from focus_sessions`
+    );
+    await expect(
+      createFocusSession({
+        userId: USER,
+        goal: "orphan lane",
+        forOutput: "api",
+      })
+    ).rejects.toThrow(/forOutput needs parentSessionId/);
+    for (const blank of ["", "   "]) {
+      await expect(
+        createFocusSession({
+          userId: USER,
+          goal: "blank lane",
+          parentSessionId: parent,
+          forOutput: blank,
+        })
+      ).rejects.toThrow(/forOutput must name the key/);
+    }
+    const after = await q<{ n: number }>(
+      `select count(*)::int as n from focus_sessions`
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+    expect(h.permCalls).toEqual([]);
+  });
+
+  it("PROPOSED path: the target output rides the proposal and is checked again at approval (W7)", async () => {
+    const parent = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'wave', 'active', $3::jsonb, $4, '{}'::jsonb, now(), now(), now())`,
+      [
+        parent,
+        USER,
+        JSON.stringify([{ key: "api", kind: "code", label: "API" }]),
+        ["agent-1"],
+      ]
+    );
+    h.perm = async (opts) =>
+      opts.subjectType === "focus_session"
+        ? { proposalId: "prop-lane", proposalType: "create" }
+        : { granted: true };
+    const asked: Array<unknown> = [];
+    h.spawn = async (input) => {
+      asked.push(input.forOutput);
+      return { linked: true, suspendedIntentRecorded: false };
+    };
+
+    /** An agent proposes a lane for "api"; the person approves it. */
+    const proposeAndApprove = async () => {
+      h.permCalls.length = 0;
+      const proposed = await createFocusSession({
+        userId: USER,
+        agentUserId: "agent-1",
+        goal: `lane ${randomUUID()}`,
+        parentSessionId: parent,
+        forOutput: "api",
+      });
+      expect(proposed.status).toBe("proposed");
+      const data = h.permCalls.find((c) => c.subjectType === "focus_session")!
+        .data as Record<string, unknown>;
+      expect(data).toMatchObject({ parentSessionId: parent, forOutput: "api" });
+      const proposalId = randomUUID();
+      const targetId = randomUUID();
+      await q(
+        `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_at, updated_at)
+         values ($1, 'pending', 'create', 'focus_session', $2, $3::jsonb, now(), now())`,
+        [proposalId, targetId, JSON.stringify({ data })]
+      );
+      const executor = proposalExecRegistry.resolveExact(
+        "focus_session/create"
+      )!;
+      return executor.execute({
+        proposal: {
+          id: proposalId,
+          targetId,
+          workspaceId: null,
+          projectId: null,
+          subjectUserId: USER,
+          agentUserId: "agent-1",
+          data: { data },
+          targetType: "focus_session",
+          proposalType: "create",
+        },
+        payload: null,
+        userId: USER,
+        input: { proposalId },
+        ctx: {},
+        deps: {
+          emitProposalReviewed: () => undefined,
+          reportProposalOutcome: () => undefined,
+        },
+      } as never);
+    };
+
+    // The proposing agent is on the parent's roster: recorded at approval.
+    const kept = await proposeAndApprove();
+    expect(kept.success).toBe(true);
+    expect(kept.refusals ?? []).toEqual([]);
+
+    // Taken off the roster before the approval: the check runs again there,
+    // the lane still lands, its target does not.
+    await q(`update focus_sessions set agent_ids = '{}' where id = $1`, [
+      parent,
+    ]);
+    const dropped = await proposeAndApprove();
+    expect(dropped.success).toBe(true);
+    expect(dropped.refusals).toEqual([
+      expect.stringContaining(
+        `target output "api" was not recorded (not_a_parent_writer)`
+      ),
+    ]);
+    expect(asked).toEqual(["api", null]);
+  });
+
   it("PROPOSED path: title, parent and blockers ride the proposal and land at approval", async () => {
     const mine = await seedSession(USER);
     const theirs = await seedSession(OTHER);

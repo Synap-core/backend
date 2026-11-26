@@ -4,7 +4,7 @@ Model first, UI second. An app built on the pod never hard-codes a status, a sta
 
 ## Before you build anything
 
-Always inventory. Never hallucinate view types, widget kinds, or profiles.
+Always inventory. Never hallucinate view types, cell kinds, or profiles.
 
 ```
 GET /api/hub/manifest
@@ -21,4 +21,4 @@ GET /api/hub/views?userId={userId}&workspaceId={workspaceId}
   → [{ id, name, type, profileSlug, config }]
 ```
 
-Widget definitions are the source of truth for which cells are installed and how to configure them. **Never guess cell kinds.** If a cell doesn't appear in the registry, don't reference it (unless it's a browser-native cell from the manifest).
+The cell catalog (`synap_list_cells`) is the source of truth for which cells are installed and how to configure them. **Never guess cell kinds.** If a cell doesn't appear in the registry, don't reference it (unless it's a browser-native cell from the manifest).

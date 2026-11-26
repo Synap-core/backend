@@ -28,6 +28,7 @@ import {
 } from "@heroui/react";
 import { ChevronDown, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { shellT } from "./copy";
 import { useReplaceParams } from "../../../lib/use-replace-params";
 import {
   filterChipFace,
@@ -99,6 +100,7 @@ export type FilterChipProps<K extends string> =
   SingleProps<K> | MultipleProps<K>;
 
 export function FilterChip<K extends string>(props: FilterChipProps<K>) {
+  const t = shellT();
   const {
     label,
     options,
@@ -232,7 +234,7 @@ export function FilterChip<K extends string>(props: FilterChipProps<K>) {
       {clearable && face.isSet && (
         <button
           type="button"
-          aria-label={`Clear ${label}`}
+          aria-label={t("filter.clear", { label })}
           onClick={() => commit(defaultSelected)}
           className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded text-foreground/55 transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >

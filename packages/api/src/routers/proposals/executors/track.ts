@@ -70,7 +70,6 @@ import {
   pickGoalPlacementInput,
 } from "../../../services/tracks/goal-placement.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
-import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
 import { readTrackFromEntity } from "../../../services/tracks/goal-source-entity.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
@@ -170,12 +169,10 @@ export function registerTrackExecutors(): void {
         // Its parent goal and pillars: written after the birth through THE
         // dependency door, which re-checks every floor now.
         ...pickGoalPlacementInput(data),
-        // Decision 2a: this approval IS the consent to the spaces the
-        // proposal listed, for the agent the proposal's COLUMN names.
-        approvedSpaceGrant: {
+        // The agent the proposal's COLUMN names, for the attribution.
+        approval: {
           proposalId: input.proposalId,
           agentUserId: proposal.agentUserId ?? null,
-          listedWorkspaceIds: readListedStepSpaces(data),
         },
         actor: { userId },
       });

@@ -27,10 +27,13 @@ import {
   type CompositeProposalOperation,
   type CompositeUpdateOperation,
   type CompositeViewType,
+  type PlanBlockerKind,
 } from "@synap-core/types/proposals";
 import {
+  planCrossKindEdges,
   planSessionEdges,
   sessionOpsRootFirst,
+  trackOpsRootFirst,
   type PlanSessionEdge,
 } from "../services/capture-agent/capture-plan.js";
 import { createLogger } from "@synap-core/core";
@@ -370,13 +373,41 @@ export interface MaterializeRuleResult {
   automationIds: string[];
 }
 
-/** Per-op result for a `create_playbook` op (a DRAFT process). */
+/** Per-op result for a `create_playbook` op. */
 export interface MaterializePlaybookResult {
   ref: string;
   opIndex: number;
   playbookId: string;
-  /** Always "draft" — what the op asked for is never honoured over this. */
-  status: "draft";
+  /** What the door wrote: the caller decides from the op and the approval. */
+  status: "draft" | "active";
+}
+
+/** Per-op result for a `create_workspace` op (a domain's space). */
+export interface MaterializeWorkspaceResult {
+  ref: string;
+  opIndex: number;
+  workspaceId: string;
+  /** The template apply reused a space a retry of this approval made. */
+  linked: boolean;
+}
+
+/** Per-op result for a `define_kind` op. */
+export interface MaterializeKindResult {
+  ref: string;
+  opIndex: number;
+  profileId: string;
+  /** The stored slug: what a playbook or a view of this batch names. */
+  slug: string;
+  /** The kind a retry of this approval already made. */
+  linked: boolean;
+}
+
+/** Per-op result for a `declare_lifecycle` op. */
+export interface MaterializeLifecycleResult {
+  ref: string;
+  opIndex: number;
+  profileId: string;
+  propertyDefId: string;
 }
 
 /** Per-op result for a `create_view` op (a List over the bundle's things). */
@@ -471,6 +502,49 @@ export interface MaterializeLinkResult {
   preExisting?: true;
 }
 
+/** Per-op result for a `create_track` op (connected plan). */
+export interface MaterializeTrackResult {
+  ref: string;
+  opIndex: number;
+  trackId: string;
+  /** The start door handed back a LIVE goal of the same name — not this run's row. */
+  linked?: boolean;
+  /** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
+  blockerLinkIds?: string[];
+}
+
+/** One step → decision / goal `blocked_by` edge a plan applied. */
+export interface MaterializeCrossLinkResult {
+  opIndex: number;
+  fromSessionId: string;
+  toKind: "entity" | "track";
+  toId: string;
+  /** As declared (a ref or a real id per side) — the edge's identity in a record. */
+  requested: { from: string; to: string };
+  linkId?: string;
+  /** The edge was already in the graph — not created by this run. */
+  preExisting?: true;
+}
+
+/** One existing step a re-plan changed (`update_session`), before and after. */
+export interface MaterializeSessionUpdateResult {
+  ref: string;
+  opIndex: number;
+  sessionId: string;
+  before: { title: string | null; goal: string; status: string };
+  after: { title: string | null; goal: string; status: string };
+}
+
+/** One existing `blocked_by` edge a re-plan dropped (`remove_link`). */
+export interface MaterializeLinkRemovalResult {
+  opIndex: number;
+  fromSessionId: string;
+  toKind: PlanBlockerKind;
+  toId: string;
+  /** False when the edge was already gone (a no-op, nothing to restore). */
+  removed: boolean;
+}
+
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
   ref: string;
@@ -556,8 +630,12 @@ export interface MaterializeResult {
   automations: MaterializeAutomationResult[];
   /** Rule Loop (NS1): rules created by `create_rule` ops. */
   rules: MaterializeRuleResult[];
-  /** Draft processes created by `create_playbook` ops. Empty by default. */
+  /** Processes created by `create_playbook` ops. Empty by default. */
   playbooks: MaterializePlaybookResult[];
+  /** A domain: spaces, kinds and lifecycles its ops made. Absent when none. */
+  workspaces?: MaterializeWorkspaceResult[];
+  kinds?: MaterializeKindResult[];
+  lifecycles?: MaterializeLifecycleResult[];
   /** Lists created by `create_view` ops. Empty by default. */
   views: MaterializeViewResult[];
   /** Cells defined by `create_cell` ops (a playbook's UI). */
@@ -571,6 +649,12 @@ export interface MaterializeResult {
   sessions: MaterializeSessionResult[];
   links: MaterializeLinkResult[];
   documents: MaterializeDocumentResult[];
+  /** Goals (`create_track`) a plan started. */
+  tracks?: MaterializeTrackResult[];
+  /** Step → decision / goal edges, and a re-plan's edits. */
+  crossLinks?: MaterializeCrossLinkResult[];
+  sessionUpdates?: MaterializeSessionUpdateResult[];
+  linkRemovals?: MaterializeLinkRemovalResult[];
 }
 
 /**
@@ -621,6 +705,8 @@ export type AutomationCreateCaller = {
      * approval of the batch activates it.
      */
     enabled?: boolean;
+    /** Its space; absent = the batch's. */
+    workspaceId?: string;
   }) => Promise<{ id: string }>;
 };
 
@@ -634,8 +720,9 @@ export type RuleCreateCaller = {
 };
 
 /**
- * A DRAFT process (`create_playbook`). Routes to the EXISTING `playbooks.create`
- * door (wired by `buildRuleLoopCallers`), always with `status: "draft"`.
+ * A process (`create_playbook`). Routes to the EXISTING `playbooks.create`
+ * door (wired by `buildRuleLoopCallers`), which decides its status: the op's
+ * `draft` keeps it off; otherwise a person's approval makes it active.
  */
 export type PlaybookCreateCaller = {
   create: (input: {
@@ -643,9 +730,47 @@ export type PlaybookCreateCaller = {
     description?: string;
     goalTemplate: string;
     subjectProfile: { profileSlug: string; statusProperty?: string };
-    /** Always "draft" — the materializer never asks for a live process. */
-    status: "draft";
-  }) => Promise<{ id: string }>;
+    /** The status asked for; absent = none stated. */
+    status?: "draft" | "active";
+    /** Its space; absent = the batch's. */
+    workspaceId?: string;
+  }) => Promise<{ id: string; status: "draft" | "active" }>;
+};
+
+/**
+ * A domain's space (`create_workspace`), its kinds (`define_kind`) and their
+ * lifecycles (`declare_lifecycle`), each through its existing door as the
+ * approver (wired by `buildRuleLoopCallers`). A row a retry of the same
+ * approval already made comes back `linked`.
+ */
+export type WorkspaceCreateCaller = {
+  create: (input: {
+    ref: string;
+    name: string;
+  }) => Promise<{ id: string; linked: boolean }>;
+};
+
+export type KindDefineCaller = {
+  define: (input: {
+    ref: string;
+    slug: string;
+    displayName: string;
+    description?: string;
+    icon?: string;
+    entityScope?: "pod" | "workspace";
+    fields: Array<Record<string, unknown>>;
+    /** Its home; absent = the batch's. */
+    workspaceId?: string;
+  }) => Promise<{ id: string; slug: string; linked: boolean }>;
+};
+
+export type LifecycleDeclareCaller = {
+  declare: (input: {
+    profileId: string;
+    property?: string;
+    options: Array<Record<string, unknown>>;
+    initialStatus?: string;
+  }) => Promise<{ propertyDefId: string }>;
 };
 
 /**
@@ -777,8 +902,55 @@ export interface PlanCallers {
        * goal, space). P2 still writes the `spawned_from` edge, idempotently.
        */
       parentSessionId?: string | null;
+      /**
+       * P4 / B5: the step's birth and time. `awaitsBlockers` = this plan links
+       * a `blocked_by` FROM it in P2 (after every session exists), so the
+       * door births it planned as a start that names its blockers would be.
+       */
+      startNow?: boolean;
+      awaitsBlockers?: boolean;
+      plannedFor?: string | null;
+      dueBy?: string | null;
+      /** The goal it works toward (an existing id, or one this plan started). */
+      trackId?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
+    /**
+     * A re-plan's change to an EXISTING step through THE session update door,
+     * as the applying person. Returns the patched fields before and after.
+     */
+    update: (input: {
+      sessionId: string;
+      patch: {
+        title?: string | null;
+        goal?: string;
+        status?: "active" | "paused";
+      };
+    }) => Promise<{
+      before: MaterializeSessionUpdateResult["before"];
+      after: MaterializeSessionUpdateResult["after"];
+    }>;
+  };
+  /**
+   * A goal through THE start-goal door (`startTrack`), as the plan's owner,
+   * then its goal→goal `blocked_by` edges through THE governed dependency door.
+   */
+  trackCaller: {
+    create: (input: {
+      name: string;
+      projectId: string;
+      direction?: string;
+      kpi?: Record<string, unknown>;
+      criteria?: Array<Record<string, unknown>>;
+      workKind?: string;
+      endState?: string;
+      /** The goal it serves, when it already exists (in-plan parents first). */
+      parentGoalId?: string;
+    }) => Promise<{ id: string; linked: boolean }>;
+    addBlockers: (input: {
+      trackId: string;
+      blockerTrackIds: string[];
+    }) => Promise<{ linkIds: string[] }>;
   };
   linkCaller: {
     create: (input: {
@@ -786,6 +958,20 @@ export interface PlanCallers {
       fromSessionId: string;
       toSessionId: string;
     }) => Promise<{ linkId: string | null; preExisting: boolean }>;
+    /** A step waits on a decision or a goal: THE governed dependency door. */
+    createCrossKind: (input: {
+      fromSessionId: string;
+      toKind: "entity" | "track";
+      toId: string;
+      /** A decision's option: the step waits on that arm only. */
+      option?: string;
+    }) => Promise<{ linkId: string | null; preExisting: boolean }>;
+    /** Drop an existing `blocked_by` edge through the door that owns it. */
+    remove: (input: {
+      fromSessionId: string;
+      toKind: PlanBlockerKind;
+      toId: string;
+    }) => Promise<{ removed: boolean }>;
   };
   documentCaller: {
     create: (input: {
@@ -892,8 +1078,12 @@ export interface MaterializeOptions {
   skillCaller?: SkillCreateCaller;
   automationCaller?: AutomationCreateCaller;
   ruleCaller?: RuleCreateCaller;
-  /** Draft process (`create_playbook`) — wired with the Rule Loop callers. */
+  /** Process (`create_playbook`) — wired with the Rule Loop callers. */
   playbookCaller?: PlaybookCreateCaller;
+  /** A domain (`create_workspace`, `define_kind`, `declare_lifecycle`) — likewise. */
+  workspaceCaller?: WorkspaceCreateCaller;
+  kindCaller?: KindDefineCaller;
+  lifecycleCaller?: LifecycleDeclareCaller;
   /** List (`create_view`) — wired with the Rule Loop callers. */
   viewCaller?: ViewCreateCaller;
   /** A playbook's UI (`create_cell`, `bind_renderer`) — wired with the Rule Loop callers. */
@@ -1003,6 +1193,16 @@ function appliedRowsOf(
     })),
     ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
     ...result.playbooks.map((p) => ({ kind: "playbook", id: p.playbookId })),
+    ...(result.workspaces ?? [])
+      .filter((w) => !w.linked)
+      .map((w) => ({ kind: "workspace", id: w.workspaceId })),
+    ...(result.kinds ?? [])
+      .filter((k) => !k.linked)
+      .map((k) => ({ kind: "profile", id: k.profileId })),
+    ...(result.lifecycles ?? []).map((l) => ({
+      kind: "lifecycle",
+      id: l.propertyDefId,
+    })),
     ...result.views.map((v) => ({ kind: "view", id: v.viewId })),
     ...(result.cells ?? [])
       .filter((c) => c.created)
@@ -1020,6 +1220,22 @@ function appliedRowsOf(
       .filter((l) => l.linkId && !l.preExisting)
       .map((l) => ({ kind: "link", id: l.linkId as string })),
     ...result.documents.map((d) => ({ kind: "document", id: d.documentId })),
+    ...(result.tracks ?? [])
+      .filter((t) => !t.linked)
+      .map((t) => ({ kind: "track", id: t.trackId })),
+    ...(result.crossLinks ?? [])
+      .filter((l) => l.linkId && !l.preExisting)
+      .map((l) => ({ kind: "link", id: l.linkId as string })),
+    ...(result.sessionUpdates ?? []).map((u) => ({
+      kind: "session_update",
+      id: u.sessionId,
+    })),
+    ...(result.linkRemovals ?? [])
+      .filter((r) => r.removed)
+      .map((r) => ({
+        kind: "link_removal",
+        id: `${r.fromSessionId}>${r.toKind}:${r.toId}`,
+      })),
   ];
 }
 
@@ -1051,6 +1267,9 @@ export async function materializeCompositeGraph(
       (op.op === "create_automation" && !options?.automationCaller) ||
       (op.op === "create_rule" && !options?.ruleCaller) ||
       (op.op === "create_playbook" && !options?.playbookCaller) ||
+      (op.op === "create_workspace" && !options?.workspaceCaller) ||
+      (op.op === "define_kind" && !options?.kindCaller) ||
+      (op.op === "declare_lifecycle" && !options?.lifecycleCaller) ||
       (op.op === "create_view" && !options?.viewCaller) ||
       (op.op === "create_cell" && !options?.cellCaller) ||
       (op.op === "bind_renderer" && !options?.rendererCaller) ||
@@ -1184,6 +1403,33 @@ export async function materializeCompositeGraph(
   const sessionResults: MaterializeSessionResult[] = [];
   const linkResults: MaterializeLinkResult[] = [];
   const documentResults: MaterializeDocumentResult[] = [];
+  const trackResults: MaterializeTrackResult[] = [];
+  const workspaceResults: MaterializeWorkspaceResult[] = [];
+  const kindResults: MaterializeKindResult[] = [];
+  const lifecycleResults: MaterializeLifecycleResult[] = [];
+  // The stored slug of each kind this batch defined, by its op ref.
+  const kindSlugByRef = new Map<string, string>();
+  // The space an op names: a space this batch made (`workspaceRef`), or an id.
+  // A ref whose space did not land throws, so the op is skipped, named.
+  const spaceOf = (op: {
+    workspaceRef?: string;
+    workspaceId?: string;
+  }): string | undefined =>
+    op.workspaceRef
+      ? resolveCompositeRef(refToRealId, op.workspaceRef)
+      : op.workspaceId;
+  const kindSlugOf = (ref: string): string => {
+    const slug = kindSlugByRef.get(ref);
+    if (!slug) {
+      throw new Error(
+        `the kind "${ref}" was not defined, so there is nothing to name`
+      );
+    }
+    return slug;
+  };
+  const crossLinkResults: MaterializeCrossLinkResult[] = [];
+  const sessionUpdateResults: MaterializeSessionUpdateResult[] = [];
+  const linkRemovalResults: MaterializeLinkRemovalResult[] = [];
 
   const buildResult = (): MaterializeResult => ({
     created,
@@ -1199,6 +1445,9 @@ export async function materializeCompositeGraph(
     automations: automationResults,
     rules: ruleResults,
     playbooks: playbookResults,
+    ...(workspaceResults.length > 0 ? { workspaces: workspaceResults } : {}),
+    ...(kindResults.length > 0 ? { kinds: kindResults } : {}),
+    ...(lifecycleResults.length > 0 ? { lifecycles: lifecycleResults } : {}),
     views: viewResults,
     ...(cellResults.length > 0 ? { cells: cellResults } : {}),
     ...(rendererResults.length > 0 ? { renderers: rendererResults } : {}),
@@ -1207,6 +1456,14 @@ export async function materializeCompositeGraph(
     sessions: sessionResults,
     links: linkResults,
     documents: documentResults,
+    ...(trackResults.length > 0 ? { tracks: trackResults } : {}),
+    ...(crossLinkResults.length > 0 ? { crossLinks: crossLinkResults } : {}),
+    ...(sessionUpdateResults.length > 0
+      ? { sessionUpdates: sessionUpdateResults }
+      : {}),
+    ...(linkRemovalResults.length > 0
+      ? { linkRemovals: linkRemovalResults }
+      : {}),
   });
 
   // One update op through the update caller. Per-op resilient like every
@@ -1259,10 +1516,128 @@ export async function materializeCompositeGraph(
         updateOperationTargetId(op),
         false
       );
+    } else if (op.op === "update_session") {
+      // A re-plan's step update names an existing session: its ref is known
+      // before any write, so a `create_link` from it resolves.
+      registerEntityRef(refToRealId, i, op.ref, op.sessionId, false);
     }
   });
 
   try {
+    // ── Pass D — A DOMAIN: spaces, then kinds, then lifecycles ───────────
+    // First of all, so every op after may live in a space this batch makes
+    // and name a kind it defines.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_workspace") continue;
+      currentOpIndex = i;
+      const workspaceCaller = options?.workspaceCaller;
+      if (!workspaceCaller) {
+        throw new Error(
+          "materializeCompositeGraph: create_workspace op reached pass execution with no workspaceCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const made = await workspaceCaller.create({
+          ref: op.ref,
+          name: op.name,
+        });
+        registerEntityRef(refToRealId, i, op.ref, made.id, false);
+        workspaceResults.push({
+          ref: op.ref,
+          opIndex: i,
+          workspaceId: made.id,
+          linked: made.linked,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_workspace op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "define_kind") continue;
+      currentOpIndex = i;
+      const kindCaller = options?.kindCaller;
+      if (!kindCaller) {
+        throw new Error(
+          "materializeCompositeGraph: define_kind op reached pass execution with no kindCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const workspaceId = spaceOf(op);
+        const made = await kindCaller.define({
+          ref: op.ref,
+          slug: op.slug,
+          displayName: op.displayName,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.icon ? { icon: op.icon } : {}),
+          ...(op.entityScope ? { entityScope: op.entityScope } : {}),
+          fields: op.fields ?? [],
+          ...(workspaceId ? { workspaceId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, made.id, false);
+        kindSlugByRef.set(op.ref, made.slug);
+        kindResults.push({
+          ref: op.ref,
+          opIndex: i,
+          profileId: made.id,
+          slug: made.slug,
+          linked: made.linked,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, slug: op.slug },
+          "Skipping define_kind op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "declare_lifecycle") continue;
+      currentOpIndex = i;
+      const lifecycleCaller = options?.lifecycleCaller;
+      if (!lifecycleCaller) {
+        throw new Error(
+          "materializeCompositeGraph: declare_lifecycle op reached pass execution with no lifecycleCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const profileId = op.kindRef
+          ? resolveCompositeRef(refToRealId, op.kindRef)
+          : (op.profileId as string);
+        const declared = await lifecycleCaller.declare({
+          profileId,
+          ...(op.property ? { property: op.property } : {}),
+          options: op.options,
+          ...(op.initialStatus ? { initialStatus: op.initialStatus } : {}),
+        });
+        registerEntityRef(
+          refToRealId,
+          i,
+          op.ref,
+          declared.propertyDefId,
+          false
+        );
+        lifecycleResults.push({
+          ref: op.ref,
+          opIndex: i,
+          profileId,
+          propertyDefId: declared.propertyDefId,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref },
+          "Skipping declare_lifecycle op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       if (op.op !== "create_skill") continue;
@@ -1294,6 +1669,56 @@ export async function materializeCompositeGraph(
       }
     }
 
+    // ── Pass 0p — PROCESSES (`create_playbook`) ───────────────────────────
+    // Before the automations, so a flow may run a playbook this batch makes
+    // by its name (`playbookName`, stamped to its id by the automation door).
+    // Through the EXISTING `playbooks.create` door, which decides the status.
+    // Per-op resilient like the Rule Loop config ops.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_playbook") continue;
+      currentOpIndex = i;
+      if (!options?.playbookCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips).
+        throw new Error(
+          "materializeCompositeGraph: create_playbook op reached pass execution with no playbookCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const profileSlug = op.subjectProfileRef
+          ? kindSlugOf(op.subjectProfileRef)
+          : (op.subjectProfile.profileSlug as string);
+        const workspaceId = spaceOf(op);
+        const created = await options.playbookCaller.create({
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          goalTemplate: op.goalTemplate,
+          subjectProfile: {
+            profileSlug,
+            ...(op.subjectProfile?.statusProperty
+              ? { statusProperty: op.subjectProfile.statusProperty }
+              : {}),
+          },
+          ...(op.status ? { status: op.status } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        playbookResults.push({
+          ref: op.ref,
+          opIndex: i,
+          playbookId: created.id,
+          status: created.status,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_playbook op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       if (op.op !== "create_automation") continue;
@@ -1307,12 +1732,14 @@ export async function materializeCompositeGraph(
         );
       }
       try {
+        const workspaceId = spaceOf(op);
         const created = await options.automationCaller.create({
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
           flowDefinition: op.flowDefinition,
           ...(op.enabled === undefined ? {} : { enabled: op.enabled }),
+          ...(workspaceId ? { workspaceId } : {}),
         });
         registerEntityRef(refToRealId, i, op.ref, created.id, false);
         automationResults.push({
@@ -1912,6 +2339,93 @@ export async function materializeCompositeGraph(
     }
 
     if (planCallers) {
+      // The steps that WAIT on something in this plan (a `blocked_by` FROM
+      // them, P2 below): born planned unless they say startNow (P4).
+      const waiting = new Set(
+        planSessionEdges(operations)
+          .filter((e) => e.type === "blocked_by")
+          .flatMap((e) => ("ref" in e.from ? [e.from.ref] : []))
+      );
+      // A wait on a decision or a goal is a wait too (P4): a step whose ONLY
+      // blocker is a cross-kind link is born planned, not active.
+      for (const e of planCrossKindEdges(operations)) {
+        if ("ref" in e.from) waiting.add(e.from.ref);
+      }
+      // ── Plan pass PT — GOALS, parents before children ──────────────────
+      // Before every session, so a session's `trackRef` resolves AT create
+      // (it is born in its goal, like `start_session` + `trackId`). The goal
+      // it serves is passed at start when it exists (an existing id, or an
+      // in-plan goal started earlier in this pass).
+      for (const i of trackOpsRootFirst(operations)) {
+        const op = operations[i];
+        if (op.op !== "create_track") continue;
+        currentOpIndex = i;
+        const projectId =
+          op.projectId ??
+          (op.projectRef
+            ? resolveCompositeRef(refToRealId, op.projectRef)
+            : undefined);
+        if (!projectId) {
+          failPlanStep(i, "a goal lives in a project: none was given");
+          continue;
+        }
+        const parentGoalId =
+          op.parentGoalId ??
+          (op.parentRef
+            ? trackResults.find((t) => t.ref === op.parentRef)?.trackId
+            : undefined);
+        const track = await planCallers.trackCaller.create({
+          name: op.name,
+          projectId,
+          ...(op.direction ? { direction: op.direction } : {}),
+          ...(op.kpi ? { kpi: op.kpi } : {}),
+          ...(op.criteria ? { criteria: op.criteria } : {}),
+          ...(op.workKind ? { workKind: op.workKind } : {}),
+          ...(op.endState ? { endState: op.endState } : {}),
+          ...(parentGoalId ? { parentGoalId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, track.id, false);
+        trackResults.push({
+          ref: op.ref,
+          opIndex: i,
+          trackId: track.id,
+          ...(track.linked ? { linked: true } : {}),
+        });
+        // A LIVE goal of that name was handed back: somebody's goal. Placing
+        // it or making it wait from this plan would change it silently — the
+        // same reason a reused project's subject is never rebound.
+        if (
+          track.linked &&
+          (parentGoalId ||
+            (op.blockedByRefs?.length ?? 0) +
+              (op.blockedByTrackIds?.length ?? 0) >
+              0)
+        ) {
+          failPlanStep(
+            i,
+            `a live goal named "${op.name}" already exists in this project (${track.id}); the plan would place it or make it wait — rename the goal step, or file the sessions with its trackId`
+          );
+        }
+      }
+      // Goal → goal `blocked_by`, once every goal exists (either direction).
+      for (const result of trackResults) {
+        const op = operations[result.opIndex];
+        if (op.op !== "create_track") continue;
+        const blockerTrackIds = [
+          ...(op.blockedByRefs ?? []).map((ref) =>
+            resolveCompositeRef(refToRealId, ref)
+          ),
+          ...(op.blockedByTrackIds ?? []),
+        ];
+        if (blockerTrackIds.length === 0) continue;
+        currentOpIndex = result.opIndex;
+        const { linkIds } = await planCallers.trackCaller.addBlockers({
+          trackId: result.trackId,
+          blockerTrackIds,
+        });
+        result.blockerLinkIds = linkIds;
+      }
+
       // ── Plan pass P1 — SESSIONS, parents before children ───────────────
       for (const i of sessionOpsRootFirst(operations)) {
         const op = operations[i];
@@ -1942,6 +2456,15 @@ export async function materializeCompositeGraph(
           expectedOutputs: op.expectedOutputs ?? [],
           criteria: op.criteria ?? [],
           parentSessionId,
+          ...(op.startNow === true ? { startNow: true } : {}),
+          ...(waiting.has(op.ref) ? { awaitsBlockers: true } : {}),
+          ...(op.plannedFor ? { plannedFor: op.plannedFor } : {}),
+          ...(op.dueBy ? { dueBy: op.dueBy } : {}),
+          trackId:
+            op.trackId ??
+            (op.trackRef
+              ? resolveCompositeRef(refToRealId, op.trackRef)
+              : null),
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({
@@ -1949,6 +2472,51 @@ export async function materializeCompositeGraph(
           opIndex: i,
           sessionId: session.id,
           ...(session.linked ? { linked: true } : {}),
+        });
+      }
+
+      // ── Plan pass P2r — RE-PLAN EDITS on existing steps ─────────────────
+      // BEFORE any edge is added: a re-plan that reverses a dependency drops
+      // A → B before it adds B → A, so the cycle refusal never meets the edge
+      // it is replacing. A step's own fields go through THE session update
+      // door, then the blocked_by edges the re-plan drops.
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "update_session") continue;
+        currentOpIndex = i;
+        const { before, after } = await planCallers.sessionCaller.update({
+          sessionId: op.sessionId,
+          patch: op.patch,
+        });
+        sessionUpdateResults.push({
+          ref: op.ref,
+          opIndex: i,
+          sessionId: op.sessionId,
+          before,
+          after,
+        });
+      }
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "remove_link") continue;
+        currentOpIndex = i;
+        const toKind: PlanBlockerKind = op.toEntityId
+          ? "entity"
+          : op.toTrackId
+            ? "track"
+            : "session";
+        const toId = op.toEntityId ?? op.toTrackId ?? op.toSessionId ?? "";
+        const { removed } = await planCallers.linkCaller.remove({
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId,
+        });
+        linkRemovalResults.push({
+          opIndex: i,
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId,
+          removed,
         });
       }
 
@@ -1976,6 +2544,39 @@ export async function materializeCompositeGraph(
           requested: {
             from: "ref" in edge.from ? edge.from.ref : edge.from.sessionId,
             to: "ref" in edge.to ? edge.to.ref : edge.to.sessionId,
+          },
+          ...(link.linkId ? { linkId: link.linkId } : {}),
+          ...(link.preExisting ? { preExisting: true as const } : {}),
+        });
+      }
+
+      // ── Plan pass P2x — STEP → DECISION / GOAL edges ───────────────────
+      // After every session and goal exists (P1, PT), and every entity (pass
+      // 1): THE governed dependency door, approved by this plan.
+      for (const edge of planCrossKindEdges(operations)) {
+        currentOpIndex = edge.opIndex;
+        const fromSessionId =
+          "ref" in edge.from
+            ? resolveCompositeRef(refToRealId, edge.from.ref)
+            : edge.from.sessionId;
+        const toId =
+          "ref" in edge.to
+            ? resolveCompositeRef(refToRealId, edge.to.ref)
+            : edge.to.id;
+        const link = await planCallers.linkCaller.createCrossKind({
+          fromSessionId,
+          toKind: edge.to.kind,
+          toId,
+          ...(edge.option ? { option: edge.option } : {}),
+        });
+        crossLinkResults.push({
+          opIndex: edge.opIndex,
+          fromSessionId,
+          toKind: edge.to.kind,
+          toId,
+          requested: {
+            from: "ref" in edge.from ? edge.from.ref : edge.from.sessionId,
+            to: "ref" in edge.to ? edge.to.ref : edge.to.id,
           },
           ...(link.linkId ? { linkId: link.linkId } : {}),
           ...(link.preExisting ? { preExisting: true as const } : {}),
@@ -2065,50 +2666,6 @@ export async function materializeCompositeGraph(
       }
     }
 
-    // ── Pass 4 — DRAFT PROCESS ops (capture → process) ────────────────────
-    // Through the EXISTING `playbooks.create` door, always `status: "draft"`
-    // (forced here, whatever the op says). Per-op resilient like the Rule
-    // Loop config ops: a failed draft never discards the capture beside it.
-    for (let i = 0; i < operations.length; i++) {
-      const op = operations[i];
-      if (op.op !== "create_playbook") continue;
-      currentOpIndex = i;
-      if (!options?.playbookCaller) {
-        // Unreachable — the fail-closed preflight above already refused this
-        // batch. Kept as a narrowing guard that THROWS (never skips).
-        throw new Error(
-          "materializeCompositeGraph: create_playbook op reached pass execution with no playbookCaller (preflight bypassed)"
-        );
-      }
-      try {
-        const created = await options.playbookCaller.create({
-          name: op.name,
-          ...(op.description ? { description: op.description } : {}),
-          goalTemplate: op.goalTemplate,
-          subjectProfile: {
-            profileSlug: op.subjectProfile.profileSlug,
-            ...(op.subjectProfile.statusProperty
-              ? { statusProperty: op.subjectProfile.statusProperty }
-              : {}),
-          },
-          status: "draft",
-        });
-        registerEntityRef(refToRealId, i, op.ref, created.id, false);
-        playbookResults.push({
-          ref: op.ref,
-          opIndex: i,
-          playbookId: created.id,
-          status: "draft",
-        });
-      } catch (err) {
-        logger.warn(
-          { err, ref: op.ref, name: op.name },
-          "Skipping create_playbook op (batch continues)"
-        );
-        failPlanStep(i, err);
-      }
-    }
-
     // ── Pass 5 — LISTS (`create_view`) ─────────────────────────────────────
     // LAST, so every member ref resolves against the fully populated map
     // (entities from pass 1, a group container included). Through the
@@ -2136,10 +2693,11 @@ export async function materializeCompositeGraph(
         const containerEntityId = op.containerRef
           ? resolveCompositeRef(refToRealId, op.containerRef)
           : undefined;
+        const viewWorkspaceId = spaceOf(op);
         const created = await options.viewCaller.create({
           name: op.name,
           viewType: op.viewType,
-          ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+          ...(viewWorkspaceId ? { workspaceId: viewWorkspaceId } : {}),
           ...(op.scopeProfileSlugs?.length
             ? { scopeProfileSlugs: op.scopeProfileSlugs }
             : {}),
@@ -2183,7 +2741,7 @@ export async function materializeCompositeGraph(
           name: op.name,
           rendererSource: op.rendererSource,
           ...(op.description ? { description: op.description } : {}),
-          workspaceId: op.workspaceId ?? null,
+          workspaceId: spaceOf(op) ?? null,
           ...(op.contentKind ? { contentKind: op.contentKind } : {}),
         });
         cellKeyByRef.set(op.ref, defined.typeKey);
@@ -2224,12 +2782,16 @@ export async function materializeCompositeGraph(
             `bind_renderer "${op.ref}": its cell "${op.cellRef}" was not defined, so there is nothing to bind`
           );
         }
+        // A target this batch made (`target.ref`) resolves to its real id.
+        const targetId = op.target.ref
+          ? resolveCompositeRef(refToRealId, op.target.ref)
+          : (op.target.id as string);
         const bound = await options.rendererCaller.bind({
           targetKind: op.target.kind,
-          targetId: op.target.id,
+          targetId,
           slot: op.slot,
           scope: op.scope,
-          workspaceId: op.workspaceId ?? null,
+          workspaceId: spaceOf(op) ?? null,
           cellKey,
         });
         rendererResults.push({
@@ -2237,7 +2799,7 @@ export async function materializeCompositeGraph(
           opIndex: i,
           bindingId: bound.bindingId,
           targetKind: op.target.kind,
-          targetId: op.target.id,
+          targetId,
           slot: op.slot,
           scope: op.scope,
           cellKey,

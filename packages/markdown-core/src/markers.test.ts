@@ -84,6 +84,31 @@ describe("the ONE escape rule", () => {
 // inline-patterns skill) yet the grammar required a label, so it rendered raw,
 // uuid included. The label is optional; an unlabeled reference never reads as
 // its id — the renderer resolves the name, plain text reads the kind's noun.
+// The word is Cell (founder, 23 Nov 2026): `[[cell:<key>]]` is the marker,
+// `[[widget:<key>]]` still reads, and both are the same reference.
+describe("cell markers", () => {
+  it("[[cell:…]] and [[widget:…]] parse to the same reference", () => {
+    const cell = parseInlinePatterns(`[[cell:stat-card|Open deals]]`).patterns;
+    expect(cell).toEqual([
+      { kind: "widget", cellKey: "stat-card", label: "Open deals" },
+    ]);
+    expect(
+      parseInlinePatterns(`[[widget:stat-card|Open deals]]`).patterns
+    ).toEqual(cell);
+  });
+
+  it("a cell marker segments as a reference, never as raw text", () => {
+    const [segment] = splitInlineMarkers(`see [[cell:stat-card]] here`).filter(
+      (s) => s.type === "marker"
+    );
+    expect(segment?.type === "marker" && segment.pattern).toEqual({
+      kind: "widget",
+      cellKey: "stat-card",
+      label: "",
+    });
+  });
+});
+
 describe("label-less markers", () => {
   const ID = "05bb6692-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
 

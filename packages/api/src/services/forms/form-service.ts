@@ -16,12 +16,12 @@
  * WHAT a create mints, in ONE transaction (nothing half-exists):
  *   1. the form's own agent user — `agentType: form:<formId>`, `createdVia:
  *      system`, capabilities EXACTLY `["entity.create"]` (never empty: empty
- *      means unrestricted), `writesRequireProposal: true`, no API key;
- *   2. an `editor` membership in exactly the form's workspace;
- *   3. the per-form mode rule (agent principal, workspace scope, exact action
+ *      means unrestricted), `writesRequireProposal: true`, no API key, no
+ *      space seat (it writes through its creator's membership);
+ *   2. the per-form mode rule (agent principal, workspace scope, exact action
  *      `entity.create`, `propose` or `auto`), namespaced `system:forms:<id>`;
- *   4. an explicit `pending_proposal_cap` ceiling for that actor;
- *   5. the `tools` row whose `metadata.form` carries the definition, the token
+ *   3. an explicit `pending_proposal_cap` ceiling for that actor;
+ *   4. the `tools` row whose `metadata.form` carries the definition, the token
  *      HASH + 6-char prefix and the ticket secret. The plaintext token is
  *      returned ONCE and never stored (`utils/share-token.ts`, the same token
  *      machinery as share links).
@@ -45,7 +45,6 @@ import {
   tools,
   users,
   workspaces,
-  workspaceMembers,
   governanceRules,
   governanceCeilings,
   profiles,
@@ -311,12 +310,6 @@ export async function createForm(
       isPersonalAgent: false,
       timezone: "UTC",
       locale: "en",
-    });
-    await tx.insert(workspaceMembers).values({
-      workspaceId: input.workspaceId,
-      userId: actorId,
-      role: "editor",
-      invitedBy: actor.userId,
     });
     await tx.insert(governanceRules).values({
       principalKind: "agent",

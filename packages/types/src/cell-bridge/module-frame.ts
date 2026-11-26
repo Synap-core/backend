@@ -25,6 +25,12 @@ import {
 } from "./frame-scripts.js";
 import { SYNAP_VIEW_SDK, SYNAP_WIDGET_SDK } from "./frame-sdks.js";
 import { HOST_PROVIDED_FRAME_SPECIFIERS } from "../renderables/cell-source-checks.js";
+import type { Locale } from "../i18n/locale.js";
+import {
+  frameTokensWithBrand,
+  type SurfaceContextAnchor,
+  type SurfaceContextBrand,
+} from "./surface-context.js";
 
 /**
  * The iframe `sandbox` value of a module frame, exactly: scripts and modal
@@ -99,6 +105,26 @@ export interface CellFrameInitContext {
   sdkVersion?: "1" | "2";
   /** Active host theme; the frame applies it to `<html data-theme>`. */
   theme?: "light" | "dark";
+  /**
+   * The language the host's chrome speaks (`@synap-core/types/i18n`
+   * `Locale`, the reader's own setting as the host resolved it): the frame's
+   * words follow it. Absent from an older host: the frame keeps its default.
+   */
+  locale?: Locale;
+  /*
+   * Frame contract v3 (`SurfaceContext`, `surfaceContextInitFields`): what
+   * the frame is about. Absent from an older host; `null` when there is none.
+   */
+  /** The object the frame is anchored to. */
+  anchor?: SurfaceContextAnchor | null;
+  /** The project the anchor belongs to. */
+  projectId?: string | null;
+  /** The goal (track) the anchor serves. */
+  goalId?: string | null;
+  /** The host's filters on what the frame shows. */
+  filters?: Record<string, unknown>;
+  /** The project's brand; its CSS is already in the frame's tokens. */
+  brand?: SurfaceContextBrand | null;
 }
 
 const BASE64 =
@@ -196,13 +222,15 @@ export interface CellModuleFrameInput {
   externalHosts?: readonly string[];
   /** The host's modules (React and the kit for a react frame) and its tokens. */
   hostModules: CellFrameModuleInputs;
+  /** The project's brand CSS (`SurfaceContext.brand.css`), written after the host's tokens. */
+  brandCss?: string | null;
 }
 
 /**
  * The whole srcdoc of a module frame. In the head, in this order: the CSP
  * `<meta>` FIRST (it governs every load after it), the host's tokens, the
  * base styles, the host modules as base64 JSON, then the classic scripts
- * (blob URLs → import map → `SynapWidget` → `SynapView` → ready + init queue),
+ * (blob URLs → import map → `synap` (old name `SynapWidget`) → `SynapView` → ready + init queue),
  * then the module that boots the cell on `synap:init`.
  *
  * A react frame embeds React, its DOM and the JSX runtime; the dev runtime
@@ -271,8 +299,8 @@ export function buildCellModuleFrameSrcdoc(
 
   const csp = buildCellModuleFrameCsp(input.externalHosts ?? []);
   const htmlAttributes = input.themeAttributes ?? `data-theme="${theme}"`;
-  // `<\/` is the same text to CSS, and cannot end the element.
-  const tokens = hostModules.tokensCss.replace(/<\//g, "<\\/");
+  // The host's tokens, then the brand's (`<\/` cannot end the element).
+  const tokens = frameTokensWithBrand(hostModules.tokensCss, input.brandCss);
 
   return `<!DOCTYPE html>
 <html ${htmlAttributes}>

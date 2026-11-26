@@ -551,7 +551,7 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Classify the layer first (data, view, capability, session, track, rule, structure), then conduct: orient → questions → extend-first → confirm → write. Not Company OS (that is agent-os).",
+    "summary": "Classify the layer first (data, surface, capability, session, track, rule, structure), then conduct: orient → questions → extend-first → confirm → write. Not Company OS (that is agent-os).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -879,7 +879,7 @@
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Reference: which cells/widgets exist to draw from.",
+    "summary": "Reference: which cells exist to draw from.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -890,7 +890,7 @@
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "AI companion widget integration in views.",
+    "summary": "AI companion cell integration in views.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -956,7 +956,7 @@
     "teachesTools": ["create_cell", "promote_cell_to_renderer"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "The four things you can build: view, dashboard, widget, workspace.",
+    "summary": "The four things you can build: view, dashboard, cell, workspace.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

@@ -53,8 +53,10 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { readSessionUsage } from "../session-usage.js";
@@ -187,6 +189,7 @@ beforeAll(async () => {
   for (const tbl of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     focusSessions,
     proposals,
     events,
@@ -199,6 +202,7 @@ beforeAll(async () => {
     users,
     podMembers,
     projectMembers,
+    spaceAccess,
   ]) {
     await h.client!.exec(ddlFor(tbl as unknown as PgTable));
   }

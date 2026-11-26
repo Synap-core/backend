@@ -8,7 +8,8 @@
  *     goal (`trackId`) arrives on a session that still follows nothing.
  *
  * Going through `followPlaybook` keeps every rule of a follow: criteria and
- * deliverables MERGE (nothing is overwritten), no stage is seeded mid-flight,
+ * deliverables MERGE (nothing is overwritten), no stage is seeded mid-flight
+ * (a bind at the start is a birth: it enters the first stage),
  * the definition is pinned on a run row, an unanswered required param becomes
  * a slot owed by the person. Two extra floors here, because nobody asked for
  * this bind:
@@ -30,11 +31,12 @@ import {
   eq,
   and,
   drizzleSql,
+  firstStageKey,
   getParentSessionId,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
@@ -109,7 +111,9 @@ export async function loadBindingFacts(input: {
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
+          playbooks
+        ),
         eq(playbooks.status, "active")
       )
     )) as BindingPlaybook[];
@@ -232,12 +236,20 @@ export async function bindOnFacts(
     );
   }
 
+  // A bind at the START is a birth: the session enters the playbook's first
+  // stage, as one born on it does. A late bind joins work mid-flight and
+  // names no stage.
+  const birthStage =
+    input.phase === "start"
+      ? firstStageKey(pool.find((p) => p.id === decision.playbookId)?.stages)
+      : null;
   const { followPlaybook } = await import("./follow-playbook.js");
   const followed = await followPlaybook({
     sessionId: input.sessionId,
     userId: input.userId,
     agentUserId: input.agentUserId,
     followPlaybookId: decision.playbookId,
+    ...(birthStage ? { followStageKey: birthStage } : {}),
     ...(decision.params ? { params: decision.params } : {}),
   });
   if (followed.status !== "ok") {

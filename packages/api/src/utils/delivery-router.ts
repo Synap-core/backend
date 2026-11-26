@@ -51,7 +51,7 @@ import type {
   WorkspaceSettings,
   SignalDeliveryRule,
   SignalSurface,
-  SurfaceTarget,
+  ChannelTarget,
   DeliveryPreferences,
 } from "@synap/database/schema";
 import {
@@ -110,7 +110,7 @@ export interface RouteSignalInput {
 }
 
 /** A surface kind a result can report against (includes `external`). */
-export type SurfaceKind = SurfaceTarget["kind"];
+export type SurfaceKind = ChannelTarget["kind"];
 
 export interface SurfaceResult {
   surface: SurfaceKind;
@@ -296,7 +296,7 @@ async function deliverToNotification(
  */
 async function deliverToExternal(
   input: RouteSignalInput & { proactiveType: ProactiveMessageType },
-  target: SurfaceTarget
+  target: ChannelTarget
 ): Promise<SurfaceResult> {
   // Per-call override wins over the workspace-level target (enables per-playbook routing).
   const provider = input.externalOverride?.provider ?? target.provider;
@@ -417,7 +417,7 @@ type ResolvedInput = RouteSignalInput & { proactiveType: ProactiveMessageType };
  */
 const SURFACE_HANDLERS: Record<
   string,
-  (input: ResolvedInput, target: SurfaceTarget) => Promise<SurfaceResult>
+  (input: ResolvedInput, target: ChannelTarget) => Promise<SurfaceResult>
 > = {
   feed: (input) => deliverToFeed(input),
   chat: (input) => deliverToChat(input),
@@ -426,9 +426,9 @@ const SURFACE_HANDLERS: Record<
 };
 
 /** Normalize a configured surface (bare string or structured) to a target. */
-function toSurfaceTarget(
-  surface: SignalSurface | SurfaceTarget
-): SurfaceTarget {
+function toChannelTarget(
+  surface: SignalSurface | ChannelTarget
+): ChannelTarget {
   return typeof surface === "string" ? { kind: surface } : surface;
 }
 
@@ -451,7 +451,7 @@ export async function routeSignal(
     const rule = resolveRule(domain, prefs);
 
     // Normalize bare-string and structured surfaces to a common target shape.
-    const targets = rule.surfaces.map(toSurfaceTarget);
+    const targets = rule.surfaces.map(toChannelTarget);
 
     // suppress is a complete no-op
     if (targets.some((t) => t.kind === "suppress")) {

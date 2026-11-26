@@ -14,6 +14,10 @@
  *              was surfaced to the reviewer at propose time instead)
  *   session  → `createFocusSession` (no agentUserId: the approval is the human
  *              decision), with the parent passed at create when it exists
+ *   goal     → `startTrack` as the plan's owner (the approval is the human
+ *              decision, so no agent rides it), then goal → goal
+ *              `blocked_by` through THE governed dependency door
+ *              (`addUnitBlockers`, approved by this proposal)
  *   edge     → `addSessionBlocker` (`blocked_by`) / `recordSessionSpawn`
  *              (`spawned_from`) — the same producers `POST /links` and the
  *              create doors use, floored on the plan's session OWNER
@@ -22,7 +26,9 @@
  *              recorded on a session through `recordSessionArtifact`
  *   undo     → sessions through the ONE close door (`cancelSession` →
  *              `completeFocusSession`, so the close event, run close and
- *              unblock reactor fire as for any cancel), then
+ *              unblock reactor fire as for any cancel), goals dropped through
+ *              THE goal status door (`setTrackStatus`, verdict `mistake`),
+ *              then
  *              `revertProposalCreations` (the one undo engine) for the rest,
  *              then the governed document delete door
  *
@@ -35,7 +41,8 @@
  */
 
 import { randomUUID } from "crypto";
-import { and, eq, links, type db } from "@synap/database";
+import { and, eq, focusSessions, links, type db } from "@synap/database";
+import type { LinkEndpointType } from "@synap/database/schema";
 import type { Context } from "../context.js";
 import type {
   MaterializeResult,
@@ -73,6 +80,32 @@ async function linkIdFor(
         eq(links.toType, "session"),
         eq(links.toId, edge.toId),
         eq(links.linkType, edge.type)
+      )
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/** The `blocked_by` row id of a cross-kind dependency edge. */
+async function dependencyLinkIdFor(
+  database: typeof db,
+  edge: {
+    fromType: LinkEndpointType;
+    fromId: string;
+    toType: LinkEndpointType;
+    toId: string;
+  }
+): Promise<string | null> {
+  const [row] = await database
+    .select({ id: links.id })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, edge.fromType),
+        eq(links.fromId, edge.fromId),
+        eq(links.toType, edge.toType),
+        eq(links.toId, edge.toId),
+        eq(links.linkType, "blocked_by")
       )
     )
     .limit(1);
@@ -144,6 +177,14 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
           ...(input.parentSessionId
             ? { parentSessionId: input.parentSessionId }
             : {}),
+          // P4 / B5: born planned when it waits; its window and deadline.
+          ...(input.startNow ? { startNow: true } : {}),
+          ...(input.awaitsBlockers ? { awaitsBlockers: true } : {}),
+          ...(input.plannedFor ? { plannedFor: input.plannedFor } : {}),
+          ...(input.dueBy ? { dueBy: input.dueBy } : {}),
+          // The goal AT create, as `start_session` + `trackId`: the door files
+          // the session in it and derives its project.
+          ...(input.trackId ? { trackId: input.trackId } : {}),
           title: input.title,
           goal: input.goal,
           ...(input.expectedOutputs.length > 0
@@ -182,6 +223,128 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
         throw new Error(
           `session "${input.title ?? input.goal}" was routed to a proposal instead of being created`
         );
+      },
+      update: async ({ sessionId, patch }) => {
+        // The step as it is now: what a failed plan puts back.
+        const read = async () => {
+          const [row] = await database
+            .select({
+              title: focusSessions.title,
+              goal: focusSessions.goal,
+              status: focusSessions.status,
+            })
+            .from(focusSessions)
+            .where(
+              and(
+                eq(focusSessions.id, sessionId),
+                eq(focusSessions.userId, sessionOwnerUserId)
+              )
+            )
+            .limit(1);
+          return row
+            ? { title: row.title ?? null, goal: row.goal, status: row.status }
+            : null;
+        };
+        const before = await read();
+        if (!before) {
+          throw new Error(
+            `session ${sessionId} was not found among the plan owner's sessions`
+          );
+        }
+        const { updateFocusSession } =
+          await import("../services/focus-sessions/update-session.js");
+        // THE session update door, as the plan's owner: its move rules judge
+        // a status change, and the move is compare-and-set on what was read.
+        const out = await updateFocusSession({
+          sessionId,
+          userId: sessionOwnerUserId,
+          ...(patch.title !== undefined ? { title: patch.title } : {}),
+          ...(patch.goal !== undefined ? { goal: patch.goal } : {}),
+          ...(patch.status !== undefined
+            ? {
+                status: patch.status,
+                expectedStatus: before.status as Parameters<
+                  typeof updateFocusSession
+                >[0]["expectedStatus"],
+              }
+            : {}),
+        });
+        if (out.status !== "updated") {
+          throw new Error(
+            `session ${sessionId} was not changed (${out.status}${"reason" in out && out.reason ? `: ${out.reason}` : ""})`
+          );
+        }
+        const after = await read();
+        return { before, after: after ?? before };
+      },
+    },
+
+    trackCaller: {
+      create: async (input) => {
+        const { startTrack } =
+          await import("../services/tracks/tracks-service.js");
+        const out = await startTrack({
+          projectId: input.projectId,
+          name: input.name,
+          ...(input.direction ? { direction: input.direction } : {}),
+          ...(input.kpi ? { kpi: input.kpi } : {}),
+          ...(input.criteria ? { criteria: input.criteria } : {}),
+          ...(input.workKind ? { workKind: input.workKind } : {}),
+          ...(input.endState ? { endState: input.endState } : {}),
+          ...(input.parentGoalId ? { parentGoalId: input.parentGoalId } : {}),
+          // The plan's owner starts it, as a person: the approval (or a
+          // person's own capture) is the human decision.
+          actor: {
+            userId: sessionOwnerUserId,
+            agentUserId: null,
+            sessionId: ctx.proposal.sessionId,
+            source: "plan",
+          },
+        });
+        if (out.status === "started")
+          return { id: out.track.id, linked: false };
+        // A LIVE goal of the same name on the project: not this run's row,
+        // reported `linked` and never compensated (as a reused project).
+        if (out.status === "exists") return { id: out.track.id, linked: true };
+        throw new Error(
+          `goal "${input.name}" was routed to a proposal instead of being started`
+        );
+      },
+      addBlockers: async ({ trackId, blockerTrackIds }) => {
+        const { addUnitBlockers } =
+          await import("../services/links/unit-blockers.js");
+        const reports = await addUnitBlockers({
+          from: { type: "track", id: trackId },
+          kind: "track",
+          ids: blockerTrackIds,
+          userId: sessionOwnerUserId,
+          approvedProposalId: ctx.proposal.id,
+          sessionId: ctx.proposal.sessionId,
+          door: "capture plan",
+        });
+        const refused = reports.filter((r) => r.status !== "linked");
+        if (refused.length > 0) {
+          throw new Error(
+            refused
+              .map(
+                (r) =>
+                  `goal ${trackId} could not wait on goal ${r.blockerTrackId} (${r.status === "failed" ? `${r.reason}${r.message ? `: ${r.message}` : ""}` : r.status})`
+              )
+              .join("; ")
+          );
+        }
+        const linkIds: string[] = [];
+        for (const r of reports) {
+          if (r.status !== "linked" || r.inserted === 0) continue;
+          const id = await dependencyLinkIdFor(database, {
+            fromType: "track",
+            fromId: trackId,
+            toType: "track",
+            toId: r.blockerTrackId as string,
+          });
+          if (id) linkIds.push(id);
+        }
+        return { linkIds };
       },
     },
 
@@ -238,6 +401,67 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
             existedBefore !== null &&
             !spawnedAtCreate.has(`${fromSessionId}>${toSessionId}`),
         };
+      },
+      createCrossKind: async ({ fromSessionId, toKind, toId, option }) => {
+        const { addUnitBlockers } =
+          await import("../services/links/unit-blockers.js");
+        const [report] = await addUnitBlockers({
+          from: { type: "session", id: fromSessionId },
+          kind: toKind,
+          // An arm rides the entity ref (`<decision id>:<option>`): the door
+          // stamps `links.metadata.option` and refuses an unlisted option.
+          ids: [option && toKind === "entity" ? `${toId}:${option}` : toId],
+          userId: sessionOwnerUserId,
+          approvedProposalId: ctx.proposal.id,
+          sessionId: fromSessionId,
+          door: "capture plan",
+        });
+        if (!report || report.status !== "linked") {
+          throw new Error(
+            `session ${fromSessionId} could not wait on ${toKind === "entity" ? "decision" : "goal"} ${toId} (${report?.status === "failed" ? `${report.reason}${report.message ? `: ${report.message}` : ""}` : (report?.status ?? "no answer")})`
+          );
+        }
+        return {
+          linkId: await dependencyLinkIdFor(database, {
+            fromType: "session",
+            fromId: fromSessionId,
+            toType: toKind,
+            toId,
+          }),
+          preExisting: report.inserted === 0,
+        };
+      },
+      remove: async ({ fromSessionId, toKind, toId }) => {
+        if (toKind === "session") {
+          const { removeSessionBlocker } =
+            await import("../services/focus-sessions/session-blocked-by.js");
+          const out = await removeSessionBlocker({
+            sessionId: fromSessionId,
+            blockerSessionId: toId,
+            userId: sessionOwnerUserId,
+          });
+          if (out.removed) return { removed: true };
+          if (out.reason === "no_edge") return { removed: false };
+          throw new Error(
+            `blocked_by ${fromSessionId} → ${toId} was not removed (${out.reason}): both sessions must belong to the plan's owner`
+          );
+        }
+        const { removeUnitBlockers } =
+          await import("../services/links/unit-blockers.js");
+        const [report] = await removeUnitBlockers({
+          from: { type: "session", id: fromSessionId },
+          kind: toKind,
+          ids: [toId],
+          userId: sessionOwnerUserId,
+          approvedProposalId: ctx.proposal.id,
+          sessionId: fromSessionId,
+          door: "capture plan",
+        });
+        if (report?.status === "removed") return { removed: true };
+        if (report?.status === "absent") return { removed: false };
+        throw new Error(
+          `session ${fromSessionId} still waits on ${toKind} ${toId} (${report?.status === "failed" ? `${report.reason}${report.message ? `: ${report.message}` : ""}` : (report?.status ?? "no answer")})`
+        );
       },
     },
 
@@ -309,6 +533,92 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
       const plan = creationsPlanFromRecord(record);
       const notCompensated: PlanCompensationReport["notCompensated"] = [];
 
+      // RE-PLAN EDITS first, newest first: each existing step gets back the
+      // fields it had, through the same door, and each dropped edge comes
+      // back through the door that owns it. A step changed by someone since
+      // is still put back (the plan failed seconds ago): reported if refused.
+      const restoredSessionIds: string[] = [];
+      for (const u of [...(applied.sessionUpdates ?? [])].reverse()) {
+        try {
+          const { updateFocusSession } =
+            await import("../services/focus-sessions/update-session.js");
+          const out = await updateFocusSession({
+            sessionId: u.sessionId,
+            userId: sessionOwnerUserId,
+            title: u.before.title,
+            goal: u.before.goal,
+            ...(u.before.status !== u.after.status &&
+            (u.before.status === "active" || u.before.status === "paused")
+              ? { status: u.before.status }
+              : {}),
+          });
+          // A status the update door cannot move back to (it moves to active
+          // or paused only) is named, never silently left.
+          if (
+            u.before.status !== u.after.status &&
+            u.before.status !== "active" &&
+            u.before.status !== "paused"
+          ) {
+            notCompensated.push({
+              kind: "session_update",
+              id: u.sessionId,
+              reason: `its status was ${u.before.status} and cannot be put back through the update door`,
+            });
+          }
+          if (out.status === "updated") restoredSessionIds.push(u.sessionId);
+          else
+            notCompensated.push({
+              kind: "session_update",
+              id: u.sessionId,
+              reason: `the step could not be put back (${out.status})`,
+            });
+        } catch (err) {
+          notCompensated.push({
+            kind: "session_update",
+            id: u.sessionId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const restoredLinks: string[] = [];
+      for (const r of applied.linkRemovals ?? []) {
+        if (!r.removed) continue;
+        const key = `${r.fromSessionId}>${r.toKind}:${r.toId}`;
+        try {
+          if (r.toKind === "session") {
+            const { addSessionBlocker } =
+              await import("../services/focus-sessions/session-blocked-by.js");
+            const out = await addSessionBlocker({
+              sessionId: r.fromSessionId,
+              blockerSessionId: r.toId,
+              userId: sessionOwnerUserId,
+            });
+            if (!out.linked) throw new Error(out.reason);
+          } else {
+            const { addUnitBlockers } =
+              await import("../services/links/unit-blockers.js");
+            const [report] = await addUnitBlockers({
+              from: { type: "session", id: r.fromSessionId },
+              kind: r.toKind,
+              ids: [r.toId],
+              userId: sessionOwnerUserId,
+              approvedProposalId: ctx.proposal.id,
+              sessionId: r.fromSessionId,
+              door: "capture plan undo",
+            });
+            if (report?.status !== "linked")
+              throw new Error(report?.status ?? "no answer");
+          }
+          restoredLinks.push(key);
+        } catch (err) {
+          notCompensated.push({
+            kind: "link_removal",
+            id: key,
+            reason: `the edge could not be put back: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+
       // SESSIONS FIRST, through the ONE close door. A session's terminal status
       // is owned by `completeFocusSession` (the `session-terminal-one-door`
       // tripwire): cancelling there emits the close event the live mirrors
@@ -348,6 +658,33 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
         }
       }
 
+      // GOALS the plan started: dropped through THE goal status door (the
+      // row stays, as a cancelled session does; a dropped goal holds no name,
+      // so a corrected plan can start it again). After the sessions, so none
+      // is still filed in a live goal.
+      const droppedTrackIds: string[] = [];
+      if ((record.trackIds ?? []).length > 0) {
+        const { setTrackStatus } =
+          await import("../services/tracks/tracks-service.js");
+        for (const trackId of record.trackIds ?? []) {
+          try {
+            await setTrackStatus({
+              trackId,
+              status: "archived",
+              verdict: "mistake",
+              actor: { userId: sessionOwnerUserId, agentUserId: null },
+            });
+            droppedTrackIds.push(trackId);
+          } catch (err) {
+            notCompensated.push({
+              kind: "track",
+              id: trackId,
+              reason: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+
       // `data.materialized` carries no `stampedAt`: edit detection is OFF, so
       // nothing is skipped as "edited since" — these rows were created
       // seconds ago by this same apply. Lineage still refuses a row naming a
@@ -367,6 +704,33 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
         // and the project is reported, not archived under a live session.
         ownSessionIds: cancelledSessionIds,
       });
+
+      // A domain's space, kinds and lifecycles have no undo here: kept, and
+      // named, so the reviewer retires them from their pages.
+      for (const w of applied.workspaces ?? []) {
+        if (!w.linked)
+          notCompensated.push({
+            kind: "workspace",
+            id: w.workspaceId,
+            reason: "a space is kept: archive it from its page",
+          });
+      }
+      for (const k of applied.kinds ?? []) {
+        if (!k.linked)
+          notCompensated.push({
+            kind: "profile",
+            id: k.profileId,
+            reason: "a kind is kept: retire it from its page",
+          });
+      }
+      for (const l of applied.lifecycles ?? []) {
+        notCompensated.push({
+          kind: "lifecycle",
+          id: l.propertyDefId,
+          reason:
+            "a declared lifecycle is kept: change it with the lifecycle door",
+        });
+      }
 
       for (const s of creations.skipped) {
         if (s.reason === "already_reverted") continue;
@@ -412,6 +776,9 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
             project: undone.projectIds ?? [],
             link: undone.linkIds ?? [],
             document: deletedDocumentIds,
+            track: droppedTrackIds,
+            session_update: restoredSessionIds,
+            link_removal: restoredLinks,
           }).filter(([, ids]) => ids.length > 0)
         ),
         notCompensated,

@@ -22,7 +22,7 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
-A **one-off long plan** (lived once: steps that wait on each other, choices on the way) is not a noun either: it is a root session, child sessions linked by `blocked_by`, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
+A **pathway**, a one-off long plan (lived once: steps that wait on each other, choices on the way), is not a noun either: it is a goal (`workKind: "pathway"`), a root session, child sessions linked by `blocked_by` and born planned, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
 
 How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
@@ -85,7 +85,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`, `timezone`: default the owner's zone) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into an automation the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 

@@ -56,8 +56,11 @@ export interface NewFocusSessionRow {
   origin: "playbook" | "automation" | "agent" | "human";
   channelId?: string | null;
   agentIds?: string[];
-  /** Born live, or as an appointment a person opens. Default `active`. */
-  status?: "active" | "scheduled";
+  /**
+   * Born live, as an appointment a person opens, or PLANNED (`forming`: a
+   * plan step waiting on its blockers or its date, P4). Default `active`.
+   */
+  status?: "active" | "scheduled" | "forming";
   /**
    * Every slot the session owes from birth, already through the doors'
    * floors (`sanitizeDeclaredOutputs` + server-minted slots). Keyed here.

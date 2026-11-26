@@ -21,6 +21,9 @@ import {
   pickBridgeParams,
   projectPillarsAnswer,
   wrapHtmlForFrame,
+  CELL_BRIDGE_VIEW_OFFSET_MAX,
+  CELL_BRIDGE_VIEW_PAGE_MAX,
+  cellBridgeViewPage,
 } from "./index.js";
 
 /** The policy as directive → sources, parsed from the built string. */
@@ -474,6 +477,54 @@ describe("the read allowlist", () => {
         column: "won",
       })
     ).toEqual({ profileSlug: "deal", firstN: 5, properties: true });
+  });
+
+  it("a view's rows are read one page at a time: limit and offset, never its filters", () => {
+    expect(CELL_BRIDGE_READ_OPS["views.execute"]).toEqual([
+      "id",
+      "limit",
+      "offset",
+    ]);
+    expect(
+      pickBridgeParams("views.execute", {
+        id: "v1",
+        limit: 100,
+        offset: 200,
+        filters: [{ field: "status" }],
+        workspaceId: "w",
+        projectId: "p",
+      })
+    ).toEqual({ id: "v1", limit: 100, offset: 200 });
+  });
+
+  it("every host forwards a page the same way: clamped into range, a missing one left out", () => {
+    expect(cellBridgeViewPage({ limit: 50, offset: 100 })).toEqual({
+      limit: 50,
+      offset: 100,
+    });
+    expect(cellBridgeViewPage({ limit: 5000, offset: 10 ** 9 })).toEqual({
+      limit: CELL_BRIDGE_VIEW_PAGE_MAX,
+      offset: CELL_BRIDGE_VIEW_OFFSET_MAX,
+    });
+    expect(cellBridgeViewPage({ limit: 0, offset: -3.7 })).toEqual({
+      limit: 1,
+      offset: 0,
+    });
+    expect(cellBridgeViewPage({ limit: "100", offset: NaN })).toEqual({});
+  });
+
+  it("a kind is read by identifier, with its fields' fill on request (a table's derived columns)", () => {
+    expect(CELL_BRIDGE_READ_OPS["profiles.get"]).toEqual([
+      "identifier",
+      "fill",
+    ]);
+    expect(
+      pickBridgeParams("profiles.get", {
+        identifier: "deal",
+        fill: true,
+        workspaceId: "w",
+      })
+    ).toEqual({ identifier: "deal", fill: true });
   });
 
   it("a page in no space is refused a space's own page, and only that", () => {

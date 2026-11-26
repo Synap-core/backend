@@ -5,7 +5,7 @@
  * `addEnumOptionRefusal`. Anything else about an existing field is reported
  * `unchanged` and files nothing (ticket fd146324): the create door never
  * rewrites a stored definition, so only a changed LINK setting still goes
- * there. A JOIN gate on the fields reads as `join_required` (a51e36e4).
+ * there.
  *
  * Drives the REAL `defineProfile` with a recording caller; the stored schema
  * is stubbed at the `ProfileResolutionService` boundary.
@@ -175,67 +175,5 @@ describe("defineProfile — a re-declared field grows its allowed values", () =>
       required: true,
     });
     expect(calls.create).toHaveLength(1);
-  });
-});
-
-describe("defineProfile — a workspace JOIN gate on the fields (ticket a51e36e4)", () => {
-  it("reports join_required with the join's id, never 'proposed' with it as the fields' proposal", async () => {
-    vi.spyOn(
-      ProfileResolutionService.prototype,
-      "getEffectiveProperties"
-    ).mockResolvedValue([]);
-    const caller = {
-      profiles: {
-        createProfile: async () => ({
-          existing: true,
-          profile: { id: "p1", scope: "workspace", profileKind: "kind" },
-        }),
-        createPropertyDefs: async () => ({
-          status: "proposed",
-          proposalId: "join-1",
-          proposalType: "join",
-          deferred: true,
-        }),
-      },
-    };
-    const outcome = await defineProfile(
-      caller as never,
-      {
-        userId: USER,
-        workspaceId: WS,
-        slug: "user_observation",
-        displayName: "User observation",
-        fields: [
-          { slug: "mood", valueType: "string" },
-          { slug: "energy", valueType: "number" },
-        ],
-        agentUserId: "33333333-3333-4333-8333-333333333333",
-      },
-      { door: "synap_define_kind", fieldsParam: "properties" }
-    );
-    expect(outcome.ok).toBe(true);
-    const result = (
-      outcome as unknown as {
-        result: {
-          properties: Array<Record<string, unknown>>;
-          fieldsProposal: Record<string, unknown>;
-        };
-      }
-    ).result;
-    for (const f of result.properties) {
-      expect(f).toMatchObject({
-        status: "join_required",
-        joinProposalId: "join-1",
-      });
-      expect(f).not.toHaveProperty("proposalId");
-    }
-    expect(result.fieldsProposal).toMatchObject({
-      status: "join_required",
-      proposalId: "join-1",
-    });
-    expect(String(result.fieldsProposal.message)).toContain("JOIN");
-    expect(String(result.fieldsProposal.message)).not.toContain(
-      "approving it adds them all"
-    );
   });
 });

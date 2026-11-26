@@ -51,6 +51,11 @@ import {
  * The KIND of work a goal is (decision 4). Proposed by the AI, confirmed by a
  * person (`kindConfirmedBy/At` on the track). Stored as `project_tracks.work_kind`
  * (the CHECK constraint spells the same set — migration 0345).
+ *
+ * `pathway` (P6, pathways plan 368179d7): a person's growth, or a one-off
+ * long plan lived once (fund to seed, move the office): the goal is the lens
+ * over a root session, its child steps (`blocked_by`, born planned) and the
+ * decisions on the way. Taught in skill `from-intent` §2d.
  */
 export const TRACK_WORK_KINDS = [
   "project",

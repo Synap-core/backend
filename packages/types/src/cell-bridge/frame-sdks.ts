@@ -3,9 +3,11 @@
  * module runs (`buildCellModuleFrameSrcdoc`, `module-frame.ts`). Moved verbatim:
  *
  *   - `SYNAP_WIDGET_SDK` (synap-app `packages/web/src/cell-runtime/
- *     iframe-protocol.ts`): `window.SynapWidget` — onInit, onUpdate, resize,
- *     navigate, toast, error, and v2 `query` / `mutate` / `openPanel` /
- *     `subscribe`, all over postMessage to `window.parent`.
+ *     iframe-protocol.ts`): `window.synap` — onInit, onUpdate, resize,
+ *     navigate, toast, error, and v2 `query` / `mutate` / `context` /
+ *     `openPanel` / `subscribe`, all over postMessage to `window.parent`.
+ *     `window.SynapWidget` is the same object under its old name, a
+ *     deprecated shim nobody is taught (founder, 23 Nov 2026: Cell).
  *   - `SYNAP_VIEW_SDK` (synap-app `packages/hooks/src/synap-bridge/
  *     view-sdk.inline.ts`): `window.SynapView` + `window.createSynapView`, the
  *     typed helpers (`listEntities`, `createEntity`, …) on the same bridge.
@@ -38,7 +40,10 @@ export const SYNAP_WIDGET_SDK = `
     }
   });
 
-  window.SynapWidget = {
+  // window.synap is the frame's one global (founder, 23 Nov 2026: the word
+  // is Cell); window.SynapWidget is the SAME object under its old name, kept
+  // so a cell written for it keeps working. Teach window.synap only.
+  var api = {
     /** Register the init handler. Call this early — triggers synap:ready signal. */
     onInit: function(fn) {
       _onInit = fn;
@@ -66,6 +71,9 @@ export const SYNAP_WIDGET_SDK = `
     /** Report an error (renders error state in host). */
     error: function(msg) { post({ type: 'synap:error', message: msg }); },
   };
+  window.synap = api;
+  /** @deprecated the old name of window.synap (same object). */
+  window.SynapWidget = api;
 
   // v2: promise-based data API
   var _pending = {};
@@ -73,16 +81,16 @@ export const SYNAP_WIDGET_SDK = `
 
   window.addEventListener('message', function(e) {
     if (!e.data || typeof e.data.type !== 'string') return;
-    if (e.data.type === 'synap:query:result' || e.data.type === 'synap:mutate:result') {
+    if (e.data.type === 'synap:query:result' || e.data.type === 'synap:mutate:result' || e.data.type === 'synap:context:result') {
       var p = _pending[e.data.id];
       if (!p) return;
       delete _pending[e.data.id];
       if (e.data.error) { p.reject(new Error(e.data.error)); }
-      else { p.resolve(e.data.type === 'synap:query:result' ? e.data.data : { status: e.data.status, data: e.data.data, proposalId: e.data.proposalId }); }
+      else { p.resolve(e.data.type === 'synap:mutate:result' ? { status: e.data.status, data: e.data.data, proposalId: e.data.proposalId } : e.data.data); }
     }
   });
 
-  window.SynapWidget.query = function(operation, params) {
+  api.query = function(operation, params) {
     return new Promise(function(resolve, reject) {
       var id = String(++_pendingId);
       _pending[id] = { resolve: resolve, reject: reject };
@@ -90,7 +98,7 @@ export const SYNAP_WIDGET_SDK = `
     });
   };
 
-  window.SynapWidget.mutate = function(operation, payload) {
+  api.mutate = function(operation, payload) {
     return new Promise(function(resolve, reject) {
       var id = String(++_pendingId);
       _pending[id] = { resolve: resolve, reject: reject };
@@ -98,8 +106,18 @@ export const SYNAP_WIDGET_SDK = `
     });
   };
 
+  // v3: what the frame is about (anchor, space, project, goal, filters,
+  // brand, locale, theme), answered by the host ('synap:context').
+  api.context = function() {
+    return new Promise(function(resolve, reject) {
+      var id = String(++_pendingId);
+      _pending[id] = { resolve: resolve, reject: reject };
+      post({ type: 'synap:context', id: id });
+    });
+  };
+
   // v2: fire-and-forget shell action to open an entity/view/document in the side panel
-  window.SynapWidget.openPanel = function(panelType, resourceId) {
+  api.openPanel = function(panelType, resourceId) {
     var id = String(++_pendingId);
     post({ type: 'synap:open-panel', id: id, panelType: panelType, resourceId: resourceId });
   };
@@ -133,7 +151,7 @@ export const SYNAP_WIDGET_SDK = `
     }
   });
 
-  window.SynapWidget.subscribe = function(eventName, handler) {
+  api.subscribe = function(eventName, handler) {
     var entry = { event: eventName, handler: handler };
     _subscriptions.push(entry);
     return function() {
@@ -220,7 +238,7 @@ export const SYNAP_VIEW_SDK: string = `
           }
           break;
         }
-        // entity:changed is dispatched via SynapWidget.subscribe (wired in
+        // entity:changed is dispatched via synap.subscribe (wired in
         // SYNAP_WIDGET_SDK). We also mirror it through the bridge subscribe
         // channel so SynapView.subscribe('entity:changed', fn) works too.
         case 'synap:entity:changed': {

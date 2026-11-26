@@ -164,6 +164,16 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
       })
     ).toThrow(ProcessDeclarationError);
   });
+
+  it("a schedule runs with no subject: once per tick, over nothing", () => {
+    expect(
+      foldProcessIntoSubjectProfile({
+        activators: [{ on: "schedule", cron: "0 8 * * *", mode: "run" }],
+      })
+    ).toEqual({
+      activators: [{ on: "schedule", cron: "0 8 * * *", mode: "run" }],
+    });
+  });
 });
 
 describe("subjectProfile.onEnd is retired: a session end moves nothing", () => {

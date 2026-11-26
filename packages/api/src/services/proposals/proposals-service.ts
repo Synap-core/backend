@@ -35,6 +35,7 @@ import { withCellContentFingerprint } from "../cells/cell-content-fingerprint.js
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import {
+  COMPOSITE_OPERATION_KINDS,
   isCompositeProposalData,
   isNestedEnvelope,
 } from "@synap-core/types/proposals";
@@ -1485,7 +1486,7 @@ async function validateRevisedOperations(
   if (!isCompositeProposalData(candidate as never)) {
     return {
       problems: [
-        "`operations` must be a non-empty array of recognized composite operations (create_entity, create_relation, create_skill, create_automation, create_rule, create_playbook, create_view, create_project, create_session, create_document, create_link, update_skill, update_automation, update_rule, update_playbook, update_view, update_entity)",
+        `\`operations\` must be a non-empty array of recognized composite operations (${COMPOSITE_OPERATION_KINDS.join(", ")})`,
       ],
       operations: revised,
     };

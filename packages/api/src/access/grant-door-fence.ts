@@ -45,6 +45,7 @@ import {
   WORK_RELEASE_SOURCE_STATES,
   type WorkReleasePart,
 } from "@synap-core/types/work-release";
+import { holderOfGrant, parsePlace } from "@synap-core/types/grants";
 import { UNCLASSIFIED_WRITE_ROUTES } from "./grant-door-write-baseline.js";
 
 /** How a fenced read door is bounded by a grant. */
@@ -151,6 +152,24 @@ export function processReadableByGrant(
  * declaration.
  */
 const BOARD_SCENE = READS("view", "document", "entity");
+/**
+ * The surface find (`surfacesForObject`): Hub `GET /surfaces` and MCP
+ * `synap_find_surfaces` share it. Most stores go through `scopedDb` (views,
+ * documents, artifacts, cell instances, relations, Sites, the anchor), but the
+ * renderer ladder and a space's settings (start page, a kind's bento) are read
+ * outside the seams, so a fenced key passes only when it reads every subject
+ * unnarrowed.
+ */
+const SURFACES_FIND = READS(
+  "view",
+  "document",
+  "entity",
+  "renderer",
+  "artifact",
+  "cell",
+  "relation",
+  "share"
+);
 
 /**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
@@ -221,6 +240,69 @@ const GET_CHANNEL = READS("channel");
  * pinned to a space, project or object never passes it.
  */
 const FIND = READS("tool", "command", "playbook", "automation");
+
+/**
+ * THE WORKERS READ (`listWorkersDoor`, Hub `GET /workers`): a playbook's
+ * enabled workers, each with its trigger, state, last and next run, run
+ * health and the approvals it waits on. Its playbooks are read through the
+ * `playbook` grant clause (`visiblePlaybooks`, `scopedDb`), so the door is
+ * `NARROWED("playbook", WORKER_VIEW_SUBJECTS)`: admitted on `playbook.read`,
+ * pinned or not. What a worker shows beyond its playbook lives in that
+ * playbook's space and reads no seam: its automation and runs (`automation`)
+ * and its pending approvals (`proposal`). A scoped key gets a worker only
+ * when it reads both there (`grantReadsInSpace`); the others are counted as
+ * withheld, never answered as an empty list. MCP `synap_list_workers` keeps
+ * its stricter `READS` declaration.
+ */
+export const WORKER_VIEW_SUBJECTS: readonly string[] = [
+  "automation",
+  "proposal",
+];
+const LIST_WORKERS = NARROWED("playbook", WORKER_VIEW_SUBJECTS);
+
+/**
+ * Does the grant read every one of `subjects` in space `workspaceId`? For
+ * each subject, one live scope that grants `<subject>.read` and whose place
+ * (the ONE parse, `parsePlace`) is anywhere (unbounded, or an app's pod-wide
+ * read: no space pins it, as the grant clause reads it), or spaces that
+ * include `workspaceId` (as the grant clause reads a table with a workspace
+ * column: `grantReadClause`). A scope pinned to projects or objects never
+ * qualifies (fail closed: a space-wide row such as an automation has no
+ * project or object path), nor any pinned scope for a row in no space
+ * (`null`). A scope whose place does not parse (an empty space list)
+ * reaches nothing.
+ */
+export function grantReadsInSpace(
+  grant: KeyGrant,
+  subjects: readonly string[],
+  workspaceId: string | null
+): boolean {
+  const holder = holderOfGrant(grant);
+  const reaches = (scope: GrantScope): boolean => {
+    if (scope.projectIds || scope.entityIds) return false;
+    let place: ReturnType<typeof parsePlace>;
+    try {
+      place = parsePlace(scope, holder);
+    } catch {
+      return false; // not a place (PlaceError): it reaches no space
+    }
+    if (place.kind === "unbounded" || place.kind === "pod") return true;
+    return (
+      place.kind === "spaces" &&
+      workspaceId !== null &&
+      place.ids.includes(workspaceId)
+    );
+  };
+  return subjects.every((subject) =>
+    grant.scopes.some(
+      (scope) =>
+        reaches(scope) &&
+        scope.permissions.some((p) =>
+          patternMatches(p, { subject, action: "read" })
+        )
+    )
+  );
+}
 
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
@@ -445,7 +527,7 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // services/agent-access-ask.ts): an ask of the agent whose key calls,
   // filed for the person the key acts for (else 404) — no row a grant bounds.
   route("/agents/access-requests/:id"),
-  /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
+  /^\/views\/?$/, // hub views.listViews: viewReadableWhere + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's
   // `skills/` folder (`getSkillPackages`): no pod row at all. The CLI's
@@ -593,17 +675,24 @@ export const STATUS_OF_SUBJECTS: readonly string[] = [
 
 /**
  * The `include` parts `GET /status-of` answers a key that does not read
- * {@link STATUS_OF_SUBJECTS} unbounded. Both read only the named subject's own
- * floored record: `moves` (its step's declared options) and `history` (the
- * timeline kept to status events, its stage ledger and its wait episodes,
- * the timeline's session sources already withheld). Every other part (`work`,
- * `signals`, `links`, `rollup`, `reactions`) reads rows beyond the subject
- * (the continuation packet's proposals, links and rooms) that no grant clause
- * bounds, and is withheld.
+ * {@link STATUS_OF_SUBJECTS} unbounded. `moves` (its step's declared options)
+ * and `history` (the timeline kept to status events and its stage ledger)
+ * read only the named subject's own floored record. `work` is answered as a
+ * PROJECTION (`status-of-narrowed-work.ts`, D7, 21 Nov 2026): the sessions
+ * listed are read through the session floor, which ANDs the key's grant, and
+ * each field is an allow-listed copy of what that session row (or its stage
+ * ledger) already says; the gate proposals it names are kept only when the
+ * access layer's proposal floor (which ANDs the grant) reads them, a runner's
+ * name only when the key reads the person's agents
+ * ({@link sessionHolderReadable}); proposals, the next move, the hold's
+ * reference and the last completion are withheld. Every other part (`signals`,
+ * `links`, `rollup`, `reactions`) reads rows beyond the subject that no grant
+ * clause bounds, and is withheld.
  */
 export const STATUS_OF_NARROWED_INCLUDES: readonly string[] = [
   "moves",
   "history",
+  "work",
 ];
 
 /**
@@ -614,8 +703,9 @@ export const STATUS_OF_NARROWED_INCLUDES: readonly string[] = [
  * it cannot read is `unknown`, as one that does not exist), the answer
  * without what reads past the subject: the parts in
  * {@link STATUS_OF_NARROWED_INCLUDES} only, and no `waitingOn`, `blocker`,
- * `nextMove`, `hold`, `roles` or `account` (each reads proposals, slots,
- * holds or roles by subject id with no grant clause).
+ * `nextMove`, `hold`, `roles` or `account` on the subject itself (each reads
+ * proposals, slots, holds or roles by subject id with no grant clause); its
+ * `work` is the floored projection named on that constant.
  */
 export type StatusOfReach = { whole: true } | { whole: false };
 
@@ -919,6 +1009,25 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // its list to a pin: a key pinned to a space, project or object stays
   // refused (finding de33a075: a computer's key, unpinned, was refused).
   [/^\/workspaces\/?$/, READS("entity", "project", "proposal")],
+  // A frame's context (`resolveSurfaceContext`, frame contract v3): the
+  // anchor (an entity, a document, a project, a goal, a session, a playbook,
+  // a view, a space or a kind), the space and project it sits in, and the
+  // project's brand (rows of the Brand space). Most of it reads through
+  // `scopedDb` (grant ANDed), but a space and a kind have no grant subject
+  // and the brand reads the Brand space's rows: a key pinned to a space,
+  // project or object stays refused, as for `/workspaces`.
+  [
+    /^\/surfaces\/context\/?$/,
+    READS(
+      "entity",
+      "document",
+      "project",
+      "track",
+      "session",
+      "playbook",
+      "view"
+    ),
+  ],
   // What is installed, every kind (`installed.ts`): the spaces' template
   // state and steps (proposals), capabilities (subject `tool`, as MCP
   // `synap_list_capabilities`), views, skills, automations and cells
@@ -1188,6 +1297,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/status-of\/?$/, NARROWED("entity", STATUS_OF_SUBJECTS)],
   [/^\/profiles\/?$/, LIST_PROFILES],
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
+  // A playbook's (or a goal's, a project's) workers (`listWorkersDoor`): the
+  // playbooks through the `playbook` grant clause, and a worker only where
+  // the key reads its automation and approvals too (LIST_WORKERS). A pod
+  // app's "Runs on its own" (Content Studio, plan e51783ca J2-be).
+  [/^\/workers\/?$/, LIST_WORKERS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
   [/^\/channels\/personal\/?$/, GET_CHANNEL],
   // A board's content (`readBoardScene`, services/whiteboards/): the view row
@@ -1197,6 +1311,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // as drawn), so `entity` is declared too. A pinned key is refused. Same as
   // MCP `synap_read_board` (BOARD_SCENE).
   [route("/whiteboards/:id/scene"), BOARD_SCENE],
+  // The surface find, the twin of MCP `synap_find_surfaces` (SURFACES_FIND).
+  [/^\/surfaces\/?$/, SURFACES_FIND],
 ];
 
 /**
@@ -1338,6 +1454,10 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_project: SEAMED,
   synap_list_projects: SEAMED,
   synap_list_views: SEAMED,
+  // The surface find (`surfacesForObject`, shared with `GET /surfaces`): an
+  // aggregate over several stores, some read outside the seams (workspace
+  // settings, the renderer ladder), so it declares what it reads.
+  synap_find_surfaces: SURFACES_FIND,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
   // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
@@ -1391,6 +1511,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
   synap_list_workers: READS("track", "playbook", "automation", "proposal"),
+  synap_list_cells: READS("widget", "view"),
+  // The old name of synap_list_cells (`tool-aliases.ts`): the same read.
   synap_list_widgets: READS("widget", "view"),
   synap_template_health: READS("tool", "playbook", "automation", "view"),
   synap_governance: READS("proposal", "agent", "tool"),
@@ -1503,9 +1625,8 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_add_track_stage: WRITE,
     synap_update_project: WRITE,
     synap_project_use_workspace: WRITE,
-    // Files the gate's own workspace JOIN proposal (never through the gate:
-    // it is the gate's rung-4 join, asked for on purpose), after checking the
-    // key's grant reaches the space; returns the receipt, never rows.
+    // Reads the person's membership of the space and whether the key's grant
+    // reaches it; files nothing, returns the answer, never rows.
     synap_request_workspace_access: WRITE,
     synap_file_into_project: WRITE,
     synap_archive_workspace: WRITE,

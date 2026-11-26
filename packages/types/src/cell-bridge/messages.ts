@@ -37,8 +37,11 @@ export type CellFrameHostMessage =
   | { type: "synap:mounted" }
   /** A height in px, in (0, 10000]. */
   | { type: "synap:resize"; height: number }
-  /** At most 500 characters. */
-  | { type: "synap:error"; message: string }
+  /**
+   * At most 500 characters. `reason` types the few errors a host answers
+   * differently (`CELL_FRAME_ERROR_REASONS`); an unknown one is dropped.
+   */
+  | { type: "synap:error"; message: string; reason?: CellFrameErrorReason }
   | { type: "synap:navigate"; target: CellFrameNavigationTarget }
   | { type: "synap:toast"; message: string; level: "info" | "error" }
   | {
@@ -50,6 +53,15 @@ export type CellFrameHostMessage =
   | { type: "synap:surface:open"; surface: CellFrameSurfaceRequest }
   | { type: "synap:context-update"; meta: Record<string, unknown> }
   | CellBridgeFrameMessage;
+
+/**
+ * Why a frame stopped, when the host should do more than show a failure:
+ *   not-drawn  the renderer does not draw this object (a view type its cell
+ *              has no drawing for): the host shows what it shows with no
+ *              renderer (the object's identity card and its door to the app).
+ */
+export const CELL_FRAME_ERROR_REASONS = ["not-drawn"] as const;
+export type CellFrameErrorReason = (typeof CELL_FRAME_ERROR_REASONS)[number];
 
 /** The longest error a frame may report; a longer one is cut. */
 export const CELL_FRAME_MAX_ERROR_CHARS = 500;
@@ -139,6 +151,11 @@ export function parseCellFrameMessage(
             : "The view reported an error.",
           CELL_FRAME_MAX_ERROR_CHARS
         ),
+        ...((CELL_FRAME_ERROR_REASONS as readonly unknown[]).includes(
+          data.reason
+        )
+          ? { reason: data.reason as CellFrameErrorReason }
+          : {}),
       };
     case "synap:navigate": {
       const target = parseTarget(data.target);
@@ -178,6 +195,7 @@ export function parseCellFrameMessage(
       return { type: "synap:context-update", meta: data.meta };
     case "synap:query":
     case "synap:mutate":
+    case "synap:context":
       return parseCellBridgeMessage(data);
     default:
       return null;

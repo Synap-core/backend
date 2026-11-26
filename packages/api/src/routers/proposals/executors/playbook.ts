@@ -478,11 +478,10 @@ export function registerPlaybookExecutors(): void {
   // path is reachable by construction, not by accident.
   //
   // ⚠️ Archiving is TWO writes, not one: `playbooks.status = 'archived'` AND
-  // `materializePlaybookCronAutomation`, which tears down the backing cron.
+  // the activator pass, which retires what fires it (its schedule included).
   // Setting the status alone would leave a live automation firing a playbook
-  // nothing surfaces (the S1 note at the direct call site says so explicitly).
-  // So this replays through `playbooksRouter.archive` rather than writing the
-  // column — ONE door, both effects, and it cannot drift from the direct path.
+  // nothing surfaces. So this replays through `playbooksRouter.archive` rather
+  // than writing the column — ONE door, both effects.
   //
   // Re-running the gated procedure does NOT re-propose: the caller ctx carries
   // no `agentUserId`, so `checkPermissionOrPropose` takes the human path and
@@ -729,7 +728,7 @@ export function registerPlaybookExecutors(): void {
       // Imported lazily, as `resolveRunnablePlaybook` is above.
       const { playbookRunRefusal } =
         await import("../../../services/playbooks/playbook-lifecycle.js");
-      const notRunnable = playbookRunRefusal(playbook, workspaceId);
+      const notRunnable = await playbookRunRefusal(playbook, workspaceId, db);
       if (notRunnable) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

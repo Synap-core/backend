@@ -579,3 +579,125 @@ describe("readDependencyState — an entity blocker's lifecycle category decides
     expect(state.blocked).toBe(false);
   });
 });
+
+describe("decision arms (P5) — an option on the wait, through the same door", () => {
+  const S = "aaaaaaaa-0000-4000-8000-0000000000a5";
+  const D = "aaaaaaaa-0000-4000-8000-0000000000d5";
+  const arm = {
+    fromType: "session",
+    fromId: S,
+    toType: "entity",
+    toId: D,
+    linkType: "blocked_by" as const,
+  };
+  const options = {
+    decisionOptions: [
+      { label: "Raise", value: "raise" },
+      { label: "Bootstrap" },
+    ],
+  };
+
+  it("an option the decision lists is written on the edge and rides the proposal", async () => {
+    queue.push([{ w: "ws-1", o: U }]); // from-end home
+    queue.push([]); // the cycle walk
+    queue.push([{ type: "decision", properties: options }]); // the decision
+    queue.push([{ id: "link-arm" }]); // insert … returning
+    const r = await governedDependencyLink({
+      edge: arm,
+      metadata: { option: "Bootstrap" },
+      userId: U,
+      door: "test",
+    });
+    expect(r).toEqual({ status: "created", linkId: "link-arm", inserted: 1 });
+    expect(inserts[0]).toMatchObject({ metadata: { option: "Bootstrap" } });
+    expect(gate.mock.calls[0]![0]).toMatchObject({
+      data: { linkType: "blocked_by", metadata: { option: "Bootstrap" } },
+    });
+  });
+
+  it("an option the decision does not list is refused before governance, naming its options", async () => {
+    queue.push([{ w: "ws-1", o: U }]);
+    queue.push([]);
+    queue.push([{ type: "decision", properties: options }]);
+    const r = await governedDependencyLink({
+      edge: arm,
+      metadata: { option: "sell" },
+      userId: U,
+      door: "test",
+    });
+    expect(r).toMatchObject({
+      status: "refused",
+      reason: "invalid_pair",
+      error:
+        '"sell" is not an option of this decision. Its options: "raise", "Bootstrap".',
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("an option on a wait that is not a decision, or on a decision with no options, is refused", async () => {
+    queue.push([{ w: "ws-1", o: U }]);
+    queue.push([]);
+    queue.push([{ type: "task", properties: options }]);
+    expect(
+      await governedDependencyLink({
+        edge: arm,
+        metadata: { option: "raise" },
+        userId: U,
+        door: "test",
+      })
+    ).toMatchObject({ status: "refused", reason: "invalid_pair" });
+
+    queue.push([{ w: "ws-1", o: U }]);
+    queue.push([]);
+    queue.push([{ type: "decision", properties: {} }]);
+    expect(
+      await governedDependencyLink({
+        edge: arm,
+        metadata: { option: "raise" },
+        userId: U,
+        door: "test",
+      })
+    ).toMatchObject({
+      status: "refused",
+      error:
+        "This decision lists no options (decisionOptions): give it its options, then name one.",
+    });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("readDependencyState: the arm NOT chosen holds (not taken); the arm chosen clears", async () => {
+    const feed = (option: string) => {
+      queue.push([
+        {
+          fromType: "session",
+          fromId: S,
+          toType: "entity",
+          toId: D,
+          linkType: "blocked_by",
+          metadata: { option },
+        },
+      ]);
+      queue.push([]); // replaces hop
+      queue.push([{ id: D }]); // visible
+      queue.push([
+        {
+          id: D,
+          title: "Raise or bootstrap",
+          status: "accepted",
+          statusCategory: "done",
+          properties: { ...options, chosenOption: "raise" },
+          deletedAt: null,
+        },
+      ]);
+    };
+    feed("Bootstrap");
+    const notTaken = await readDependencyState({ kind: "session", id: S }, U);
+    expect(notTaken.openBlockers).toEqual([
+      expect.objectContaining({ id: D, dropped: true, notTaken: true }),
+    ]);
+    feed("raise");
+    const taken = await readDependencyState({ kind: "session", id: S }, U);
+    expect(taken.blocked).toBe(false);
+  });
+});

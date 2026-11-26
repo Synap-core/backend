@@ -1,6 +1,9 @@
 /**
  * SURFACES router — the read side of the Surfaces plane (renderers, interfaces,
- * apps). v1 exposes ONE door: `surfaces.usageHealth`.
+ * apps). Two doors: `surfaces.usageHealth` (which renderer keys are bound,
+ * and are they healthy) and `surfaces.forObject` (which surfaces ONE object
+ * carries, the find door MCP `synap_find_surfaces` and Hub REST
+ * `GET /surfaces` share).
  *
  * ALTITUDE: `protectedProcedure` with an OPTIONAL `workspaceId`, exactly like
  * `capabilities.compositions` — the Surfaces app is a pod-altitude plane and
@@ -17,6 +20,8 @@ import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { AccessContext } from "../access/context.js";
 import { buildRendererUsage } from "../services/surfaces/renderer-usage.js";
+import { surfacesForObject } from "../services/surfaces/for-object.js";
+import { ANCHOR_KINDS } from "@synap-core/types/surfaces";
 
 export const surfacesRouter = router({
   /**
@@ -47,5 +52,27 @@ export const surfacesRouter = router({
         includeEntityBindings: input?.includeEntityBindings ?? false,
         access: AccessContext.from(ctx),
       });
+    }),
+
+  /**
+   * Every surface ONE object carries (`{rows, unavailable}`): its kind's
+   * renderers, its body, views pinned to it, its home or start page, session
+   * outputs and Sites — each store under its own visibility floor, a store
+   * that failed named in `unavailable`. `workspaceId` NARROWS.
+   */
+  forObject: protectedProcedure
+    .input(
+      z.object({
+        kind: z.enum(ANCHOR_KINDS),
+        id: z.string().min(1).max(200),
+        workspaceId: z.string().uuid().nullish(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return surfacesForObject(
+        { userId, access: AccessContext.from(ctx) },
+        input
+      );
     }),
 });

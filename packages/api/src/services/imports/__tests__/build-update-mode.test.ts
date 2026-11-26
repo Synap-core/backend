@@ -221,7 +221,9 @@ describe("Build update mode", () => {
         skillCaller: { create: id },
         automationCaller: { create: id },
         ruleCaller: { create: ruleCreate },
-        playbookCaller: { create: id },
+        playbookCaller: {
+          create: async () => ({ id: `row-${++n}`, status: "draft" as const }),
+        },
         viewCaller: { create: id },
       }
     );

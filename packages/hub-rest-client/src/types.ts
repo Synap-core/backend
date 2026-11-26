@@ -726,6 +726,12 @@ export interface CaptureGraphSessionStep {
   /** `blocked_by` edges declared at birth. */
   blockedByRefs?: string[];
   blockedBySessionIds?: string[];
+  /** A step that waits (a blocker, a later `plannedFor`) is born planned unless true. */
+  startNow?: boolean;
+  /** When its window opens: a month, a day or an ISO date-time. */
+  plannedFor?: string;
+  /** Its deadline (same shapes). */
+  dueBy?: string;
   /** The entity this session is about (a session ref or a real id). */
   subjectRef?: string;
   subjectEntityId?: string;
@@ -1457,6 +1463,8 @@ export interface HubWorkGraphEdge {
   lastAt?: string | null;
   /** `serves`: the goal criterion served, when the edge names one. */
   criterionKey?: string;
+  /** `blocked_by` to a decision: the option this step is the arm of. Absent = a plain wait. */
+  option?: string;
 }
 
 /** A decision a node waits on or is about. Absent from an older pod. */
@@ -1511,6 +1519,8 @@ export interface HubWorkGraphNode extends HubFocusSessionListItem {
   viewerRole: "owner" | "member";
   /** false = only the far end of an edge of a window session. */
   inWindow: boolean;
+  /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
+  skipped?: true;
 }
 
 /** GET /api/hub/focus-sessions/graph. */
@@ -2419,6 +2429,56 @@ export interface HubView {
   userId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── Surfaces ────────────────────────────────────────────────────────────────
+
+/**
+ * The surface find contract, a structural mirror of `@synap-core/types/surfaces`
+ * (`SurfaceRow`, `SurfacesForObject`): this package has no dependencies.
+ */
+export type HubSurfaceAnchorKind =
+  | "entity"
+  | "profile"
+  | "workspace"
+  | "project"
+  | "track"
+  | "playbook"
+  | "session";
+
+export interface HubSurfaceRow {
+  id: string;
+  body:
+    | "view"
+    | "document"
+    | "html"
+    | "bento"
+    | "whiteboard"
+    | "cell"
+    | "site"
+    | "app";
+  relation:
+    | "renders"
+    | "attached"
+    | "body"
+    | "pinned"
+    | "home"
+    | "session-output"
+    | "exposed";
+  anchor: { kind: HubSurfaceAnchorKind; id: string };
+  title: string;
+  viewType?: string;
+  cellKey?: string;
+  slot?: string;
+  openUrl: string;
+  readOnly: boolean;
+  source: string;
+}
+
+/** GET /surfaces. A store that could not be read is in `unavailable`. */
+export interface HubSurfacesForObject {
+  rows: HubSurfaceRow[];
+  unavailable: { source: string; error: string }[];
 }
 
 /**

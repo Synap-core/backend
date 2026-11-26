@@ -30,15 +30,17 @@
  */
 
 import {
+  closedNotDoneRecorded,
   isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
-  type SessionStatus,
 } from "@synap-core/types/focus-sessions";
 import { getEnumTone } from "@synap-core/types/property-render";
 import {
   isDeliverableDelivered,
+  statusMark,
   type DeliverableFacts,
+  type StatusGlyph,
 } from "@synap-core/types/units";
 import {
   resolveActionLabel,
@@ -46,27 +48,16 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import {
+  machinePill,
   statusKindForTone,
-  statusPillFor,
+  statusMarkPill,
 } from "../../(admin)/components/status-tone";
 import type { StatusKind } from "../../(admin)/components/status-pill";
 
 // ─── The mark ────────────────────────────────────────────────────────────────
 
-/** Which glyph the mark wears; the page maps each to its icon. */
-export type SessionGlyph =
-  "draft" | "moving" | "paused" | "scheduled" | "done" | "stopped" | "failed";
-
-const GLYPH: Record<SessionStatus, SessionGlyph> = {
-  active: "moving",
-  forming: "moving",
-  paused: "paused",
-  stale: "paused",
-  scheduled: "scheduled",
-  closed: "done",
-  cancelled: "stopped",
-  failed: "failed",
-};
+/** Which glyph the mark wears (`statusMark`'s, or a draft's); the page maps each to its icon. */
+export type SessionGlyph = StatusGlyph | "draft";
 
 export interface SessionStatusMark {
   kind: StatusKind;
@@ -79,6 +70,8 @@ export interface SessionStatusMark {
 /** The fields the mark and the moves read off a `focusSessions.get` row. */
 export interface SessionStatusFacts {
   status: string;
+  /** Holds the close door's not-done record when it closed with work open. */
+  verificationReport?: unknown;
   triage?: { pending?: boolean | null } | null;
   /** `owner` | `member` — a member reads, never writes (decision C). */
   viewerRole?: string | null;
@@ -104,13 +97,14 @@ export function sessionStatusMark(
       draft: true,
     };
   }
-  const pill = statusPillFor(s.status);
-  if (!pill) return null;
+  const mark = statusMark("session", s.status, {
+    closedNotDone: closedNotDoneRecorded(s.verificationReport),
+  });
+  if (!mark) return null;
   return {
-    ...pill,
-    glyph: Object.hasOwn(GLYPH, s.status)
-      ? GLYPH[s.status as SessionStatus]
-      : null,
+    ...statusMarkPill(mark),
+    // An undeclared word keeps the pill's dot.
+    glyph: mark.category ? mark.glyph : null,
     draft: false,
   };
 }
@@ -468,6 +462,8 @@ interface LinkedSessionLike {
   title: string;
   status: string;
   statusLabel?: string;
+  /** How it ended (`sessionClosedAs`), when the packet says. */
+  closedAs?: string | null;
 }
 
 /** A linked session as a row: its name, its status mark, its id for the door. */
@@ -492,7 +488,9 @@ export function lineageRow(s: LinkedSessionLike): LineageRow {
     key: s.id,
     id: s.id,
     title: s.title.trim() || "Untitled session",
-    mark: statusPillFor(s.status),
+    mark: machinePill("session", s.status, {
+      closedNotDone: s.closedAs === "not_done",
+    }),
   };
 }
 

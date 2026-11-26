@@ -6,8 +6,11 @@
  *     the binding's tool, ATTRIBUTED to the agent user on behalf of the owner;
  *   - a `webhookUrl` run param is ignored (no fetch, not forwarded);
  *   - a start that fails ⇒ the run is `failed` with the reason in the room;
- *   - which agent: param → roster → the single one → else the person owes ONE
- *     "Choose an agent" slot (and is told) and the run fails.
+ *   - which agent: the one the run names (the run choice's, or the person's
+ *     answer on the session), else the person owes ONE "Choose an agent" slot
+ *     (and is told) and the run fails. The roster, the assignment and the
+ *     single bound agent are the run choice's last rungs
+ *     (`run-choice-last-rungs.pglite.test.ts`), never read here.
  *
  * Real: the tables, the executor, the binding door, the slot write. Captured:
  * `executeCapability` (its own suite — the call and its attribution are what is
@@ -449,18 +452,21 @@ describe("external-agent executor — dispatch through the stored binding", () =
     expect(h.calls).toHaveLength(0);
   });
 
-  it("a teammate's agent on the roster is skipped for the owner's own", async () => {
-    const sid = await session([FOREIGN, AGENT_B]);
-    const res = await exec.run(ctx(sid));
-    expect(res.status).toBe("running");
-    expect(h.calls[0]).toMatchObject({ agentUserId: AGENT_B });
-  });
-
-  it("the roster's dispatchable agent is used when no param names one", async () => {
+  it("the run's named agent is used, with its own binding", async () => {
     const sid = await session([IS_AGENT, AGENT_B]);
-    const res = await exec.run(ctx(sid));
+    const res = await exec.run(ctx(sid, { agentUserId: AGENT_B }));
     expect(res.status).toBe("running");
     expect(h.calls[0]).toMatchObject({ agentUserId: AGENT_B, toolId: TOOL_B });
+  });
+
+  it("a roster agent the run does not name is not picked here: the person chooses", async () => {
+    const sid = await session([AGENT_B]);
+    const res = await exec.run(ctx(sid));
+    expect(res.status).toBe("failed");
+    expect(h.calls).toHaveLength(0);
+    expect(
+      (await slots(sid)).filter((s) => s.label === CHOOSE_AGENT_SLOT_LABEL)
+    ).toHaveLength(1);
   });
 
   it("the answered slot param (session metadata.params.agentUserId) counts as the run param", async () => {

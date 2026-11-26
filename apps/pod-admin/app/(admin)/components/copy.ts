@@ -12,7 +12,11 @@
  * English words equal `lib/console-nav.ts`'s labels, pinned by
  * `shell-copy.test.ts`.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
 
 export const en = {
   "nav.home": "Home",
@@ -23,6 +27,13 @@ export const en = {
   "nav.label": "Console",
   "nav.allTools": "All tools",
   "nav.allTools.hint": "Every operator page: jobs, data, keys, server",
+  "nav.memberPreview": "Preview member menu",
+  "nav.memberPreview.hint":
+    "See the menu and Home a member sees. Your access does not change.",
+  "memberPreview.title": "Preview of the member’s menu",
+  "memberPreview.body":
+    "Everything shown is your own data, never a member’s. Your access is unchanged.",
+  "memberPreview.stop": "Stop preview",
   "nav.collapse": "Collapse",
   "nav.collapse.aria": "Collapse navigation",
   "nav.expand.aria": "Expand navigation",
@@ -68,6 +79,11 @@ export const en = {
     "Searching the {n, plural, one {# template} other {# templates}} loaded so far. Load more to search further.",
   "listSearch.partial.rules":
     "Searching the {n, plural, one {# automation} other {# automations}} loaded (the 2,000 most recent at most).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Previous page",
+  "list.next": "Next page",
+  "list.loadMore": "Load more",
+  "filter.clear": "Clear {label}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -80,6 +96,13 @@ export const fr: Catalog<typeof en> = {
   "nav.allTools": "Outils avancés",
   "nav.allTools.hint":
     "Toutes les pages de l’opérateur : travaux, données, clés, serveur",
+  "nav.memberPreview": "Aperçu du menu membre",
+  "nav.memberPreview.hint":
+    "Voyez le menu et l’accueil d’un membre. Vos accès ne changent pas.",
+  "memberPreview.title": "Aperçu du menu d’un membre",
+  "memberPreview.body":
+    "Tout ce qui s’affiche est à vous, jamais à un membre. Vos accès ne changent pas.",
+  "memberPreview.stop": "Quitter l’aperçu",
   "nav.collapse": "Réduire",
   "nav.collapse.aria": "Réduire la navigation",
   "nav.expand.aria": "Déployer la navigation",
@@ -127,4 +150,14 @@ export const fr: Catalog<typeof en> = {
     "Recherche parmi {n, plural, one {# modèle chargé} other {# modèles chargés}} pour l’instant. Chargez-en plus pour chercher plus loin.",
   "listSearch.partial.rules":
     "Recherche parmi {n, plural, one {# automatisation chargée} other {# automatisations chargées}} (2 000 au plus, les plus récentes).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Page précédente",
+  "list.next": "Page suivante",
+  "list.loadMore": "Charger plus",
+  "filter.clear": "Effacer {label}",
 };
+
+/** The words' translator, in the ambient catalog locale. */
+export function shellT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}

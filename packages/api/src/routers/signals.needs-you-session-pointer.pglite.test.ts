@@ -133,6 +133,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   chatTurns,
@@ -256,6 +257,7 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
       users,
       workspaces,
       workspaceMembers,
+      apiKeys,
       podMembers,
       projectMembers,
       // The needs-you rule's facts (agent evidence, proposal waits).

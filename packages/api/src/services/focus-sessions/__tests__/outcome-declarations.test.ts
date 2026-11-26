@@ -234,3 +234,80 @@ describe("declaresVerify — an outcome with `verify` says what done means (tick
     ).toBe(false);
   });
 });
+
+describe("a fact outcome names the output it checks: outputKey (finding 09ba3d2d)", () => {
+  // The dogfood call (session 944df158): a person-graded fact about the
+  // `checklist` output, declared through the recommended `outcomes` shape.
+  const declared = [
+    { key: "checklist", label: "Checklist", kind: "document" },
+    {
+      key: "checklist-ok",
+      label: "The checklist reads right",
+      kind: "fact",
+      verify: { kind: "human" },
+      outputKey: "checklist",
+    },
+  ];
+
+  it("is stored on the criterion, as the criteria alias stores it", () => {
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse(declared)
+    );
+    expect(criteria).toEqual([
+      {
+        key: "checklist-ok",
+        statement: "The checklist reads right",
+        outputKey: "checklist",
+        check: { kind: "human" },
+      },
+    ]);
+    // The start merge (MCP and Hub REST start) carries it.
+    expect(
+      mergeOutcomesForStart({
+        outcomes: outcomeDeclarationsSchema.parse(declared),
+      }).criteria?.[0]?.outputKey
+    ).toBe("checklist");
+    // A proposed start stores the merged criteria; its replay parses them
+    // with the doors' strict schema, which keeps the pairing.
+    expect(sessionCriteriaSchema.parse(criteria)[0]?.outputKey).toBe(
+      "checklist"
+    );
+  });
+
+  it("an update upserts it onto the stored criterion", () => {
+    const stored: SessionCriterion[] = [
+      {
+        key: "checklist-ok",
+        statement: "The checklist reads right",
+        check: { kind: "human" },
+      },
+    ];
+    const next = upsertOutcomes(
+      { expectedOutputs: [], criteria: stored },
+      outcomeDeclarationsSchema.parse([declared[1]])
+    );
+    expect(next.criteria).toHaveLength(1);
+    expect(next.criteria[0]?.outputKey).toBe("checklist");
+  });
+
+  it("is refused when it is not an output key, or sits on a deliverable", () => {
+    const bad = outcomeDeclarationsSchema.safeParse([
+      { ...declared[1], outputKey: "Checklist!" },
+    ]);
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues[0]?.path).toEqual([0, "outputKey"]);
+
+    const onDeliverable = outcomeDeclarationsSchema.safeParse([
+      { label: "Checklist", kind: "document", outputKey: "other" },
+    ]);
+    expect(onDeliverable.success).toBe(false);
+    expect(onDeliverable.error?.issues[0]?.message).toMatch(/kind: "fact"/);
+  });
+
+  it("CONTROL: a fact with no outputKey stores none", () => {
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse([{ label: "Tests pass", kind: "fact" }])
+    );
+    expect(criteria[0]).not.toHaveProperty("outputKey");
+  });
+});

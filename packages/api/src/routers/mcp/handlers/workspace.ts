@@ -42,6 +42,8 @@ import {
   archiveWorkspaceDoor,
   fileIntoProjectDoor,
   grantProfileAccessDoor,
+  movePlaybooksDoor,
+  shareWithSpaceDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
   setStartPageDoor,
@@ -790,25 +792,17 @@ export const workspaceHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  // Ask on purpose for the workspace JOIN the gate files on a first write
-  // (ticket 4790c862): the gate's own join, so later writes ride on it.
+  // An agent works where its person is a member: answers that membership.
   synap_request_workspace_access: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, userId, apiKeyScopes, agentUserId, sessionId } = ctx;
+    const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // The confined value: a bound service key cannot name another space.
     const workspaceId = ctx.confinedWorkspaceId ?? "";
     const badId = fullUuidError(toolName, "workspaceId", workspaceId);
     if (badId) return badId;
-    return ok(
-      await requestWorkspaceJoin({
-        userId,
-        agentUserId,
-        workspaceId,
-        ...(sessionId ? { sessionId } : {}),
-      })
-    );
+    return ok(await requestWorkspaceJoin({ userId, agentUserId, workspaceId }));
   },
   synap_project_use_workspace: async (
     ctx: McpToolContext
@@ -969,7 +963,7 @@ export const workspaceHandlers: McpHandlerMap = {
     if (chosen !== 1) {
       return ok({
         error:
-          "Name exactly one start page: cellKey (a cell from synap_list_widgets), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
+          "Name exactly one start page: cellKey (a cell from synap_list_cells), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
       });
     }
     const title = str(args.title);
@@ -1022,14 +1016,30 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_move_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const entityIds = Array.isArray(args.entityIds)
-      ? args.entityIds.filter((v): v is string => typeof v === "string")
-      : [];
+    const ids = (v: unknown) =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string")
+        : [];
+    const entityIds = ids(args.entityIds);
+    const playbookIds = ids(args.playbookIds);
     const workspaceId = args.workspaceId;
-    if (entityIds.length === 0 || typeof workspaceId !== "string") {
+    if (
+      (entityIds.length === 0) === (playbookIds.length === 0) ||
+      typeof workspaceId !== "string"
+    ) {
       return ok({
-        error: "entityIds (non-empty) and workspaceId are required",
+        error:
+          "workspaceId and one of entityIds or playbookIds (non-empty) are required",
       });
+    }
+    if (playbookIds.length > 0) {
+      return ok(
+        await movePlaybooksDoor(opsActor(ctx), {
+          playbookIds,
+          workspaceId,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await moveEntitiesDoor(opsActor(ctx), {
@@ -1067,11 +1077,25 @@ export const workspaceHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
     const targetWorkspaceId = args.targetWorkspaceId;
-    if (
-      typeof profileId !== "string" ||
-      typeof targetWorkspaceId !== "string"
-    ) {
-      return ok({ error: "profileId and targetWorkspaceId are required" });
+    const named = (["profileId", "playbookId", "skillId"] as const).filter(
+      (k) => typeof args[k] === "string"
+    );
+    if (named.length !== 1 || typeof targetWorkspaceId !== "string") {
+      return ok({
+        error:
+          "targetWorkspaceId and exactly one of profileId, playbookId or skillId are required",
+      });
+    }
+    if (typeof profileId !== "string") {
+      return ok(
+        await shareWithSpaceDoor(opsActor(ctx), {
+          objectType: named[0] === "playbookId" ? "playbook" : "skill",
+          objectId: args[named[0]!] as string,
+          targetWorkspaceId,
+          revoke: args.revoke === true,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await grantProfileAccessDoor(opsActor(ctx), {

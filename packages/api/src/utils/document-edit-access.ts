@@ -69,6 +69,7 @@ import {
   livePodMemberWhere,
   views,
   getWorkspaceMembership,
+  membershipHolderIds,
 } from "@synap/database";
 import { AccessContext, scopedDb } from "../access/index.js";
 // The access index registers the object-room floors
@@ -409,7 +410,7 @@ async function isProjectMemberOf(
       and(
         eq(entities.documentId, documentId),
         isNull(entities.deletedAt),
-        eq(projectMembers.userId, userId),
+        inArray(projectMembers.userId, membershipHolderIds(userId)),
         roles ? inArray(projectMembers.role, roles) : undefined
       )
     )

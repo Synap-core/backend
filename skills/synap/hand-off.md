@@ -14,7 +14,7 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 - **`paused: true` → say it is paused** and that a person must resume it (Settings › Agents). Do not hand it off.
 - **`live: false` → say when it was last seen** (`lastSeenAt`) and that it picks the work up the next time it checks in. Hand off only if the person still wants it.
 - **Is a runner serving it? Read `servedAt` and `nobodyRuns`.** `nobodyRuns: false` (a recent `servedAt`): a runner serves it now. `nobodyRuns: true`: nothing on that computer runs it now; say so ("the agent on your Mac has not run since <servedAt>") and hand off only if the person wants the run to wait. `nobodyRuns: null`: the pod cannot tell (no runner ever stamped, or an old CLI); say "I cannot tell whether anything runs it; last seen <lastSeenAt>". `live` says only that its key was used.
-- **No runner online → recommend waiting, never a second path.** The session shows who holds it (nobody, or the agent stopped) until a runner picks it up. Do not do the same job another way; if the computer must be awake, that is the person's step.
+- **No runner online → recommend waiting, never a second path.** The run waits `queued` for its named holder; if nobody claims it in time it turns `blocked` and the person is asked who runs it instead. Do not do the same job another way; if the computer must be awake, that is the person's step.
 - **`canTakeYourWork: false`** — `whyNot` says why: `not_owned` (another person's agent: it would never see this work), `wrong_reach` (the pod's own agent: it answers in rooms, it never picks work up), `paused`.
 
 **2. Hand it — through a session.** The session's roster is how work reaches an agent.

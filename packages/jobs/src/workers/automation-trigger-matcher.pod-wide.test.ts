@@ -110,6 +110,9 @@ vi.mock("@synap/database", () => ({
       { op: "podWideAudience", actorIds },
     ],
   }),
+  // The membership holder the accessible floor reads (an agent's membership
+  // is its person's): a marker carrying the id it was handed.
+  membershipHolderIds: (userId: unknown) => ({ op: "holderIds", userId }),
   // The ONE pod-visible workspace door the accessible floor reads (d6db364bb).
   podVisibleWorkspaceWhere: (userId: unknown) => ({
     op: "podVisibleWorkspace",

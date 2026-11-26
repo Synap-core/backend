@@ -37,8 +37,8 @@ import type { InstallLayerReport } from "@synap/database";
  * `status:"error"` site in `package-apply-post-workspace.ts`:
  *   • `key`  — capabilities (:471, :489), loops (:730), cells (:771, :800)
  *   • `name` — automations (:595), playbooks (:706)
- *   • neither — `agentMembership` (:437) and `projectLink` (:908) are SCALARS,
- *     one per bag, so the bag key alone already identifies them.
+ *   • neither — `projectLink` (:908) is a SCALAR,
+ *     one per bag, so the bag key alone already identifies it.
  * Both are read below; a new bag must add its identifier field here too.
  */
 export interface AppliedItem {

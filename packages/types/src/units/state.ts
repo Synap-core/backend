@@ -111,6 +111,8 @@ export const LIFECYCLE_CATEGORY_TONE: Readonly<
  * provenance). Keys are lower case; {@link resolveStatusTone} normalises.
  * A word that is not here paints `textMuted`, never a guessed colour.
  */
+// Answers "where in the lifecycle is it"; `resolveUnitState` answers "whose
+// turn is it". Two questions, two tables: never merge or twin them.
 export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   // Succeeded / healthy
   done: LIFECYCLE_CATEGORY_TONE.done,
@@ -128,7 +130,6 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   won: "success",
   pass: "success",
   // Failed / broken
-  blocked: "error",
   error: "error",
   failed: "error",
   approval_failed: "error",
@@ -158,6 +159,10 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   // On hold, or awaiting a decision
   paused: LIFECYCLE_CATEGORY_TONE.paused,
   stale: LIFECYCLE_CATEGORY_TONE.paused,
+  // A run nobody picked up, a session waiting on another: a hold, never an error.
+  blocked: LIFECYCLE_CATEGORY_TONE.paused,
+  // Ended with required work open (`statusMark` outcome): a heads-up.
+  not_done: LIFECYCLE_CATEGORY_TONE.paused,
   pending: "info",
   proposed: "info",
   review: "info",
@@ -289,8 +294,8 @@ export interface UnitStateInput {
    * unreadable count outranks it.
    */
   idle?: boolean;
-  /** A recurring unit's cadence, straight off `playbooks.schedule`. */
-  schedule?: { cron: string; enabled: boolean } | null;
+  /** A recurring unit's cadence: the playbook read's projected `schedule`. */
+  schedule?: { cron: string; on: boolean } | null;
   /** False = it exists but nothing has happened in it yet. */
   everStarted?: boolean;
   /** Measurable progress. Absent = not measurable, which is not the same as 0. */
@@ -320,6 +325,8 @@ function pctOf(
  *    never a gate or a parked run (decision E2, 2026-10-27): its asks wait
  *    "until you can".
  */
+// Answers "whose turn is it"; `STATUS_TONE` answers "where in the lifecycle".
+// Two questions, two tables: never merge or twin them.
 export function resolveUnitState(input: UnitStateInput): UnitStateView {
   const pct = pctOf(input.progress);
   const determinate = (fallback: number): UnitRail => ({
@@ -437,7 +444,7 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
   }
   if (input.running) return working();
   if (input.schedule) {
-    return input.schedule.enabled
+    return input.schedule.on
       ? {
           state: "scheduled",
           tone: "info",
@@ -493,7 +500,8 @@ export const RUN_STATUS_WAITING_ON_YOU = "waiting_on_you";
 /**
  * A RUN's lifecycle status (`automation_runs` / `playbook_runs` / the unified
  * runs read) as a unit-state input — so a run wears the same mark a session
- * does. `waiting_on_you` is your turn (`needs_you`), never a failure;
+ * does. `waiting_on_you` and `blocked` (nobody claimed it) are your turn
+ * (`needs_you`), never a failure; `queued` has not started;
  * `blocked_by_policy` is `blocked` (a rule stopped it); `paused` and `stale`
  * are `paused`; an unknown or absent status is `unmeasured`, never a guess at
  * calm.
@@ -504,12 +512,20 @@ export function unitStateInputOfRunStatus(
   switch (status) {
     case "failed":
       return { failed: true };
+    // `blocked`: nobody claimed it, the person chooses who runs it
+    // (`run-blocked-ask`).
     case RUN_STATUS_WAITING_ON_YOU:
+    case "blocked":
       return { waitingOnYou: true };
     case "running":
     case "pending":
-    case "queued":
       return { running: true };
+    // Waits for the person to approve its start.
+    case "proposed":
+      return { pendingDecisions: 1 };
+    // Handed to a runner that has not claimed it: not at work yet.
+    case "queued":
+      return { everStarted: false };
     // A governance rule refused the run's effect. Not a failure (nothing
     // broke), not done (the effect never landed), not your turn (there is no
     // answer owed): it is BLOCKED ON A RULE — "waiting on X is not waiting on
@@ -597,7 +613,7 @@ export function resolveRunUnitState(
  * label that is confidently wrong is worse than one that admits it is a cron.
  */
 export function describeCadence(
-  schedule: { cron: string; enabled: boolean } | null | undefined
+  schedule: { cron: string } | null | undefined
 ): string | null {
   if (!schedule) return null;
   const parts = schedule.cron.trim().split(/\s+/);

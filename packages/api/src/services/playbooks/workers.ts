@@ -59,7 +59,7 @@ import {
   projectTracks,
   focusSessions,
   countWorkerPendingApprovalsBulk,
-  userVisibleWhere,
+  personTimeZone,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
@@ -69,6 +69,8 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   DEFAULT_WORKER_MODE,
   effectiveWorkerSize,
+  playbookScheduleOf,
+  type PlaybookScheduleView,
   type WorkerScopeKind,
   type WorkerSize,
 } from "@synap-core/types/workers";
@@ -154,7 +156,7 @@ export interface EnabledWorker {
   /** The kind or role it works on. */
   profileSlug: string | null;
   size: WorkerSize;
-  mode: "run" | "propose";
+  mode: PlaybookActivator["mode"];
   scope: WorkerScopeKind;
   projectId: string | null;
   trackId: string | null;
@@ -180,6 +182,7 @@ interface PlaybookRow {
   status: string;
   workspaceId: string | null;
   subjectProfile: unknown;
+  createdBy: string;
 }
 
 async function visiblePlaybooks(input: {
@@ -196,11 +199,14 @@ async function visiblePlaybooks(input: {
       status: playbooks.status,
       workspaceId: playbooks.workspaceId,
       subjectProfile: playbooks.subjectProfile,
+      createdBy: playbooks.createdBy,
     })
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
+          playbooks
+        ),
         ...(input.playbookId ? [eq(playbooks.id, input.playbookId)] : []),
         ...(input.playbookIds
           ? [inArray(playbooks.id, [...input.playbookIds])]
@@ -371,7 +377,7 @@ async function recentRunMarksOf(
 export async function listEnabledWorkers(
   input: ListEnabledWorkersInput
 ): Promise<EnabledWorker[]> {
-  return (await readEnabledWorkers(input)).map((r) => r.worker);
+  return (await readEnabledWorkers(input)).found.map((r) => r.worker);
 }
 
 /**
@@ -384,7 +390,28 @@ export async function listEnabledWorkers(
 export async function listWorkerViews(
   input: ListEnabledWorkersInput
 ): Promise<GoalWorkerView[]> {
-  const found = await readEnabledWorkers(input);
+  return workerViewsOf((await readEnabledWorkers(input)).found);
+}
+
+/**
+ * {@link listWorkerViews} for a caller whose reach stops at some spaces (a
+ * scoped key, `listWorkersDoor`): a worker is listed only when
+ * `spaceReadable` admits the space its playbook lives in (where its rule,
+ * automation, runs and approvals are). `withheld` counts the workers the
+ * query matched that were left out, so a page says "not shown" instead of
+ * reading an empty list as "no worker".
+ */
+export async function listWorkerViewsInReach(
+  input: ListEnabledWorkersInput,
+  spaceReadable: (workspaceId: string | null) => boolean
+): Promise<{ items: GoalWorkerView[]; withheld: number }> {
+  const { found, withheld } = await readEnabledWorkers(input, spaceReadable);
+  return { items: await workerViewsOf(found), withheld };
+}
+
+async function workerViewsOf(
+  found: Awaited<ReturnType<typeof readEnabledWorkers>>["found"]
+): Promise<GoalWorkerView[]> {
   const ruleOfAutomation = new Map<string, string>();
   for (const f of found) {
     for (const id of f.automations.all)
@@ -471,12 +498,21 @@ export async function goalRunsOf(input: {
   );
 }
 
-async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
-  Array<{
+/**
+ * `spaceReadable` (a scoped caller's reach, `listWorkerViewsInReach`) leaves
+ * out the workers of a playbook whose space it does not admit, counted in
+ * `withheld`; without it nothing is withheld.
+ */
+async function readEnabledWorkers(
+  input: ListEnabledWorkersInput,
+  spaceReadable?: (workspaceId: string | null) => boolean
+): Promise<{
+  found: Array<{
     worker: EnabledWorker;
     automations: { current: RuleAutomation | null; all: string[] };
-  }>
-> {
+  }>;
+  withheld: number;
+}> {
   let projectId = input.projectId ?? null;
   if (input.trackId) {
     const { getTrack } = await import("../tracks/tracks-service.js");
@@ -493,7 +529,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     projectId = track.projectId;
   }
   const trackSet = input.trackIds ? new Set(input.trackIds) : null;
-  if (trackSet && trackSet.size === 0) return [];
+  if (trackSet && trackSet.size === 0) return { found: [], withheld: 0 };
   const pbs = await visiblePlaybooks({
     userId: input.userId,
     playbookId: input.playbookId,
@@ -516,6 +552,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     en: NonNullable<ReturnType<typeof enablementOf>>;
     paused: boolean;
   }> = [];
+  let withheld = 0;
   for (const pb of pbs) {
     const process = readPlaybookProcess(pb.subjectProfile);
     const rows = [
@@ -543,6 +580,10 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
         continue;
       const paused = row.meta.draft === true;
       if (input.liveOnly && paused) continue;
+      if (spaceReadable && !spaceReadable(pb.workspaceId)) {
+        withheld++;
+        continue;
+      }
       found.push({ pb, process, row, en, paused });
     }
   }
@@ -588,7 +629,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     const stopped = !paused && sessionEnded(en.sessionId);
     const automationId = paused || stopped ? null : activeOf(row.id);
     if (input.liveOnly && !automationId) continue;
-    const activator =
+    const declared =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
       (en.scope !== "space"
         ? chosenClockActivator({
@@ -597,6 +638,16 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
             mode: modeOfCompiledRule(row.meta),
           })
         : null);
+    // A schedule naming no zone runs in the one its rule compiled with.
+    const compiledZone = (
+      row.meta.sentence as { trigger?: { cronTimezone?: unknown } } | undefined
+    )?.trigger?.cronTimezone;
+    const activator =
+      declared?.on === "schedule" &&
+      !declared.timezone &&
+      typeof compiledZone === "string"
+        ? { ...declared, timezone: compiledZone }
+        : declared;
     out.push({
       automations: automationsOf.get(row.id) ?? { current: null, all: [] },
       worker: {
@@ -621,7 +672,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
       },
     });
   }
-  return out;
+  return { found: out, withheld };
 }
 
 /**
@@ -892,6 +943,7 @@ export async function enableWorker(input: {
     profileSlug: process.profileSlug,
     statusProperty: process.statusProperty,
     subject,
+    defaultTimezone: await personTimeZone(db, pb.createdBy),
     scope: { projectId, trackId, parentSessionId: sessionId },
   });
   if ("error" in decl) return { status: "denied", reason: decl.error };
@@ -1094,7 +1146,8 @@ function pickWorkerToEnable(
     if (read.status === "invalid") {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "That is not a time (HH:MM, UTC) or a day (0-6).",
+        message:
+          "That is not a time (HH:MM, in the playbook owner's time zone) or a day (0-6).",
       });
     }
     if (read.status !== "enable") return refuse("on that schedule");
@@ -1178,6 +1231,22 @@ export async function setWorkerPaused(input: {
     scope: row.meta.scope,
     draft: input.paused,
     auditSource: "playbook-worker",
+    // Pausing or resuming a playbook's worker is a change to how THAT
+    // playbook runs, so `playbook.update` in its space also permits it at
+    // rung 0 (the key's grant): a pod app the person gave `playbook.update`
+    // (Content Studio's "Runs on its own") pauses and resumes as the person,
+    // while `rule.update` stays out of every key's grant. Rung 0 only: an
+    // agent's press still proposes (`rule/update` is a gate door). A
+    // pod-wide playbook names no space, so no named permission there.
+    ...(pb?.workspaceId
+      ? {
+          grantNamedPermission: {
+            subject: "playbook",
+            action: "update",
+            workspaceId: pb.workspaceId,
+          },
+        }
+      : {}),
   });
   if (r.status === "updated") {
     await applyPlaybookActivators({
@@ -1335,4 +1404,29 @@ export async function playbookGoalsAndHealth(input: {
     });
   }
   return out;
+}
+
+/**
+ * Each playbook's schedule (`playbookScheduleOf`), for a page of rows in one
+ * read: the `schedule` a playbook read returns, in place of the retired column.
+ */
+export async function withPlaybookSchedules<
+  R extends { id: string; schedule: unknown },
+>(
+  userId: string,
+  rows: readonly R[]
+): Promise<
+  Array<Omit<R, "schedule"> & { schedule: PlaybookScheduleView | null }>
+> {
+  const workers =
+    rows.length > 0
+      ? await listEnabledWorkers({ userId, playbookIds: rows.map((r) => r.id) })
+      : [];
+  return rows.map((r) => ({
+    ...r,
+    schedule: playbookScheduleOf({
+      workers: workers.filter((w) => w.playbookId === r.id),
+      retired: r.schedule,
+    }),
+  }));
 }

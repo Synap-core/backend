@@ -11,10 +11,10 @@
  * ── Judgement calls, stated once ───────────────────────────────────────────
  *
  * **`scheduled` / `paused` need a `schedule`, and a session has no cron.** The
- * derivation reaches those two states only through `{ cron, enabled }`, a shape
+ * derivation reaches those two states only through `{ cron, on }`, a shape
  * written for recurring playbooks. A session carries an appointment and a
  * lifecycle status, never a cron. So a `scheduled`/`paused` session is handed
- * `{ cron: <stored cron, or ''>, enabled: status !== 'paused' }`. `enabled` is a
+ * `{ cron: <stored cron, or ''>, on: status !== 'paused' }`. `on` is a
  * fact; the empty cron is a placeholder, never a fabricated cadence
  * (`describeCadence('')` returns `''`, which is falsy).
  *
@@ -43,6 +43,7 @@
  */
 
 import {
+  PLANNED_SESSION_STATUS,
   isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
@@ -112,7 +113,7 @@ export interface SessionUnitFacts {
 /** One session row → the shared derivation's input. */
 export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   const cadence = CADENCE_SESSION_STATUSES.has(facts.status)
-    ? { cron: facts.cron ?? "", enabled: facts.status !== "paused" }
+    ? { cron: facts.cron ?? "", on: facts.status !== "paused" }
     : null;
 
   // A closed session that still owes you a slot or a decision is on YOU, not
@@ -376,6 +377,8 @@ export type BlockerEdges =
         title: string;
         status: string;
         closedAs?: SessionClosedAs | null;
+        /** Ended as a decision's arm not taken (P5): holds nobody. */
+        skipped?: boolean;
       }>;
     }
   | { status: "unavailable" }
@@ -399,7 +402,8 @@ export function openBlockersOf(
       "session",
       item.status,
       null,
-      item.closedAs
+      item.closedAs,
+      item.skipped
     );
     return outcome === "delivered"
       ? []
@@ -525,7 +529,10 @@ export interface StepReadinessFacts {
   status: string;
   /** How it ended (`sessionClosedAs`); absent on a closed step reads done. */
   closedAs?: SessionClosedAs | null;
-  /** It ended as a decision's arm not taken (P5; nothing sets it yet). */
+  /**
+   * It ended as a decision's arm not taken (P5): the session's
+   * `verification_report.notTaken`, read as `skipped` by the dependency read.
+   */
   skipped?: boolean;
   /**
    * The blockers that still hold it, after `replaces` — the output of THE
@@ -561,6 +568,53 @@ export function deriveStepReadiness(facts: StepReadinessFacts): StepReadiness {
   return stepWindowReached(facts.plannedFor, facts.now ?? Date.now())
     ? "ready"
     : "planned";
+}
+
+/**
+ * How a step is BORN (founder decision P4, 21 Nov 2026): PLANNED (`forming`)
+ * when it waits on something at birth — a blocker declared with it, or a
+ * `plannedFor` still to come — unless its author says `startNow`; else
+ * `active`, as every session was. A step born planned owes nothing until the
+ * pod wakes it ({@link isStepReadyToWake}).
+ */
+export function stepBirthStatus(facts: {
+  startNow?: boolean | null;
+  /** It declares at least one blocker (written after the row exists). */
+  hasBlockers: boolean;
+  plannedFor?: string | null;
+  now?: number;
+}): typeof PLANNED_SESSION_STATUS | "active" {
+  if (facts.startNow === true) return "active";
+  const waits =
+    facts.hasBlockers ||
+    !stepWindowReached(facts.plannedFor, facts.now ?? Date.now());
+  return waits ? PLANNED_SESSION_STATUS : "active";
+}
+
+/**
+ * The step's time as a door stores it on `metadata` (no column, no
+ * migration): only the keys given, and only valid dates; `null` clears.
+ * `invalid` names a key whose value is not a step date ({@link isStepDate}).
+ */
+export function stepTimePatch(input: {
+  plannedFor?: string | null;
+  dueBy?: string | null;
+}):
+  | { ok: true; patch: Partial<Record<"plannedFor" | "dueBy", string | null>> }
+  | { ok: false; invalid: "plannedFor" | "dueBy" } {
+  const patch: Partial<Record<"plannedFor" | "dueBy", string | null>> = {};
+  for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+    const v = input[key];
+    if (v === undefined) continue;
+    if (v !== null && !isStepDate(v)) return { ok: false, invalid: key };
+    patch[key] = v;
+  }
+  return { ok: true, patch };
+}
+
+/** The refusal a door says for a malformed step date (one sentence). */
+export function stepDateRefusal(key: "plannedFor" | "dueBy"): string {
+  return `${key} must be a month (2027-03), a day (2027-03-14) or an ISO date-time with its offset.`;
 }
 
 /**

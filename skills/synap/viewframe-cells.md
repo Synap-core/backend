@@ -4,11 +4,12 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 ### When to Use ViewFrame
 
-| Situation                                                              | Action                        |
-| ---------------------------------------------------------------------- | ----------------------------- |
-| An existing cell or view type covers the need                          | Use the existing cell or view |
-| User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
-| User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
+| Situation                                                                                                                  | Action                        |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| An existing cell or view type covers the need: check `synap_list_cells` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
+| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                          | Generate a ViewFrame cell     |
+
+A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
 
 ### Default vs. generated — never the reflex, always the explicit ask
 
@@ -39,7 +40,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 
 ### Define a cell: the one recipe
 
-1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
+1. **Check what exists**: `synap_list_cells` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
 2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
 3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
 4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
@@ -106,20 +107,6 @@ synap://open/cell/{typeKey}
 
 The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
 
-**Full AI artifact workflow over REST** (an MCP agent does step 1 with `synap_create_cell`):
-
-```
-// 1. Define the cell (an ES module or an HTML page)
-POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
-// → { "success": true, "typeKey": "generated:q2-revenue-report" }
-
-// 2. Open it in the user's browser
-synap://open/cell/generated:q2-revenue-report
-```
-
-The cell appears immediately in the side panel with "Q2 Revenue Report" as the tab title. It persists across sessions and is available from any workspace.
-
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
 ### CLI commands (when running as Claude Code or another terminal agent)
@@ -142,7 +129,7 @@ synap cell define \
 synap doc create --title "Q2 Report" --file ./report.md
 synap doc update <docId> --file ./updated-report.md
 
-# Arrange widgets on an existing bento view
+# Arrange cells on an existing bento view
 echo '[{"key":"generated:my-chart","x":0,"y":0,"w":8,"h":6}]' | synap view arrange <viewId>
 ```
 
@@ -328,7 +315,7 @@ The host hands every frame these modules from its own bundle, with no network:
 
 A charting, map or 3D library is not provided. Draw with plain SVG or canvas in the cell's own source, or bundle the library at build time with `synap cell build --bundle-deps`. Never name `recharts`, `d3` or any other package in `deps`.
 
-### Minimal Widget Template
+### Minimal Cell Template
 
 ```html
 <!DOCTYPE html>

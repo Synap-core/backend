@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AUTOMATION_SKIP_REASONS } from "../automations/rule-run-policy.js";
 import { humanizeToken, resolveStatusLabel } from "../vocabulary/index.js";
 import {
+  playbookScheduleOf,
   WORKER_SKIP_REASONS,
   WORKER_TARGET_REASONS,
   WORKER_TARGET_RESULTS,
@@ -113,10 +114,11 @@ describe("worker target results", () => {
 });
 
 describe("effectiveWorkerSize", () => {
-  it("count and schedule are always per_moment; default per_thing", () => {
+  it("count is always per_moment; a schedule defaults to it; default per_thing", () => {
     expect(effectiveWorkerSize({ on: "schedule", size: "per_thing" })).toBe(
-      "per_moment"
+      "per_thing"
     );
+    expect(effectiveWorkerSize({ on: "schedule" })).toBe("per_moment");
     expect(effectiveWorkerSize({ on: "count", size: "per_thing" })).toBe(
       "per_moment"
     );
@@ -124,5 +126,78 @@ describe("effectiveWorkerSize", () => {
     expect(effectiveWorkerSize({ on: "schedule", size: "per_moment" })).toBe(
       "per_moment"
     );
+  });
+});
+
+describe("playbookScheduleOf", () => {
+  const clock = (cron: string, timezone?: string) => ({
+    on: "schedule" as const,
+    cron,
+    ...(timezone ? { timezone } : {}),
+  });
+
+  it("reads the enabled schedule worker, a running one first", () => {
+    expect(
+      playbookScheduleOf({
+        workers: [
+          {
+            activator: clock("0 8 * * *"),
+            state: "paused",
+            automationId: null,
+          },
+          {
+            activator: clock("0 9 * * 1", "Europe/Paris"),
+            state: "running",
+            automationId: "a-1",
+          },
+        ],
+      })
+    ).toEqual({ cron: "0 9 * * 1", timezone: "Europe/Paris", on: true });
+  });
+
+  it("a paused worker is a schedule that does not fire", () => {
+    expect(
+      playbookScheduleOf({
+        workers: [
+          {
+            activator: clock("0 8 * * *"),
+            state: "paused",
+            automationId: null,
+          },
+        ],
+        retired: { cron: "0 7 * * *", enabled: true },
+      })
+    ).toEqual({ cron: "0 8 * * *", timezone: null, on: false });
+  });
+
+  it("a running worker whose automation does not fire is off", () => {
+    expect(
+      playbookScheduleOf({
+        workers: [
+          {
+            activator: clock("0 8 * * *"),
+            state: "running",
+            automationId: null,
+          },
+        ],
+      })
+    ).toEqual({ cron: "0 8 * * *", timezone: null, on: false });
+  });
+
+  it("an event worker is no schedule; a retired one still firing is", () => {
+    const workers = [
+      {
+        activator: { on: "enters_status" as const },
+        state: "running" as const,
+        automationId: "a-2",
+      },
+    ];
+    expect(playbookScheduleOf({ workers })).toBeNull();
+    expect(
+      playbookScheduleOf({
+        workers,
+        retired: { cron: "*/5 * * * *", enabled: false },
+      })
+    ).toEqual({ cron: "*/5 * * * *", timezone: "UTC", on: false });
   });
 });

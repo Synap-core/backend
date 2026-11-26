@@ -24,6 +24,13 @@ export const PROPOSAL_LANDED_KEY = "landed" as const;
 export const PROPOSAL_LANDED_ROLES = ["created", "updated", "linked"] as const;
 export type ProposalLandedRole = (typeof PROPOSAL_LANDED_ROLES)[number];
 
+/** What approving did to a landed object, as a vocabulary verb token. */
+export const LANDED_ROLE_VERB: Record<ProposalLandedRole, string> = {
+  created: "create",
+  updated: "update",
+  linked: "link",
+};
+
 /** The object kinds a landed ref may name: those a host opens and the pod resolves. */
 export const PROPOSAL_LANDED_KINDS = [
   "entity",
@@ -168,6 +175,7 @@ const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
   // A rule is a `skills` row (`kind: "rule"`), opened where skills are.
   ["ruleIds", "skill"],
   ["viewIds", "view"],
+  ["workspaceIds", "workspace"],
 ];
 
 /**

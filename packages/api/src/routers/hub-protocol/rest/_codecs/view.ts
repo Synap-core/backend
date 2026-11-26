@@ -38,6 +38,9 @@ export const ListViewsQuerySchema = z
       .string()
       .optional()
       .describe("Filter to views over a specific profile."),
+    projectId: uuidQueryParam
+      .optional()
+      .describe("Filter to views pinned to or exposed in this project."),
   })
   .openapi("ListViewsQuery");
 

@@ -31,6 +31,7 @@ import {
   db,
   entities,
   focusSessions,
+  workspaces,
   eq,
   and,
   isNull,
@@ -101,8 +102,7 @@ export async function createHubProtocolCaller(
     // AMBIENT governance lens (the MCP URL's `?workspaceId=`). Hub write procs
     // read `ctx.workspaceId` as the caller's ambient workspace; when it is null
     // they fall back to the user's most-recently-updated membership — a random
-    // governance lens the acting agent may not even belong to (which is what
-    // turned entity proposals into `workspace.join` proposals). NEVER an
+    // governance lens the acting agent may not work in. NEVER an
     // explicit placement pin: pod-scope kinds must still land pod-wide.
     workspaceId: confinedWorkspaceId ?? null,
     scopes: hubScopes,
@@ -350,23 +350,38 @@ export async function entityHomeWorkspaceId(
  * given no explicit `workspaceId`: the entity's OWN workspace is the right
  * lens (not an arbitrary member workspace), so a "no results" answer
  * reflects the entity's real home instead of whichever workspace happened to
- * sort first. Falls back to the first member workspace — and says so via
- * `autoPicked`/`memberCount` — only when the entity's workspace can't be
- * resolved (missing entityId, deleted, pod-global/no workspaceId, or not
- * visible to this caller). Used by `synap_match_playbooks`, whose read needs
- * SOME workspace. `synap_get_relations` does not use the fallback: a read with
- * no lens has a user floor there (`listRelationsPodWide`), so it never picks.
+ * sort first. Falls back to the first ACTIVE member workspace — and says so
+ * via `autoPicked`/`memberCount` — only when the entity's workspace can't be
+ * resolved (missing entityId, deleted, pod-global/no workspaceId, not visible
+ * to this caller, or archived). Used by `synap_match_playbooks`, whose read
+ * needs SOME workspace. `synap_get_relations` does not use the fallback: a
+ * read with no lens has a user floor there (`listRelationsPodWide`), so it
+ * never picks.
+ *
+ * Never an ARCHIVED space, home or fallback: every workspace-scoped read
+ * refuses one ("This workspace has been archived.", `assertWorkspaceUsable`),
+ * so picking it turned a call that named no space into an error (finding
+ * 63198108).
  */
 export async function resolveEntityWorkspaceId(
   userId: string,
   entityId: string | undefined
 ): Promise<EntityWorkspaceResolution> {
   const home = await entityHomeWorkspaceId(entityId);
-  if (home) {
+  if (home && !(await isWorkspaceArchived(home))) {
     return { workspaceId: home, autoPicked: false, memberCount: 0 };
   }
-  const ids = await getUserMemberWorkspaceIds(userId);
+  const ids = await getUserMemberWorkspaceIds(userId, { activeOnly: true });
   return { workspaceId: ids[0], autoPicked: true, memberCount: ids.length };
+}
+
+/** The space is archived (a missing row is not: the read decides access). */
+async function isWorkspaceArchived(workspaceId: string): Promise<boolean> {
+  const row = await db.query.workspaces.findFirst({
+    columns: { archivedAt: true },
+    where: eq(workspaces.id, workspaceId),
+  });
+  return row?.archivedAt != null;
 }
 
 export function requireScope(

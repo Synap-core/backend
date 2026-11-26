@@ -205,6 +205,8 @@ import type {
   HubProposal,
   HubFileUrl,
   HubView,
+  HubSurfaceAnchorKind,
+  HubSurfacesForObject,
   HubWidgetDefinition,
   HubSearchResult,
   HubCommand,
@@ -1643,6 +1645,26 @@ export class HubRestClient {
   }
 
   /**
+   * Every surface ONE object carries (GET /surfaces): its kind's renderers,
+   * its body document, views pinned to it, its home or start page, session
+   * outputs and Sites. A store the pod could not read is listed in
+   * `unavailable`, never folded into an empty `rows`. A missing or invisible
+   * anchor throws a 404 `HubApiError`.
+   */
+  async listSurfaces(input: {
+    kind: HubSurfaceAnchorKind;
+    id: string;
+    workspaceId?: string;
+  }): Promise<HubSurfacesForObject> {
+    const params = new URLSearchParams({ kind: input.kind, id: input.id });
+    if (input.workspaceId) params.set("workspaceId", input.workspaceId);
+    return this.request<HubSurfacesForObject>(
+      "GET",
+      `/api/hub/surfaces?${params}`
+    );
+  }
+
+  /**
    * Create a new view. Goes through governance.
    */
   async createView(input: CreateViewInput): Promise<HubGovernanceResult> {
@@ -1708,11 +1730,12 @@ export class HubRestClient {
   }
 
   /**
-   * Compose widget catalog: curated builtins plus generated/frame DB rows.
-   * GET /widget-definitions already merges the built-in catalog (listRenderables) —
-   * do not copy the catalog into callers.
+   * The cell catalog: the cell types you may place (curated built-ins plus the
+   * generated / frame rows installed on the pod). GET /widget-definitions
+   * already merges the built-in catalog (listRenderables) — do not copy the
+   * catalog into callers.
    */
-  async listWidgetDefinitions(options?: {
+  async listCellTypes(options?: {
     workspaceId?: string;
   }): Promise<HubWidgetDefinition[]> {
     const params = new URLSearchParams();
@@ -1723,6 +1746,16 @@ export class HubRestClient {
       HubWidgetDefinition[] | HubListResponse<HubWidgetDefinition>
     >("GET", `/api/hub/widget-definitions${qs}`);
     return unwrapList(result, "widgets");
+  }
+
+  /**
+   * @deprecated The old name of {@link listCellTypes} (founder, 23 Nov 2026:
+   * the word is Cell). Same request, same answer.
+   */
+  async listWidgetDefinitions(options?: {
+    workspaceId?: string;
+  }): Promise<HubWidgetDefinition[]> {
+    return this.listCellTypes(options);
   }
 
   // ─── Documents ────────────────────────────────────────────────────────────

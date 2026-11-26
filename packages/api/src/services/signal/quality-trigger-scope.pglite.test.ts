@@ -47,7 +47,8 @@ beforeAll(async () => {
     -- rows exactly as before; an id with no users row would read none.
     create table pod_members (user_id text, removed_at timestamptz);
     create table project_members (project_id uuid, user_id text, role text);
-    create table users (id text primary key);
+    create table users (id text primary key, user_type text, created_by_user_id text);
+    create table api_keys (user_id text, linked_user_id text, is_active boolean, revoked_at timestamptz);
     insert into users values ('user-1');
     create table automations (id uuid primary key, name text, version int);
     create table automation_runs (

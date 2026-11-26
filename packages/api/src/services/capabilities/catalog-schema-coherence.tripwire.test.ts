@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { SYNAP_CORE_DEFINITION } from "./ensure-synap-core.js";
 import { DESIGN_VERB_PARAMETERS } from "@synap-core/types/design-board";
+import { STORYBOOK_VERB_PARAMETERS } from "@synap-core/types/storybook";
 
 /**
  * TRIPWIRE — the builtin verb catalog is coherent with the handler contract.
@@ -109,6 +110,14 @@ const CATALOGS: CatalogSource[] = [
     "market capability `design` (@synap-core/types/design-board DESIGN_VERB_PARAMETERS)",
     {
       skills: Object.entries(DESIGN_VERB_PARAMETERS).map(
+        ([name, parameters]) => ({ name, parameters })
+      ),
+    }
+  ),
+  readCatalog(
+    "market capability `storybook` (@synap-core/types/storybook STORYBOOK_VERB_PARAMETERS)",
+    {
+      skills: Object.entries(STORYBOOK_VERB_PARAMETERS).map(
         ([name, parameters]) => ({ name, parameters })
       ),
     }

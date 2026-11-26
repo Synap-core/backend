@@ -6,11 +6,17 @@
  * `services/links/unit-blockers.ts` for an entity or a goal).
  */
 import { isUuid } from "@synap-core/types/property-render";
+import { parseArmRef } from "@synap-core/types/connections";
 
 /** At most this many ids per blocker list — the same bound start's `blockedBySessionIds` has. */
 export const BLOCKER_IDS_MAX = 20;
 
-/** One blocker-id list arg: absent = [], else at most 20 UUIDs or an error. */
+/**
+ * One blocker-id list arg: absent = [], else at most 20 UUIDs or an error.
+ * An ENTITY list also takes `<decision id>:<option>`: the step is that arm of
+ * the decision (P5, `parseArmRef`); the door checks the option is one the
+ * decision lists.
+ */
 export function readBlockerIds(
   args: Record<string, unknown>,
   key: string,
@@ -18,13 +24,16 @@ export function readBlockerIds(
 ): string[] | { error: string } {
   const raw = args[key];
   if (raw === undefined || raw === null) return [];
+  const valid = (id: unknown) =>
+    typeof id === "string" &&
+    isUuid(noun === "entity" ? parseArmRef(id)?.id : id);
   if (
     !Array.isArray(raw) ||
     raw.length > BLOCKER_IDS_MAX ||
-    !raw.every((id) => typeof id === "string" && isUuid(id))
+    !raw.every(valid)
   ) {
     return {
-      error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} ${noun} UUIDs — NOTHING WAS CHANGED.`,
+      error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} ${noun} UUIDs${noun === "entity" ? " (a decision's arm: <id>:<option>)" : ""} — NOTHING WAS CHANGED.`,
     };
   }
   return raw as string[];
@@ -65,7 +74,9 @@ export function parseBlockerEdits(
     if ("error" in add) return add;
     const remove = readBlockerIds(args, `removeBlockedBy${suffix}`, noun);
     if ("error" in remove) return remove;
-    const both = add.filter((id) => remove.includes(id));
+    const idOf = (ref: string) => parseArmRef(ref)?.id ?? ref;
+    const removed = new Set(remove.map(idOf));
+    const both = add.filter((ref) => removed.has(idOf(ref)));
     if (both.length > 0) {
       return {
         error: `${both.join(", ")} is in both addBlockedBy${suffix} and removeBlockedBy${suffix} — NOTHING WAS CHANGED. Send one of the two.`,

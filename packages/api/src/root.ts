@@ -41,6 +41,7 @@ import { messageLinksRouter } from "./routers/message-links.js";
 import { commentsRouter } from "./routers/comments.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { surfacesRouter } from "./routers/surfaces.js";
+import { surfaceContextRouter } from "./routers/surface-context.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { relationDefsRouter } from "./routers/relation-defs.js";
@@ -168,8 +169,9 @@ export const coreRouter = router({
   comments: commentsRouter,
   // Dynamic Schema System
   profiles: profilesRouter,
-  // Surfaces plane — renderer usage-health (how each record type is displayed)
-  surfaces: surfacesRouter,
+  // Surfaces plane — renderer usage-health (how each record type is displayed),
+  // and `surfaces.context`: what a frame is about and its brand (contract v3).
+  surfaces: mergeRouters(surfacesRouter, surfaceContextRouter),
   propertyDefs: propertyDefsRouter,
   profileProperties: profilePropertiesRouter,
   relationDefs: relationDefsRouter,

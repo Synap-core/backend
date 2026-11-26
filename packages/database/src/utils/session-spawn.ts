@@ -53,6 +53,15 @@ export interface RecordSessionSpawnInput {
    * Shallow-merged as `metadata.suspended` (one slot, last push wins).
    */
   suspendedIntent?: string | null;
+  /**
+   * The key of the PARENT's output this child is spawned to deliver, stored
+   * as `metadata.forOutput` on the edge: the lane rollup
+   * (api `services/focus-sessions/lane-rollup.ts`) meets that one slot when
+   * the child closes done, and nothing else. The CALLER checks it first (the
+   * spawner may write the parent, the parent declares the output:
+   * `checkSpawnTarget`); this producer only records it.
+   */
+  forOutput?: string | null;
 }
 
 export type RecordSessionSpawnResult =
@@ -105,7 +114,7 @@ export async function recordSessionSpawn(
       toId: input.parentSessionId,
       linkType: "spawned_from",
       createdBy: input.userId,
-      metadata: {},
+      metadata: input.forOutput ? { forOutput: input.forOutput } : {},
     })
     .onConflictDoNothing({
       target: [
@@ -176,6 +185,54 @@ export async function getParentSessionId(
     )
     .limit(1);
   return row?.toId ?? null;
+}
+
+/** What a child was spawned from, and for which of the parent's outputs. */
+export type SessionSpawnTarget =
+  | { kind: "none" }
+  /** More than one `spawned_from` edge: no single parent to act on. */
+  | { kind: "ambiguous"; parentSessionIds: string[] }
+  | {
+      kind: "one";
+      parentSessionId: string;
+      /** `metadata.forOutput` on the edge; null = spawned for no output. */
+      forOutput: string | null;
+    };
+
+/**
+ * The parent of `sessionId` AND the output it was spawned for, for a caller
+ * that WRITES on the strength of the edge (the lane rollup). Unlike
+ * {@link getParentSessionId}, which takes any one edge, it refuses a session
+ * with several parents (`ambiguous`): acting on an arbitrary one is a guess.
+ * The same owner property as {@link getParentSessionId} holds.
+ */
+export async function getSessionSpawnTarget(
+  sessionId: string
+): Promise<SessionSpawnTarget> {
+  const rows = await db
+    .select({ toId: links.toId, metadata: links.metadata })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        eq(links.fromId, sessionId),
+        eq(links.toType, "session"),
+        eq(links.linkType, "spawned_from")
+      )
+    )
+    .limit(2);
+  if (rows.length === 0) return { kind: "none" };
+  if (rows.length > 1) {
+    return { kind: "ambiguous", parentSessionIds: rows.map((r) => r.toId) };
+  }
+  const raw = (rows[0]!.metadata as Record<string, unknown> | null)?.[
+    "forOutput"
+  ];
+  return {
+    kind: "one",
+    parentSessionId: rows[0]!.toId,
+    forOutput: typeof raw === "string" && raw.trim() ? raw.trim() : null,
+  };
 }
 
 /** Batch form of {@link getParentSessionId} — one query for a session list. */

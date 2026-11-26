@@ -40,7 +40,7 @@ describe("playbookTriggerFact — the header says what starts it", () => {
       playbookTriggerFact({
         workers: paused,
         workersFailed: false,
-        schedule: { cron: "0 9 * * 1", enabled: true },
+        schedule: { cron: "0 9 * * 1", timezone: null, on: true },
       })
     ).toEqual({ state: "known", text: "Every Monday at 09:00 UTC" });
     expect(
@@ -128,6 +128,20 @@ describe("workerWhen — a schedule is said in words (D3)", () => {
       )
     ).toBe("On a custom schedule");
     expect(workerWhen(worker({ activator: { on: "schedule" } }))).toBeNull();
+  });
+
+  it("names the schedule's own zone", () => {
+    expect(
+      workerWhen(
+        worker({
+          activator: {
+            on: "schedule",
+            cron: "0 9 * * 1",
+            timezone: "Europe/Paris",
+          },
+        })
+      )
+    ).toBe("Every Monday at 09:00 Europe/Paris");
   });
 });
 

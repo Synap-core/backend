@@ -22,7 +22,7 @@
 import type { UnitStateInput } from "../units/state.js";
 import type {
   WorkerActivator,
-  WorkerMode,
+  WorkerActivatorMode,
   WorkerScopeKind,
   WorkerSize,
 } from "./index.js";
@@ -233,9 +233,9 @@ export function runHealthUnitInput(state: RunHealthState): UnitStateInput {
     case "waiting":
       return { pendingDecisions: 1 };
     case "healthy":
-      return { schedule: { cron: "", enabled: true } };
+      return { schedule: { cron: "", on: true } };
     case "paused":
-      return { schedule: { cron: "", enabled: false } };
+      return { schedule: { cron: "", on: false } };
     case "not_running":
       return { everStarted: false };
   }
@@ -300,11 +300,14 @@ export interface GoalWorkerView {
   playbookName: string;
   activatorKey: string;
   /** The declared activator; null when the playbook no longer declares it. */
-  activator: (WorkerActivator & { mode: WorkerMode }) | null;
+  activator: (WorkerActivator & { mode: WorkerActivatorMode }) | null;
   profileSlug: string | null;
   size: WorkerSize;
-  /** Approval mode: `propose` asks a person before each run, `run` acts. */
-  mode: WorkerMode;
+  /**
+   * `propose` asks a person before each run, `run` acts, `appointment` opens
+   * a session that waits for the person.
+   */
+  mode: WorkerActivatorMode;
   scope: WorkerScopeKind;
   projectId: string | null;
   /** The goal it serves (`project_tracks.id`); null for a project or space one. */
