@@ -48,12 +48,27 @@ async function plan(): Promise<string> {
   return r.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
-/** The largest "Rows Removed by Filter" in the plan (0 when none). */
-function rowsThrownAway(text: string): number {
-  const counts = [...text.matchAll(/Rows Removed by Filter: (\d+)/g)].map((m) =>
-    Number(m[1])
-  );
-  return counts.length ? Math.max(...counts) : 0;
+/**
+ * The proposals the clock read and threw away: the "Rows Removed by Filter"
+ * of the scans ON proposals only (the outer focus_sessions scan has its own,
+ * which is not the clock's cost). Throws when the plan names no proposals
+ * scan, so a plan this parser cannot read never passes as "nothing read".
+ */
+function proposalsThrownAway(text: string): number {
+  let onProposals = false;
+  let sawProposals = false;
+  let removed = 0;
+  for (const line of text.split("\n")) {
+    const scan = line.match(/Scan.* on (\w+)/);
+    if (scan) {
+      onProposals = scan[1] === "proposals";
+      sawProposals ||= onProposals;
+    }
+    const m = line.match(/Rows Removed by Filter: (\d+)/);
+    if (m && onProposals) removed += Number(m[1]);
+  }
+  if (!sawProposals) throw new Error(`no scan on proposals in:\n${text}`);
+  return removed;
 }
 
 beforeAll(async () => {
@@ -95,7 +110,7 @@ describe("migration 0459 — proposals(session_id, created_at DESC)", () => {
   it("before: a session with no proposal walks the created_at index past every proposal", async () => {
     const before = await plan();
     expect(before).toMatch(/idx_proposals_created_at_id/);
-    expect(rowsThrownAway(before)).toBe(PROPOSALS);
+    expect(proposalsThrownAway(before)).toBe(PROPOSALS);
   });
 
   it("after: one descent bounded by the session reads nothing for it; re-running is a no-op", async () => {
@@ -105,7 +120,7 @@ describe("migration 0459 — proposals(session_id, created_at DESC)", () => {
     const after = await plan();
     expect(after).toMatch(/idx_proposals_session_created_at/);
     expect(after).not.toMatch(/idx_proposals_created_at_id/);
-    expect(rowsThrownAway(after)).toBe(0);
+    expect(proposalsThrownAway(after)).toBe(0);
     const idx = await pg.query<{ indexdef: string }>(
       `SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_proposals_session_created_at'`
     );
