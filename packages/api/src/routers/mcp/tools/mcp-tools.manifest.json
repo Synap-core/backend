@@ -8082,7 +8082,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_place_on_board.",
+      "description": "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_place_on_board.",
       "inputSchema": {
         "type": "object",
         "properties": {
