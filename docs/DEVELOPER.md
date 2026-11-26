@@ -5,7 +5,7 @@ If you want your own app — a CRM, a portal, an internal tool — the public
 TypeScript SDK is the front door.
 
 > **Install:** `npm i @synap-core/sdk`
-> MIT (the SDK and contract packages stay MIT; the pod itself is PolyForm Noncommercial 1.0.0) · published to the public npm registry · typed tRPC client for your pod.
+> MIT (the SDK and contract packages stay MIT; the pod itself is Apache-2.0) · published to the public npm registry · typed tRPC client for your pod.
 
 This doc shows the minimum real integration. For the product's architecture and
 the data model it sits on, read [`ARCHITECTURE-OVERVIEW.md`](./ARCHITECTURE-OVERVIEW.md)
@@ -115,8 +115,7 @@ the model.
 
 ## 3. Self-hosting a pod
 
-Synap is source-available (PolyForm Noncommercial 1.0.0; commercial use needs a
-license) and self-hostable. On a Linux host with a domain
+Synap is open source (Apache-2.0) and self-hostable. On a Linux host with a domain
 pointing at it, the installer pulls the latest stable release (pre-built
 Docker images, no source build) and starts the stack behind Caddy with
 automatic HTTPS:

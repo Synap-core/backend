@@ -70,4 +70,4 @@ This skill combines and replaces the previous `synap-memory` and `synap-os` skil
 
 ## License
 
-PolyForm Noncommercial 1.0.0
+Apache-2.0

@@ -351,4 +351,4 @@ console.log(`Consecutive failures: ${status.consecutiveFailures}`);
 
 ## License
 
-PolyForm Noncommercial 1.0.0 - Synap
+Apache-2.0 - Synap
