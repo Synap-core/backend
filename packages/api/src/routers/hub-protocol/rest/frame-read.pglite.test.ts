@@ -23,6 +23,13 @@
  *    still not a page: 404 (rules out "any text document is a page");
  *  - a cell that declares nothing: answered, logged declared=false (the
  *    backward-compatible default, rules out "undeclared = refused");
+ *  - a person's own unsaved draft (`{kind:"draft", draftId}`, a preview):
+ *    answered with that person's access in the host's lens, logged
+ *    surface_kind "draft" declared=false (rules out "a draft reads nothing"
+ *    and "a draft reads more than its person"); another person naming the
+ *    same draft id: 403 FRAME_DRAFT_NOT_YOURS, logged refused, and the owner
+ *    still reads (rules out "a draft id is anyone's" and "a refused claim
+ *    steals it"); a draft in a space the viewer cannot read: 403;
  *  - an op outside the ceiling: 400; an unknown cell or a page the viewer
  *    cannot read: 404, nothing answered.
  *
@@ -377,6 +384,69 @@ describe("a cell that declares nothing (the default, founder-overridable)", () =
       allowed: true,
       declared: false,
     });
+  });
+});
+
+describe("a person's own unsaved draft (a preview)", () => {
+  const DRAFT = randomUUID();
+  const surface = { kind: "draft", draftId: DRAFT };
+
+  it("answered with the person's access in the host's lens, logged as a draft", async () => {
+    const res = await read({
+      surface,
+      op: "entities.list",
+      params: { profileSlug: "deal" },
+      workspaceId: WA,
+    });
+    expect(res.status).toBe(200);
+    const ids = idsOf(await res.json());
+    expect(ids).toEqual([D_A]);
+    expect(await lastLog()).toMatchObject({
+      surface_kind: "draft",
+      surface_key: DRAFT,
+      op: "entities.list",
+      allowed: true,
+      declared: false,
+      user_id: A,
+      workspace_id: WA,
+    });
+  });
+
+  it("another person naming the same draft: 403 FRAME_DRAFT_NOT_YOURS, logged refused", async () => {
+    const res = await read(
+      { surface, op: "entities.list", params: { profileSlug: "deal" } },
+      B
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "FRAME_DRAFT_NOT_YOURS" });
+    expect(await lastLog()).toMatchObject({
+      surface_kind: "draft",
+      surface_key: DRAFT,
+      allowed: false,
+      declared: false,
+      user_id: B,
+    });
+  });
+
+  it("the refused claim does not take it: its person still reads", async () => {
+    const res = await read({
+      surface,
+      op: "entities.list",
+      params: { profileSlug: "person" },
+      workspaceId: WA,
+    });
+    expect(res.status).toBe(200);
+    expect(idsOf(await res.json())).toEqual([P_A]);
+  });
+
+  it("a draft read in a space the viewer cannot read: 403", async () => {
+    const res = await read({
+      surface: { kind: "draft", draftId: randomUUID() },
+      op: "entities.list",
+      workspaceId: WB,
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "FRAME_SPACE_FORBIDDEN" });
   });
 });
 

@@ -61268,6 +61268,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | {
 					id: string;
 					kind: "document";
+				} | {
+					draftId: string;
+					kind: "draft";
 				};
 				workspaceId?: string | null | undefined;
 			};
