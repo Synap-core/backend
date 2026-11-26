@@ -28,7 +28,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../../(admin)/components/resource-row";
-import { statusPillFor } from "../../../(admin)/components/status-tone";
+import { machinePill } from "../../../(admin)/components/status-tone";
 import {
   flowNoun,
   runRowSecondary,
@@ -138,7 +138,7 @@ export function ToolRuns({
                   flowNoun(r.flowType),
                   t("running.started", { when: formatRelative(r.startedAt) }),
                 ].join(" · ")}
-                status={statusPillFor("running") ?? undefined}
+                status={machinePill("run", "running") ?? undefined}
                 onSelect={() => openRun(r.flowType, r.id)}
                 wrap
               />
@@ -168,7 +168,11 @@ export function ToolRuns({
                 Icon={Play}
                 primary={actionLabel(run.flowName)}
                 secondary={runRowSecondary(run)}
-                status={statusPillFor(run.status) ?? undefined}
+                status={
+                  machinePill("run", run.status, {
+                    stopReason: run.stopReason,
+                  }) ?? undefined
+                }
                 onSelect={() => openRun(run.flowType, run.id)}
                 wrap
               />

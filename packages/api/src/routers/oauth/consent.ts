@@ -102,6 +102,7 @@ import {
   OAUTH_DEFAULT_SCOPES,
   OAUTH_SUPPORTED_SCOPES,
   PERSON_SCOPE,
+  askAppName,
   isSynapApp,
   normalizeRequestedScopes,
   resolveFirstPartyClient,
@@ -1106,7 +1107,13 @@ async function consentAccessBlock(
     const needsWritePlace =
       adds.some((i) => i.tier === "write") && !hasWritePlace(current);
     accessAsk = {
-      title: askTitle(client.clientName, current, adds, needsWritePlace, offer),
+      title: askTitle(
+        askAppName(client),
+        current,
+        adds,
+        needsWritePlace,
+        offer
+      ),
       adds,
       needsWritePlace,
       unavailable: [

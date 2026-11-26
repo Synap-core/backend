@@ -1,572 +1,436 @@
 /**
- * A pod app's consent, rendered (react-dom/server; pod-admin's vitest runs in
- * node). By default: one row per object, each with a named level control,
- * drawn from the selection. Customize: each section carries ONE tri-state
- * checkbox that says what it selects, drawn from the same selection the space
- * checkboxes read.
+ * A pod app's consent as design A draws it, rendered (react-dom/server;
+ * pod-admin's vitest runs in node), one test per state of the design: first
+ * connect, re-consent, asks for something you can't give, Allow failed,
+ * loading, read failed; and the content of each line's sheet ("It can",
+ * "In" with and without projects, "It changes things in"). The sheets are
+ * overlays (closed at rest), so their content is rendered on its own.
  */
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup as render } from "react-dom/server";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import { Card } from "@heroui/react";
 
-vi.mock("../../../lib/trpc", () => ({ trpc: {} }));
+// CreateSpace (no space to give) reads its mutation; nothing is sent here.
+vi.mock("../../../lib/trpc", () => ({
+  trpc: {
+    workspaces: {
+      ensureTemplate: {
+        useMutation: () => ({ mutate: () => {}, isPending: false }),
+      },
+    },
+  },
+}));
 
-import { AppConsent } from "./ConsentForm";
 import {
-  allowBlockedReason,
-  consentHeadline,
-  allowNewAsks,
-  initialPodWide,
-  initialSelection,
-  newAsks,
-  placeReachNote,
-  toggle,
-  type OfferedPermission,
-  type PodWideSelection,
-  type Selection,
-} from "./consent-model";
+  AppConsent,
+  ConsentSkeleton,
+  ReadFailed,
+  type Step,
+} from "./ConsentForm";
+import { CanChoices, InChoices, WriteChoices } from "./AccessChoices";
+import {
+  canRows,
+  draftBlockedReason,
+  firstDraft,
+  heldAccessOf,
+  offerOf,
+  reconsentDraft,
+  setReadSpacesMode,
+  toggleReadSpace,
+  type ConsentDraft,
+} from "./consent-access";
 
 type App = ComponentProps<typeof AppConsent>["app"];
 
-const BRAND = {
-  workspaceId: "brand",
-  workspaceName: "Brand",
+const BUILDER = {
+  workspaceId: "w-builder",
+  workspaceName: "Builder",
   templateSlug: null,
 };
-const SHARED = {
-  workspaceId: "shared",
-  workspaceName: "Shared",
-  templateSlug: null,
-};
-
-const APP: App = {
-  domain: "studio.synap.live",
-  verified: true,
-  actsAs: {
-    kind: "person",
-    note: "It acts as you.",
-  },
-  homepage: null,
-  permissions: [
-    {
-      permission: "entity.post.read",
-      workspaces: [BRAND, SHARED],
-      reason: null,
-    },
-    {
-      permission: "entity.post.create",
-      workspaces: [BRAND, SHARED],
-      reason: null,
-    },
-    {
-      permission: "proposal.approve",
-      workspaces: [BRAND, SHARED],
-      reason: null,
-    },
-  ],
-  podWide: [],
-  approved: [],
-  templates: [],
-  podWideKinds: [],
-  ignoredScopes: [],
-  ask: null,
-};
-
-const html = (
-  selection: Selection,
-  customize = true,
-  app: App = APP,
-  podWideSelection: PodWideSelection = new Set()
-) =>
-  render(
-    <Card>
-      <AppConsent
-        app={app}
-        registeredAt={new Date("2026-10-01T00:00:00Z")}
-        redirectHost="studio.synap.live"
-        selection={selection}
-        onToggle={() => {}}
-        onToggleSection={() => {}}
-        onSetLevel={() => {}}
-        onToggleObjectSpace={() => {}}
-        onAllowNewAsks={() => {}}
-        podWideSelection={podWideSelection}
-        onTogglePodWide={() => {}}
-        customize={customize}
-        onCustomize={() => {}}
-        onSpaceCreated={() => {}}
-        busy={false}
-        step={{ kind: "idle" }}
-        blockedReason={allowBlockedReason(app.permissions, selection, {
-          offered: app.podWide.length,
-          ticked: podWideSelection.size,
-        })}
-        onDecide={() => {}}
-      />
-    </Card>
-  );
-
-/** The `<label>` HeroUI wraps around the input with this accessible name. */
-function sectionBox(out: string, name: string): string {
-  const at = out.indexOf(`aria-label="${name}"`);
-  expect(at, `no checkbox named "${name}"`).toBeGreaterThan(-1);
-  const open = out.lastIndexOf("<label", at);
-  return out.slice(open, out.indexOf(">", open) + 1);
-}
-
-const GRANTS = "All it asks to do, in every space";
-const DECISIONS = "All its decisions, in every space";
-
-describe("AppConsent sections (Customize)", () => {
-  it("first consent: the reads and writes read all, the decisions none", () => {
-    const out = html(initialSelection(APP.permissions, []));
-    const grants = sectionBox(out, GRANTS);
-    expect(grants).toContain('data-selected="true"');
-    expect(grants).not.toContain("data-indeterminate");
-    const decisions = sectionBox(out, DECISIONS);
-    expect(decisions).not.toContain("data-selected");
-    expect(decisions).not.toContain("data-indeterminate");
-  });
-
-  it("one space unticked: its section reads some (indeterminate)", () => {
-    const s = toggle(
-      initialSelection(APP.permissions, []),
-      APP.permissions,
-      "entity.post.read",
-      "shared"
-    );
-    expect(sectionBox(html(s), GRANTS)).toContain('data-indeterminate="true"');
-  });
-
-  it("each section is a region named by its heading, holding its own checkbox", () => {
-    const out = html(new Set());
-    const text = (h: string) => h.replace(/<[^>]+>/g, "").trim();
-    const sections = [...out.matchAll(/<section aria-labelledby="([^"]+)"/g)];
-    expect(sections.map((m) => m[1] ?? "")).toHaveLength(2);
-    const seen = sections.map((m) => {
-      const id = m[1] ?? "";
-      const heading = out.slice(out.indexOf(`id="${id}"`));
-      const body = out.slice(m.index, out.indexOf("</section>", m.index));
-      return {
-        title: text(
-          heading.slice(heading.indexOf(">") + 1, heading.indexOf("</p>"))
-        ),
-        box: body.includes(`aria-label="${GRANTS}"`)
-          ? GRANTS
-          : body.includes(`aria-label="${DECISIONS}"`)
-            ? DECISIONS
-            : null,
-      };
-    });
-    expect(seen).toEqual([
-      { title: "It asks to", box: GRANTS },
-      { title: "It asks to decide for you", box: DECISIONS },
-    ]);
-  });
-
-  it("every checkbox draws its unticked box in the visible token, not HeroUI's card-coloured one", () => {
-    const out = html(new Set());
-    const boxes = out.match(/type="checkbox"/g)?.length ?? 0;
-    // 3 permissions × 2 spaces, plus the two sections' "All".
-    expect(boxes).toBe(8);
-    expect(out.match(/before:border-default-500/g)?.length).toBe(boxes);
-    // twMerge replaced HeroUI's own border colour, not appended beside it.
-    expect(out).not.toMatch(/before:border-default(?![-\w])/);
-  });
-
-  it("nothing ticked: Allow is disabled and says why", () => {
-    const out = html(new Set());
-    expect(out).toContain("Turn on at least one thing it asks for.");
-  });
-});
-
-// ─── Object-first rows: Content Studio's real ask ────────────────────────────
-
-const CO = {
-  workspaceId: "co",
+const CONTENT = {
+  workspaceId: "w-content",
   workspaceName: "Content OS",
   templateSlug: "content-os",
 };
 const ECO = {
-  workspaceId: "eco",
+  workspaceId: "w-eco",
   workspaceName: "Ecosystem",
   templateSlug: "ecosystem",
 };
-const BRAND_S = {
-  workspaceId: "brand",
-  workspaceName: "Brand",
+const FINANCE = {
+  workspaceId: "w-finance",
+  workspaceName: "Finance",
   templateSlug: null,
 };
-const BUILDER = {
-  workspaceId: "builder",
-  workspaceName: "Builder",
-  templateSlug: "builder-workspace",
+
+const KINDS = ["task", "person", "deal"];
+const GROUP = { permission: "entity.read", kinds: KINDS };
+
+const base = {
+  verified: true,
+  actsAs: { kind: "person" as const, note: "It acts as you." },
+  homepage: null,
+  approved: [],
+  podWideKinds: ["person"],
+  ignoredScopes: [],
+  ask: null,
 };
 
-/**
- * https://content-studio.synap.live/.well-known/synap-client.json, read
- * 2026-10-23: 18 permissions, `synap_templates: ["content-os", "ecosystem"]`.
- */
-const STUDIO_ASK = [
-  "entity.post.read",
-  "entity.pillar.read",
-  "entity.journey-stage.read",
-  "entity.series.read",
-  "entity.platform.read",
-  "entity.file.read",
-  "entity.content-composition.read",
-  "entity.content-asset.read",
-  "entity.inspiration.read",
-  "entity.signal_item.read",
-  "document.read",
-  "relation.read",
-  "session.read",
-  "proposal.read",
-  "entity.post.create",
-  "entity.post.update",
-  "entity.signal_item.update",
-  "entity.file.create",
-];
-const STUDIO: App = {
-  ...APP,
-  domain: "content-studio.synap.live",
-  permissions: STUDIO_ASK.map((permission): OfferedPermission => ({
-    permission,
-    workspaces: [BRAND_S, BUILDER, CO, ECO],
-  })) as App["permissions"],
+/** synap-chat: kinds read pod-wide in one request, sessions edited, no templates. */
+const CHAT = {
+  ...base,
+  domain: "chat.synap.live",
+  permissions: [
+    {
+      permission: "session.update",
+      workspaces: [BUILDER, CONTENT],
+      reason: "To answer a run, as you.",
+    },
+    {
+      permission: "track.read",
+      workspaces: [BUILDER, CONTENT, FINANCE],
+      reason: null,
+    },
+    {
+      permission: "proposal.approve",
+      workspaces: [BUILDER, CONTENT],
+      reason: null,
+    },
+  ],
+  podWide: [
+    ...KINDS.map((k) => ({
+      permission: `entity.${k}.read`,
+      reason: "To show records.",
+      kindGroup: GROUP,
+    })),
+    { permission: "session.read", reason: null, kindGroup: null },
+  ],
+  templates: [],
+} as unknown as App;
+
+/** Content Studio: template spaces, posts edited. */
+const STUDIO = {
+  ...base,
+  domain: "studio.synap.live",
+  permissions: [
+    {
+      permission: "entity.post.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
+    {
+      permission: "entity.post.create",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: "To draft your posts.",
+    },
+    {
+      permission: "document.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
+  ],
+  podWide: [],
   templates: ["content-os", "ecosystem"],
-};
+} as unknown as App;
 
-/** The level control named `name`, up to the row's detail. */
-function levelGroup(out: string, name: string): string {
-  const at = out.indexOf(`aria-label="${name}"`);
-  expect(at, `no level control named "${name}"`).toBeGreaterThan(-1);
-  const end = out.indexOf("-detail", at);
-  return out.slice(at, end === -1 ? undefined : end);
+const html = (el: ReactElement) => render(<Card>{el}</Card>);
+
+function consent(
+  app: App,
+  draft?: ConsentDraft,
+  step: Step = { kind: "idle" }
+) {
+  const offer = offerOf(app);
+  const d = draft ?? reconsentDraft(heldAccessOf(app.approved), offer);
+  return html(
+    <AppConsent
+      app={app}
+      appName={
+        app.domain === "chat.synap.live" ? "Synap Chat" : "Content Studio"
+      }
+      registeredAt={new Date("2026-10-01T00:00:00Z")}
+      redirectHost={app.domain}
+      draft={d}
+      onDraft={() => {}}
+      onSpaceCreated={() => {}}
+      busy={false}
+      step={step}
+      blockedReason={draftBlockedReason(
+        d,
+        offer,
+        canRows(offer, app.actsAs.kind)
+      )}
+      onDecide={() => {}}
+    />
+  );
 }
-/** The words of the segment that is selected in a level control. */
-const selectedLevel = (group: string) =>
-  [
-    ...group.matchAll(
-      /<label[^>]*data-selected="true"[^>]*>([\s\S]*?)<\/label>/g
-    ),
-  ].map((m) => (m[1] ?? "").replace(/<[^>]+>/g, "").trim());
 
-describe("AppConsent rows (default view)", () => {
-  const first = initialSelection(STUDIO.permissions, [], STUDIO.templates);
-  const out = html(first, false, STUDIO);
+/** The Allow button's markup. */
+function allow(out: string): string {
+  const at = out.search(/>(Allow|Confirm|Try again)</);
+  expect(at).toBeGreaterThan(-1);
+  const open = out.lastIndexOf("<button", at);
+  return out.slice(open, out.indexOf(">", open) + 1);
+}
 
-  it("Content Studio's ask reads as 4 rows: its 3 edits, then ONE row for the 11 objects it only views", () => {
-    const objects = [...out.matchAll(/data-object="([^"]+)"/g)].map(
-      (m) => m[1]
-    );
-    // Document order: the folded objects render inside "It can also see".
-    expect(objects.slice(0, 4)).toEqual([
-      "entity.post",
-      "entity.file",
-      "entity.signal_item",
-      "also-see",
+describe("first connect (design A)", () => {
+  it("three lines with one door each; the headline is live; the matrix and the pod-wide section are gone", () => {
+    const out = consent(CHAT);
+    expect(out.match(/data-line="(can|in|write)"/g)).toEqual([
+      'data-line="can"',
+      'data-line="in"',
+      'data-line="write"',
     ]);
-    expect(objects).toHaveLength(4 + 11);
-    expect(out.match(/role="radiogroup"/g)?.length).toBe(15);
-    expect(out).toContain("Pillars, Journey stages, Series, Platforms +7 more");
-    // The matrix is not on screen: no section "All" checkbox.
-    expect(out).not.toContain("All it asks to do, in every space");
+    expect(out).toContain('aria-live="polite"');
+    expect(out).toContain(">Review<");
+    expect(out.match(/aria-haspopup="dialog"/g)).toHaveLength(3);
+    expect(out).toContain(
+      "Every space and every project, including ones you create later"
+    );
+    expect(out).toMatch(/View<\/span> records \(3 kinds\)/);
+    expect(out).not.toContain("Customize");
+    // One set for both counts: what it reaches under "In" (re-check #1).
+    expect(out).toContain(
+      "Not included with every space: goals. Pick spaces to include them."
+    );
+    expect(out).toContain("Decide for you: off (it asked)");
+    expect(out).not.toContain("Everywhere in your pod</p>");
   });
 
-  it("by default only Content OS and Ecosystem are given, at each row's level", () => {
-    const headline = consentHeadline(first, STUDIO.permissions);
-    expect(headline).toMatch(/ in Content OS and Ecosystem\.$/);
-    expect(headline).not.toContain("Brand");
-    expect(selectedLevel(levelGroup(out, "Posts: access"))).toEqual(["Edit"]);
-    expect(selectedLevel(levelGroup(out, "Pillars: access"))).toEqual(["View"]);
-    expect(selectedLevel(levelGroup(out, "It can also see: access"))).toEqual([
-      "View",
-    ]);
-    // The 3 edit rows and each of the 11 folded objects say where.
-    expect(out.match(/in Content OS and Ecosystem/g)?.length).toBe(14);
-  });
-
-  it("a read-only row offers View and Off, never Edit", () => {
-    for (const name of ["Pillars: access", "It can also see: access"]) {
-      const g = levelGroup(out, name);
-      expect(g).toContain(">View<");
-      expect(g).toContain(">Off<");
-      expect(g).not.toContain(">Edit<");
-    }
-  });
-
-  it("the other spaces wait behind one disclosure per row, unticked", () => {
-    expect(out.match(/Also allow in another space…/g)?.length).toBe(14);
-    const brand = sectionBox(out, "Posts in Brand");
-    expect(brand).not.toContain("data-selected");
-    expect(sectionBox(out, "Posts in Content OS")).toContain(
-      'data-selected="true"'
+  it("no template: nothing is picked for its changes, the line asks with a dot, and Allow says why", () => {
+    const out = consent(CHAT);
+    expect(out).toContain("Pick where");
+    expect(out).toContain("Synap Chat declared no space for its changes.");
+    expect(out).toContain(">Pick<");
+    const button = allow(out);
+    expect(button).toContain("disabled");
+    expect(button).toMatch(/aria-describedby="[^"]+-blocked"/);
+    expect(out).toContain(
+      "Pick where it can make changes, or set Jobs to View."
     );
   });
 
-  it("each row's name is a disclosure button; every tick keeps the visible border", () => {
-    // 15 row names (4 rows + 11 folded objects) + 14 "Also allow…".
-    expect(out.match(/aria-expanded="false"/g)?.length).toBe(29);
-    const boxes = out.match(/type="checkbox"/g)?.length ?? 0;
-    expect(boxes).toBe(14 * 4);
-    expect(out.match(/before:border-default-500/g)?.length).toBe(boxes);
-    expect(out.match(/ring-default-500/g)?.length).toBe(15);
+  it("templates: its template spaces are picked; Allow may be pressed", () => {
+    const out = consent(STUDIO);
+    expect(out).toContain("Content OS and Ecosystem");
+    expect(allow(out)).not.toContain("disabled");
+    expect(out).toContain(">Allow<");
+    expect(out).toContain(">Decline<");
+    expect(out).not.toContain("data-reconsent");
   });
 
-  it("the reach sentence shows once in both views for a record read, never without one (#128)", () => {
-    const once = (o: string) => o.split(placeReachNote("spaces")).length - 1;
-    expect(once(out)).toBe(1);
-    expect(once(html(first, true, STUDIO))).toBe(1);
-    const writesOnly: App = {
-      ...STUDIO,
-      permissions: [
-        { permission: "entity.post.create", workspaces: [CO] },
-      ] as App["permissions"],
-    };
-    const sel = initialSelection(writesOnly.permissions, [], []);
-    expect(once(html(sel, false, writesOnly))).toBe(0);
-  });
-
-  it("Off everywhere: Allow is blocked, with its reason", () => {
-    expect(html(new Set(), false, STUDIO)).toContain(
-      "Turn on at least one thing it asks for."
+  it("the trust facts stay: who it acts as, where it sends you back, when it was first seen; revoking is said once", () => {
+    const out = consent(STUDIO);
+    expect(out).toContain("It acts as you.");
+    expect(out).toContain("Sends you back to");
+    expect(out).toContain("First seen");
+    expect(out.match(/Revoking there stops it in every browser/g)).toHaveLength(
+      1
     );
-  });
-
-  it("a pod-wide kind's row says how it reaches the app; decisions are their own row, Off", () => {
-    const app: App = {
-      ...STUDIO,
-      permissions: [
-        { permission: "entity.person.read", workspaces: [CO] },
-        { permission: "entity.post.update", workspaces: [CO] },
-        { permission: "entity.post.archive", workspaces: [CO] },
-        { permission: "proposal.approve", workspaces: [CO] },
-      ] as App["permissions"],
-      podWideKinds: ["person"],
-    };
-    const o = html(
-      initialSelection(app.permissions, [], app.templates),
-      false,
-      app
-    );
-    expect(o).toContain("People kept across your whole pod");
-    expect(selectedLevel(levelGroup(o, "Let it decide for you"))).toEqual([
-      "Off",
-    ]);
-    expect(o).toContain("It asks to decide for you");
-    // A gate verb is a decision, named in words, never part of Edit.
-    expect(o).toContain("Archive or approve, as you");
-    expect(o).toContain("Archive posts");
-    expect(selectedLevel(levelGroup(o, "Posts: access"))).toEqual(["Edit"]);
   });
 });
 
-describe("AppConsent: a re-consent says what is new, first", () => {
-  const CRM_S = {
-    workspaceId: "crm",
-    workspaceName: "CRM",
-    templateSlug: "crm",
-  };
-  /** crm.synap.live re-consented on 2026-10-26: four asks added. */
-  const CRM: App = {
-    ...APP,
-    domain: "crm.synap.live",
-    permissions: [
-      "entity.person.read",
-      "entity.person.update",
-      "entity.company.read",
-      "entity.company.update",
-      "playbook.run",
-    ].map((permission) => ({
-      permission,
-      workspaces: [BRAND_S, CRM_S],
-      reason: permission === "playbook.run" ? "To start the list." : null,
-    })) as App["permissions"],
-    approved: [
-      { permission: "entity.person.read", workspaceId: "crm" },
-      { permission: "entity.company.read", workspaceId: "crm" },
-    ],
-    templates: ["crm"],
-  };
-  const before = initialSelection(CRM.permissions, CRM.approved, CRM.templates);
-  const asks = newAsks(CRM.permissions, CRM.approved, CRM.templates);
-  const after = allowNewAsks(before, CRM.permissions, asks, true);
-  /** The new-asks block, or "" when it is not on screen. */
-  const block = (out: string) => {
-    const at = out.indexOf("data-new-asks");
-    return at === -1 ? "" : out.slice(at, out.indexOf("</section>", at));
-  };
-  /** The switch's `<label>`: HeroUI marks it `data-selected` when on. */
-  const toggleOf = (b: string) => {
-    const at = b.indexOf("Allow the new ones");
-    expect(at, "no switch").toBeGreaterThan(-1);
-    const open = b.lastIndexOf("<label", at);
-    return b.slice(open, b.indexOf(">", open) + 1);
-  };
+describe("re-consent", () => {
+  const current = [
+    { permission: "entity.post.read", workspaceId: "w-content" },
+    { permission: "document.read", workspaceId: "w-eco" },
+  ];
+  const app = { ...STUDIO, approved: current } as unknown as App;
 
-  it("names each new ask in words, with its spaces and reason, above the rows; the switch is Off", () => {
-    const out = html(before, false, CRM);
-    const b = block(out);
-    expect(b).toContain("New since you last allowed");
-    expect(b).toContain("Edit people");
-    expect(b).toContain("Edit companies");
-    expect(b).toContain("playbook.run");
-    expect(b).toContain("To start the list.");
-    expect(b).toContain("in CRM");
-    expect(b).not.toContain("entity.person.read");
-    expect(toggleOf(b)).not.toContain('data-selected="true"');
-    // First, before the rows.
-    expect(out.indexOf("data-new-asks")).toBeLessThan(
-      out.indexOf('data-object="entity.person"')
-    );
-    expect(selectedLevel(levelGroup(out, "People: access"))).toEqual(["View"]);
+  it("says what changes first, each with now / was and one narrowing door; Confirm / Not now; lines marked Changed", () => {
+    const out = consent(app);
+    expect(out).toContain("data-reconsent");
+    expect(out).toMatch(/changes? to confirm/);
+    expect(out).toContain("was in Content OS");
+    expect(out).toMatch(/>Turn [a-z ]+ off everywhere</);
+    expect(out).toContain("Everything else stays as you allowed it.");
+    expect(out).toContain(">Confirm<");
+    expect(out).toContain(">Not now<");
+    expect(out.match(/>Changed</g)?.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("switched on: the same selection the rows read, so People and Companies say Edit", () => {
-    const out = html(after, false, CRM);
-    expect(toggleOf(block(out))).toContain('data-selected="true"');
-    expect(selectedLevel(levelGroup(out, "People: access"))).toEqual(["Edit"]);
-    expect(selectedLevel(levelGroup(out, "Companies: access"))).toEqual([
-      "Edit",
-    ]);
-    expect(selectedLevel(levelGroup(out, "Let it decide for you"))).toEqual([
-      "On",
-    ]);
-  });
-
-  it("a first consent shows no such block", () => {
-    const first: App = { ...CRM, approved: [] };
-    const out = html(
-      initialSelection(first.permissions, [], first.templates),
-      false,
-      first
-    );
-    expect(block(out)).toBe("");
-    expect(out).not.toContain("New since you last allowed");
+  it("what it newly asks is listed with its reason, and its switch starts off", () => {
+    const out = consent(app);
+    expect(out).toMatch(/new requests? since you last allowed/);
+    expect(out).toContain("Create posts");
+    expect(out).toContain("To draft your posts.");
+    expect(out).toMatch(/Allow the new ones/);
+    expect(out).not.toMatch(/<input[^>]*role="switch"[^>]*checked/);
   });
 });
 
-describe("pod-wide reads (decision e1b59d38 B): their own section, everywhere in your pod", () => {
-  const DEVPLANE: App = {
-    ...APP,
-    permissions: [
-      {
-        permission: "entity.task.read",
-        workspaces: [BRAND],
-        reason: null,
-      },
-    ],
-    podWide: [
-      { permission: "entity.decision.read", reason: "Show every decision." },
-      { permission: "entity.finding.read", reason: null },
-    ],
-  };
-  /** The pod-wide section, or "" when it is not on screen. */
-  const section = (out: string) => {
-    const at = out.indexOf("data-pod-wide");
-    return at === -1 ? "" : out.slice(at, out.indexOf("</section>", at));
-  };
-  const box = (out: string, name: string) => sectionBox(out, name);
-
-  it("first consent: one tick per read, each named everywhere in your pod, all ticked", () => {
-    const pw = initialPodWide(DEVPLANE.podWide, []);
-    const out = html(
-      initialSelection(DEVPLANE.permissions, []),
-      false,
-      DEVPLANE,
-      pw
-    );
-    const s = section(out);
-    expect(s).toContain("Everywhere in your pod");
-    expect(s).toContain("entity.decision.read");
-    expect(s).toContain("Show every decision.");
-    expect(s).toContain("It cannot change them");
-    expect(box(out, "Read decisions, everywhere in your pod")).toContain(
-      'data-selected="true"'
-    );
-    expect(box(out, "Read findings, everywhere in your pod")).toContain(
-      'data-selected="true"'
-    );
-    // Never offered per space: no space checkbox or row names it.
-    expect(out).not.toContain('aria-label="Read decisions in Brand"');
-  });
-
-  it("shown in Customize too, and unticked boxes read unticked", () => {
-    const out = html(new Set(), true, DEVPLANE, new Set());
-    expect(section(out)).toContain("Everywhere in your pod");
-    expect(box(out, "Read decisions, everywhere in your pod")).not.toContain(
-      "data-selected"
-    );
-  });
-
-  it("only pod-wide reads ticked: Allow may be pressed", () => {
-    const out = html(
-      new Set(),
-      false,
-      DEVPLANE,
-      new Set(["entity.decision.read"])
-    );
-    expect(out).not.toContain("Turn on at least one thing it asks for.");
-    const none = html(new Set(), false, DEVPLANE, new Set());
-    expect(none).toContain("Turn on at least one thing it asks for.");
-  });
-
-  it("re-consent: a pod-wide read given before stays ticked; a new one is named under New since you last allowed, off", () => {
-    const again: App = {
-      ...DEVPLANE,
-      approved: [
-        { permission: "entity.task.read", workspaceId: "brand" },
-        { permission: "entity.decision.read", workspaceId: null },
+describe("asks for something you can't give", () => {
+  it("folds them with a count, each with its reason and a Not given mark, never a disabled toggle", () => {
+    const app = {
+      ...STUDIO,
+      ignoredScopes: ["*"],
+      permissions: [
+        ...(STUDIO.permissions as unknown[]),
+        { permission: "agent.read", workspaces: [], reason: null },
       ],
-    };
-    const pw = initialPodWide(again.podWide, again.approved);
-    expect([...pw]).toEqual(["entity.decision.read"]);
+    } as unknown as App;
+    const out = consent(app);
+    expect(out).toContain("It also asked for 2 things you can’t give");
+  });
+});
+
+describe("Allow failed", () => {
+  it("a danger alert above the buttons, the choices kept, Allow becomes Try again", () => {
+    const out = consent(STUDIO, undefined, {
+      kind: "error",
+      message: "Pod did not answer",
+    });
+    expect(out).toContain('role="alert"');
+    expect(out).toContain("Couldn’t connect Content Studio");
+    expect(out).toContain("Nothing was given. Your choices are kept.");
+    expect(out).toContain(">Try again<");
+    expect(out).toContain('data-line="in"');
+  });
+});
+
+describe("loading and read failed", () => {
+  it("loading draws the shape of the real lines, busy, with a status for screen readers", () => {
+    const out = html(<ConsentSkeleton />);
+    expect(out).toContain('aria-busy="true"');
+    expect(out).toContain("Loading what this app asks for");
+  });
+
+  it("read failed: the retry inside the failure, saying nothing was given", () => {
     const out = html(
-      initialSelection(again.permissions, again.approved),
-      false,
-      again,
-      pw
+      <ReadFailed
+        onRetry={() => {}}
+        retrying={false}
+        onDecline={() => {}}
+        busy={false}
+      />
     );
-    const at = out.indexOf("data-new-asks");
-    expect(at).toBeGreaterThan(-1);
-    const block = out.slice(at, out.indexOf("</section>", at));
-    expect(block).toContain("entity.finding.read");
-    expect(block).toContain("Everywhere in your pod");
-    expect(block).not.toContain("entity.decision.read");
-    expect(box(out, "Read findings, everywhere in your pod")).not.toContain(
-      "data-selected"
+    expect(out).toContain('role="alert"');
+    expect(out).toContain("Couldn’t read what this app asks for");
+    expect(out).toContain("Nothing was given.");
+    expect(out).toContain(">Try again<");
+    expect(out).toContain("Decline and go back");
+  });
+});
+
+describe("the sheets' choices", () => {
+  it("It can: the kinds as ONE row with its count and level; each other row its level; reasons and raw permissions", () => {
+    const offer = offerOf(CHAT);
+    const rows = canRows(offer, "person");
+    const out = html(
+      <CanChoices
+        rows={rows}
+        draft={firstDraft(offer)}
+        actsAs="person"
+        appName="Synap Chat"
+        podWideKinds={["person"]}
+        onChange={() => {}}
+      />
     );
-    expect(box(out, "Read decisions, everywhere in your pod")).toContain(
-      'data-selected="true"'
-    );
+    expect(out).toContain('data-object="records"');
+    expect(out).toContain("3 kinds");
+    expect(out).toContain("All 3 kinds it asked for");
+    expect(out).toContain("Records: access");
+    expect(out).toContain("To answer a run, as you.");
+    expect(out).toContain("session.update");
+    expect(out).toContain("Turn off anything you don’t want.");
+    // The decision row is its own, Off.
+    expect(out).toContain("Let it decide for you");
   });
 
-  // Rules out: the space note's "Nothing else in your pod." shown beside the
-  // section that reads everywhere in the pod (the review of 1 Nov), the
-  // widest read placed last, after every space row, and taking it back said
-  // twice (in the section and under Allow).
-  it("one reach line per place, never contradicting another; the pod-wide section first; revocation said once", () => {
-    for (const customize of [false, true]) {
-      const out = html(
-        initialSelection(DEVPLANE.permissions, []),
-        customize,
-        DEVPLANE,
-        initialPodWide(DEVPLANE.podWide, [])
-      );
-      expect(out).not.toContain("Nothing else in your pod");
-      expect(out.split(placeReachNote("spaces")).length - 1).toBe(1);
-      const pod = out.indexOf("data-pod-wide");
-      expect(pod).toBeGreaterThan(-1);
-      expect(pod).toBeLessThan(out.indexOf("It asks to"));
-      expect(section(out)).toContain(placeReachNote("pod"));
-      expect(section(out)).not.toMatch(/take these reads back/);
-      expect(out.match(/revoke it at any time/g)?.length).toBe(1);
-    }
+  it("In: All spaces with its hint, and every project included under All", () => {
+    const offer = offerOf({
+      ...CHAT,
+      permissions: (
+        CHAT.permissions as unknown as Array<Record<string, unknown>>
+      ).map((p) => ({
+        ...p,
+        projects: [
+          {
+            projectId: "p-launch",
+            projectName: "Launch v1",
+            workspaceId: "w-builder",
+          },
+        ],
+      })),
+    } as unknown as App);
+    const rows = canRows(offer, "person");
+    const all = html(
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={rows}
+        onChange={() => {}}
+      />
+    );
+    expect(all).toContain("All spaces");
+    expect(all).toContain("Includes spaces you create later.");
+    expect(all).toContain("Only the spaces I pick");
+    expect(all).toContain("Every project is included");
+    // A read with no pod-wide form is named, never dropped silently.
+    expect(all).toContain("With all spaces it still cannot see goals");
+
+    const picked = toggleReadSpace(
+      setReadSpacesMode(firstDraft(offer), offer, "pick"),
+      "w-builder"
+    );
+    const pick = html(
+      <InChoices draft={picked} offer={offer} rows={rows} onChange={() => {}} />
+    );
+    expect(pick).toContain("Builder");
+    expect(pick).toContain("Finance");
+    expect(pick).toContain("All projects");
+    expect(pick).toContain("Only the projects I pick");
+    expect(pick).toContain("No projects");
   });
 
-  it("an app that asks for nothing pod-wide shows no such section", () => {
-    expect(section(html(new Set(), false, APP))).toBe("");
+  it("In, person has no projects: All (none yet, includes later) and No projects; never a disabled pick", () => {
+    const offer = offerOf({
+      ...STUDIO,
+      permissions: (
+        STUDIO.permissions as unknown as Array<Record<string, unknown>>
+      ).map((p) => ({ ...p, projects: [] })),
+    } as unknown as App);
+    const out = html(
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={canRows(offer, "person")}
+        onChange={() => {}}
+      />
+    );
+    expect(out).toContain(
+      "You have no projects yet. This includes the ones you create later."
+    );
+    expect(out).toContain("No projects");
+    expect(out).not.toContain("Only the projects I pick");
+  });
+
+  it("In, before the server offers projects: the Projects choice is omitted, not guessed", () => {
+    const offer = offerOf(STUDIO);
+    const out = html(
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={canRows(offer, "person")}
+        onChange={() => {}}
+      />
+    );
+    expect(out).not.toContain("All projects");
+  });
+
+  it("It changes things in: only places it may change; view-only spaces named once; no everywhere", () => {
+    const offer = offerOf(CHAT);
+    const out = html(
+      <WriteChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        onChange={() => {}}
+      />
+    );
+    expect(out).toContain("Builder");
+    expect(out).toContain("Content OS");
+    expect(out).toContain("Finance isn’t listed: you can only view it.");
+    expect(out).toContain("There is no “everywhere” for changes.");
   });
 });

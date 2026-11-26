@@ -29,14 +29,14 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
     path: "/widget-definitions",
-    tags: ["Widgets"],
-    summary: "List widget definitions",
+    tags: ["Cells"],
+    summary: "List cell types (the cell catalog)",
     request: {
       query: ListWidgetDefsQuerySchema,
     },
     responses: {
       200: {
-        description: "Widget definitions",
+        description: "Cell types",
         schema: z.array(WireWidgetDefSchema),
       },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -47,14 +47,14 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "post",
     path: "/widget-definitions",
-    tags: ["Widgets"],
-    summary: "Register or update a widget definition",
+    tags: ["Cells"],
+    summary: "Register or update a cell type",
     request: {
       body: UpsertWidgetDefRequestSchema,
     },
     responses: {
       200: {
-        description: "Upserted widget definition",
+        description: "Upserted cell type",
         schema: WireWidgetDefSchema,
       },
       400: { description: "Bad request", schema: ErrorSchema },

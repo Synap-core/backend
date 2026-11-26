@@ -39,6 +39,7 @@ import {
   PROPOSAL_REJECTION_REASONS,
   type CompositeCreateLinkOp,
 } from "@synap-core/types/proposals";
+import { ANCHOR_KINDS } from "@synap-core/types/surfaces";
 import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
@@ -51,6 +52,7 @@ import {
 import {
   CONTENT_KINDS,
   AGENT_CREATABLE_VIEW_DEFINITIONS,
+  VIEW_TYPE_KEYS,
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = AGENT_CREATABLE_VIEW_DEFINITIONS.map(
   (d) => d.key
@@ -133,6 +135,7 @@ import {
   yourToolsBlock,
 } from "../tool-guidance.js";
 import { CALL_TOOL_NAME } from "../call-tool-name.js";
+import { toolAliasDefs } from "../tool-aliases.js";
 import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
@@ -2027,7 +2030,7 @@ export const tools = {
                   props: {
                     type: "object",
                     description:
-                      "insert_embed: a cell's props (synap_list_widgets shows each cell's).",
+                      "insert_embed: a cell's props (synap_list_cells shows each cell's).",
                   },
                   fallback: {
                     type: "string",
@@ -3638,6 +3641,37 @@ export const tools = {
         },
       },
       {
+        name: "synap_find_surfaces",
+        annotations: {
+          title: "Find an object's surfaces",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          'Find every Surface an object carries before you make one: its kind\'s renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not "nothing there". Read-only.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: [...ANCHOR_KINDS],
+              description:
+                "The anchor's kind (profile = a kind of record, by id or slug; track = a goal).",
+            },
+            id: {
+              type: "string",
+              description: "The anchor's id (a profile also by its slug).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional space to narrow to. Omit for everything you can see.",
+            },
+          },
+          required: ["kind", "id"],
+        },
+      },
+      {
         name: "synap_list_sessions",
         annotations: {
           title: "List focus sessions",
@@ -3873,7 +3907,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Define (create or update) a Cell type from raw renderer source, only when synap_list_widgets lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).',
+          'Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).',
         inputSchema: {
           type: "object",
           properties: {
@@ -3899,7 +3933,7 @@ export const tools = {
               type: "array",
               items: { type: "string" },
               description:
-                'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain widget and views fall back to the built-in adapter.',
+                'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain cell (placed, never a renderer) and views fall back to the built-in adapter.',
             },
             contentKind: {
               type: "string",
@@ -6466,7 +6500,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List views you own, optionally narrowed by workspaceId, type, or profileId. Call this BEFORE synap_create_view so you do not duplicate an existing board. Owner-only (same floor as hub listViews). Omit filters for the full catalog.",
+          "List the Views and boards you can see (not only your own), narrowed by workspaceId, projectId, type or profileId. Call it before synap_create_view so you do not duplicate one. For what ONE object already carries (its views, bentos, documents, HTML artifacts, renders), use synap_find_surfaces. `type` accepts every view type, bento and whiteboard included.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6479,12 +6513,16 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Optional workspace UUID to narrow to. Omit for every view you own.",
+                "Optional workspace UUID to narrow to. Omit for every view you can see.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project UUID: only views pinned to or exposed in that project.",
             },
             type: {
               type: "string",
-              description:
-                "Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow).",
+              description: `Optional view type filter: ${VIEW_TYPE_KEYS.join(", ")}.`,
             },
             profileId: {
               type: "string",
@@ -6503,22 +6541,27 @@ export const tools = {
         },
       },
       {
-        name: "synap_list_widgets",
+        name: "synap_list_cells",
         annotations: {
-          title: "List compose widgets",
+          title: "List cells",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          'Live list of what you may place: in a bento (surface "bento", default) or embedded in a document (surface "document"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card. With surface "document" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint.',
+          'List the Cells you may place: in a bento (placement "bento", default) or embedded in a document (placement "document"). Call it before arranging a bento or embedding a cell; never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) and the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. A view block needs a saved view id (viewId), not a profileSlug. Counts use stat-card. With placement "document" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint. (`surface` is still accepted as the old name of `placement`.)',
         inputSchema: {
           type: "object",
           properties: {
-            surface: {
+            placement: {
               type: "string",
               enum: ["bento", "document"],
               description:
-                "Where you will place it: bento (dashboard block, default) or document (an embed inside a document).",
+                "Where you will place it: bento (a dashboard block, default) or document (an embed inside a document).",
+            },
+            surface: {
+              type: "string",
+              enum: ["bento", "document"],
+              description: "Old name of placement.",
             },
             workspaceId: {
               type: "string",
@@ -7747,6 +7790,10 @@ export const tools = {
         },
       },
     ];
+
+    // An old tool name keeps answering as the tool that replaced it, listed
+    // so every client and mirror still sees it (`tool-aliases.ts`).
+    toolDefs.push(...toolAliasDefs(toolDefs));
 
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
     // write tool declares it the moment it is listed. A tool that declares its

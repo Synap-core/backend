@@ -4,7 +4,7 @@ Ready-to-adapt layouts for the most common user asks. Each recipe is the `widget
 
 Before using one:
 
-1. `synap_list_widgets` — confirm each key is listed for this workspace (and read its `requiredConfig`).
+1. `synap_list_cells` — confirm each key is listed for this workspace (and read its `requiredConfig`).
 2. `synap_list_profiles` — swap the example `profileSlug`s for ones that exist.
 3. A `view` block needs a saved view: `synap_list_views` for its `viewId`, or `synap_create_view` first.
 
@@ -370,7 +370,7 @@ _User asks: "What are my agents doing?"_
 ## Composition tips
 
 - **Row-by-row thinking.** Each row is one visual theme. Mixing themes in the same row confuses the eye.
-- **Start from `defaultSize`.** Each entry in `synap_list_widgets` carries one; it's easier to shrink an oversized block than to realize a tight block feels cramped.
+- **Start from `defaultSize`.** Each entry in `synap_list_cells` carries one; it's easier to shrink an oversized block than to realize a tight block feels cramped.
 - **Use `section-header` between themes.** Readers parse visual separators faster than mental ones.
 - **Keep stat-cards together in a strip.** Four stats at 3×3 each = one clean row. Four stats scattered = noise.
 - **End with the feed.** Activity feeds work best as the last row — they're where the eye lands for recency.

@@ -4618,7 +4618,7 @@ export type SignalSurface = "chat" | "external" | "feed" | "notification" | "sup
  * surface (deliver to a bound Discord/Telegram/etc channel via the messaging
  * connector seam). Stored in JSONB — adding the structured form needs no migration.
  */
-export interface SurfaceTarget {
+export interface ChannelTarget {
 	kind: "chat" | "external" | "feed" | "notification" | "suppress";
 	/** External provider for kind="external" (e.g. "discord", "telegram"). */
 	provider?: string;
@@ -4629,9 +4629,9 @@ export interface SurfaceTarget {
 export interface SignalDeliveryRule {
 	/**
 	 * A bare `SignalSurface` string normalizes to `{ kind: string }`; a
-	 * `SurfaceTarget` carries provider/channel for `external` routing.
+	 * `ChannelTarget` carries provider/channel for `external` routing.
 	 */
-	surfaces: (SignalSurface | SurfaceTarget)[];
+	surfaces: (SignalSurface | ChannelTarget)[];
 }
 /**
  * Per-workspace delivery preferences.
@@ -5523,6 +5523,17 @@ export interface WorkerUnless {
 export interface WorkerOnly {
 	property: string;
 	in: string[];
+}
+/**
+ * A playbook's schedule as every surface reads it: its clock, the zone it
+ * runs in (`null` = its owner's), and whether it fires now. Projected by the
+ * playbook reads (`playbooks.list`, `get`); a client never joins activators
+ * with rule status itself.
+ */
+export interface PlaybookScheduleView {
+	cron: string;
+	timezone: string | null;
+	on: boolean;
 }
 /**
  * AutomationTriggerConfig
@@ -11297,6 +11308,8 @@ export interface ProposalReviewGraph {
 	 * not ids: the members are refs into `entities[]` or existing ids.
 	 */
 	views?: Array<ReviewStepSpace & {
+		/** A bento: the cell keys it places, in block order. */
+		cells?: string[];
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
 		/** A pipeline: the kind whose declared lifecycle its columns are. */
@@ -11308,7 +11321,10 @@ export interface ProposalReviewGraph {
 		/** Kinds the list shows, when the op named them. */
 		scopeProfileSlugs?: string[];
 		viewType: CompositeViewType;
-		/** A bento: the widget keys it places, in block order. */
+		/**
+		 * @deprecated The old name of `cells` (same value), kept one release
+		 * for readers that still read it (founder, 23 Nov 2026: Cell).
+		 */
 		widgets?: string[];
 	}>;
 	/**
@@ -17594,6 +17610,13 @@ export interface UnifiedRun {
 	replayOf: string | null;
 	summary: string | null;
 	error: string | null;
+	/**
+	 * Why a failed run stopped before it finished (`stop_reason`): `budget` (it
+	 * reached a limit, nothing broke), `stages_left` (its turns kept ending
+	 * early: a fault), `no_effect` (its turn changed nothing). Null on every
+	 * other ledger.
+	 */
+	stopReason: string | null;
 	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
 	triggeredBy: string | null;
 	/** Steps that completed / failed (automation runs only; null for other ledgers). */
@@ -25920,8 +25943,11 @@ export interface SurfaceContext {
 	locale: string;
 	theme: "dark" | "light";
 }
-/** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
-export type RendererBindingStore = "profile" | "view" | "workspace";
+/**
+ * Where a binding was found. `binding` = a `renderer_bindings` row. `entity`
+ * (per-entity override) is deferred (v1).
+ */
+export type RendererBindingStore = "binding" | "profile" | "view" | "workspace";
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
 export type RendererKeyKind = "cell" | "other" | "view" | "view-adapter";
 export interface RendererBinding {
@@ -25937,6 +25963,10 @@ export interface RendererBinding {
 	/** True when the ref sits under a deprecated slot key / column. */
 	legacy?: boolean;
 	workspaceId: string | null;
+	/** `binding` store only: the row's scope (user | workspace | pod). */
+	scope?: string;
+	/** `binding` store only: the one object it pins, absent for a whole kind. */
+	subjectId?: string;
 }
 export interface RendererUsage {
 	/** `cellKey` | `adapterKey` | `view:<uuid>` | `<refKind>:<appId>`. */
@@ -25959,6 +25989,79 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
+	/**
+	 * The stores that could not be read, with their error: NOT "no bindings".
+	 * Always set by this builder; optional on the type because the field joined
+	 * an existing door's output (an older pod omits it, and typed fixtures in
+	 * dependent repos predate it).
+	 */
+	unavailable?: {
+		error: string;
+		source: string;
+	}[];
+}
+declare const ANCHOR_KIND_SET: {
+	readonly entity: true;
+	readonly playbook: true;
+	readonly profile: true;
+	readonly project: true;
+	readonly session: true;
+	readonly track: true;
+	readonly workspace: true;
+};
+export type AnchorKind = keyof typeof ANCHOR_KIND_SET;
+export interface SurfaceAnchor {
+	kind: AnchorKind;
+	id: string;
+}
+declare const SURFACE_BODIES: readonly [
+	"view",
+	"document",
+	"html",
+	"bento",
+	"whiteboard",
+	"cell",
+	"site",
+	"app"
+];
+export type SurfaceBody = (typeof SURFACE_BODIES)[number];
+declare const SURFACE_RELATIONS: readonly [
+	"renders",
+	"attached",
+	"body",
+	"pinned",
+	"home",
+	"session-output",
+	"exposed"
+];
+export type SurfaceRelation = (typeof SURFACE_RELATIONS)[number];
+export interface SurfaceRow {
+	/** The body's own id (view, document, cell instance, binding, share…). */
+	id: string;
+	body: SurfaceBody;
+	relation: SurfaceRelation;
+	anchor: SurfaceAnchor;
+	title: string;
+	/** For a view body: its view type (table, kanban, pipeline…). */
+	viewType?: string;
+	/** For a cell body: the cell's key. */
+	cellKey?: string;
+	/** For a renders row: the renderer slot (list, detail, card, dashboard). */
+	slot?: string;
+	/** Today the existing `/open/<id>` link of the body. */
+	openUrl: string;
+	/** True when the surface cannot be edited through it (an HTML artifact). */
+	readOnly: boolean;
+	/** Which store answered (for debugging and inspection). */
+	source: string;
+}
+export interface SurfacesForObject {
+	rows: SurfaceRow[];
+	/** A store that could not be read: NOT "nothing there". */
+	unavailable: {
+		error: string;
+		source: string;
+	}[];
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -28471,6 +28574,8 @@ export interface RecentFlowRun {
 	status: RunStatus;
 	startedAt: Date;
 	completedAt: Date | null;
+	/** Why a failed run stopped (`stop_reason`; `UnifiedRun.stopReason`). */
+	stopReason: string | null;
 	/**
 	 * The focus session this run drives, or null when it has none — the door a
 	 * `waiting_on_you` mark opens (the owed slot lives on that session). A
@@ -52530,7 +52635,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52627,7 +52732,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52668,7 +52773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requires: unknown;
 					runHealth: RunHealth | null;
 					runner: unknown;
-					schedule: unknown;
+					schedule: PlaybookScheduleView | null;
 					scope: "project" | "session" | null;
 					servesGoals: ServedGoal[];
 					stages: unknown;
@@ -52690,7 +52795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				nextCursor: string | null;
-				playbooks: {
+				playbooks: (Omit<{
 					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
@@ -52718,7 +52823,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
-				}[];
+				}, "schedule"> & {
+					schedule: PlaybookScheduleView | null;
+				})[];
 			};
 		}>;
 		match: import("@trpc/server").TRPCQueryProcedure<{
@@ -60857,6 +60964,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SurfaceContext;
 		}>;
 	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		forObject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: SurfacesForObject;
+		}>;
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cellKey?: string | undefined;

@@ -104,7 +104,7 @@ if (typeof exports.default === 'function') {
   _mod.__EXPORT__ = {
     component: exports.default,
     meta: exports.meta || {
-      name: exports.default.displayName || exports.default.name || 'Widget',
+      name: exports.default.displayName || exports.default.name || 'Cell',
       displayModes: ['compact', 'medium', 'full'],
     },
     defaultProps: exports.defaultProps || {},
@@ -134,12 +134,12 @@ if (typeof exports.default === 'function') {
 
   if (result.errors.length > 0) {
     const messages = result.errors.map((e) => e.text).join("\n");
-    throw new Error(`Widget compilation errors:\n${messages}`);
+    throw new Error(`Cell compilation errors:\n${messages}`);
   }
 
   const output = result.outputFiles?.[0]?.text;
   if (!output) {
-    throw new Error("Widget compilation produced no output");
+    throw new Error("Cell compilation produced no output");
   }
 
   return output;
