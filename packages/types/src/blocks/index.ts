@@ -261,7 +261,11 @@ export function readLegacyBlock(raw: unknown): Block | null {
     if (instanceId) return { kind: "cell", cellKey, instanceId };
     const read = readProps(r);
     if ("error" in read) return null;
-    return { kind: "cell", cellKey, ...(read.props ? { props: read.props } : {}) };
+    return {
+      kind: "cell",
+      cellKey,
+      ...(read.props ? { props: read.props } : {}),
+    };
   }
   return null;
 }
@@ -293,8 +297,7 @@ export const BLOCK_EMBED_DIRECTIVES = {
   entity: "synap-entity",
   cell: "synap-cell",
 } as const satisfies Record<BlockKind, string>;
-export type BlockEmbedDirective =
-  (typeof BLOCK_EMBED_DIRECTIVES)[BlockKind];
+export type BlockEmbedDirective = (typeof BLOCK_EMBED_DIRECTIVES)[BlockKind];
 
 /** Is this embed directive one that carries a Block (not `synap-ask`, not a frame)? */
 export function isBlockEmbedDirective(
@@ -315,13 +318,18 @@ export function embedToBlock(embed: EmbedParts): Block | null {
     case "synap-view": {
       const viewId = str(ref.viewId) ?? str(ref["data-view-id"]);
       if (!viewId) return null;
-      const overrides = embed.props && hasProps(embed.props) ? embed.props : undefined;
+      const overrides =
+        embed.props && hasProps(embed.props) ? embed.props : undefined;
       return { kind: "view", viewId, ...(overrides ? { overrides } : {}) };
     }
     case "synap-entity": {
       const entityId = str(ref.id);
       if (!entityId) return null;
-      return readLegacyBlock({ kind: "entity", entityId, variant: ref.variant });
+      return readLegacyBlock({
+        kind: "entity",
+        entityId,
+        variant: ref.variant,
+      });
     }
     case "synap-cell": {
       const instanceId = str(ref.instanceId) ?? str(ref["data-instance-id"]);

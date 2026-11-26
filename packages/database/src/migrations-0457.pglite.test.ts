@@ -58,15 +58,29 @@ describe("migration 0457: cell type lifecycle columns", () => {
     const pg = await table();
     await pg.exec(M0457);
     expect(await rows(pg)).toEqual([
-      { type_key: "live-cell", status: "active", fallback: null, placements: null, anchor_kinds: null },
-      { type_key: "retired-cell", status: "retired", fallback: null, placements: null, anchor_kinds: null },
+      {
+        type_key: "live-cell",
+        status: "active",
+        fallback: null,
+        placements: null,
+        anchor_kinds: null,
+      },
+      {
+        type_key: "retired-cell",
+        status: "retired",
+        fallback: null,
+        placements: null,
+        anchor_kinds: null,
+      },
     ]);
   });
 
   it("is idempotent and leaves a status a writer set since", async () => {
     const pg = await table();
     await pg.exec(M0457);
-    await pg.exec(`UPDATE widget_definitions SET status = 'draft' WHERE type_key = 'live-cell'`);
+    await pg.exec(
+      `UPDATE widget_definitions SET status = 'draft' WHERE type_key = 'live-cell'`
+    );
     await pg.exec(M0457);
     expect((await rows(pg)).map((r) => r.status)).toEqual(["draft", "retired"]);
   });
@@ -74,7 +88,9 @@ describe("migration 0457: cell type lifecycle columns", () => {
   it("a row written after the migration is active by default", async () => {
     const pg = await table();
     await pg.exec(M0457);
-    await pg.exec(`INSERT INTO widget_definitions (type_key) VALUES ('new-cell')`);
+    await pg.exec(
+      `INSERT INTO widget_definitions (type_key) VALUES ('new-cell')`
+    );
     expect((await rows(pg)).at(-1)?.status).toBe("active");
   });
 

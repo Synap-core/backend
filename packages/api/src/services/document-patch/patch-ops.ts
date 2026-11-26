@@ -76,8 +76,8 @@ export const SECTION_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
  * markdown for now (its enum value would widen the generated API surface).
  */
 type InsertableEmbed = Extract<EmbedDirective, BlockEmbedDirective>;
-const INSERTABLE_EMBEDS = EMBED_DIRECTIVES.filter(
-  (d): d is InsertableEmbed => isBlockEmbedDirective(d)
+const INSERTABLE_EMBEDS = EMBED_DIRECTIVES.filter((d): d is InsertableEmbed =>
+  isBlockEmbedDirective(d)
 ) as [InsertableEmbed, ...InsertableEmbed[]];
 
 export const DocumentPatchOpSchema = z.discriminatedUnion("op", [

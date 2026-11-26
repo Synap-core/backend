@@ -269,8 +269,13 @@ export async function bentoBlockArrangeErrors(
   const cells = blocks
     .map((raw, index) => ({ raw, index, block: readLegacyBlock(raw) }))
     .filter(
-      (b): b is { raw: Record<string, unknown>; index: number; block: CellBlock } =>
-        b.block?.kind === "cell"
+      (
+        b
+      ): b is {
+        raw: Record<string, unknown>;
+        index: number;
+        block: CellBlock;
+      } => b.block?.kind === "cell"
     )
     .filter(
       ({ raw, block }) =>

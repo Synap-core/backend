@@ -148,9 +148,7 @@ export interface SheetViewBlock extends SheetCanvasBlockBase, ViewBlock {}
 export interface SheetEntityBlock extends SheetCanvasBlockBase, EntityBlock {}
 
 /** The one Block's cell arm by key (a sheet places cells inline), placed on the sheet. */
-export interface SheetCellBlock
-  extends SheetCanvasBlockBase,
-    KeyedCellBlock {}
+export interface SheetCellBlock extends SheetCanvasBlockBase, KeyedCellBlock {}
 
 export interface SheetNoteBlock extends SheetCanvasBlockBase {
   kind: "note";

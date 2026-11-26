@@ -99,7 +99,7 @@ describe("hub views.updateView validates the config before the gate", () => {
     expect(h.gate).not.toHaveBeenCalled();
   });
 
-  it("judges a canonical cell tile (`kind: \"cell\"`, `cellKey`) as it judges a widget: the spelling is no way round the gate", async () => {
+  it('judges a canonical cell tile (`kind: "cell"`, `cellKey`) as it judges a widget: the spelling is no way round the gate', async () => {
     const run = caller().updateView({
       userId: USER,
       viewId: VIEW_ID,
