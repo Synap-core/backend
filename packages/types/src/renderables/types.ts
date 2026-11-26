@@ -1089,6 +1089,11 @@ export interface FlowViewConfig {
 export interface BentoViewConfig {
   layout?: "bento" | "grid" | "flow";
   breakpoints?: Record<string, unknown>;
+  /**
+   * Stored tiles. This module is a leaf (no import outside it), so the typed
+   * shape is `StoredBentoBlock` (`@synap-core/types/views`, the bento schema
+   * built on the one Block); read each tile with `readLegacyBlock`.
+   */
   blocks?: unknown[];
 }
 
@@ -1203,8 +1208,15 @@ export type SemanticSectionKey =
   | "automate-govern" // AI actions and governance: Proposals, Automations
   | "layout-compose"; // Structure: Section Header, Link Grid, Iframe
 
+/**
+ * A cell TYPE in the code catalog (`WIDGET_DEFINITIONS`): the word is Cell.
+ * Same shape as the stored `widget_definitions` row now carries `status`,
+ * `fallback`, `placements` and `anchor_kinds` (migration 0457).
+ */
+export type CellTypeDef = WidgetCapabilityDef;
+
 export interface WidgetCapabilityDef {
-  /** Registry key used in bento block widgetType */
+  /** Registry key used in a bento cell block (`cellKey`, legacy `widgetType`) */
   key: WidgetTypeKey;
   name: string;
   description: string;
@@ -1594,16 +1606,20 @@ export interface CapabilitiesManifest {
 
 // ─── Template authoring helpers ───────────────────────────────────────────────
 
-/** Type-safe bento block definition for use in workspace templates. */
+/**
+ * Type-safe bento block definition for use in workspace templates: the legacy
+ * spelling (a cell by `widgetType` + `config`, its place inline), the catalog
+ * wire shape. Read it with `readLegacyBlock` (`@synap-core/types/blocks`).
+ */
 export interface BentoBlockDef {
   id?: string;
-  /** Widget type key */
+  /** Cell type key */
   widgetType: WidgetTypeKey;
   x: number;
   y: number;
   w: number;
   h: number;
-  /** Widget-specific config */
+  /** Cell-specific config */
   config?: Partial<WidgetConfigByType[WidgetTypeKey]>;
 }
 

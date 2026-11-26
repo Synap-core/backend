@@ -3561,6 +3561,13 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_sha256" text;
 -- nothing: the frame read door answers every ceiling read, logged undeclared.
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "reads" jsonb;
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "writes" jsonb;
+-- One cell type registry (0457): lifecycle status (draft | proposed | active |
+-- retired, backfilled from is_active), markdown fallback, placements and the
+-- anchor kinds it may be attached to. NULL = no narrowing.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "status" text NOT NULL DEFAULT 'active';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "fallback" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "placements" jsonb;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "anchor_kinds" jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

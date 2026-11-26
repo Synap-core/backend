@@ -67,19 +67,15 @@ import {
   type WorkspaceSettings,
 } from "@synap/database";
 import { isPackageCellRendererType } from "@synap/database/schema";
+import type { StoredBentoBlock } from "@synap-core/types";
+import { readLegacyBlock } from "@synap-core/types/blocks";
 import { detachMarketSource } from "./capabilities/market-source.js";
 
-/** Home/profile bento block as stored in a bento view's `config.blocks`. */
-interface StoredBentoBlock {
-  id?: string;
-  kind?: "widget" | "view";
-  widgetType?: string;
-  viewId?: string;
-  viewName?: string;
-  pos?: { x: number; y: number; w: number; h: number };
-  config?: Record<string, unknown>;
-  overrides?: Record<string, unknown>;
-}
+/**
+ * A home/profile bento tile as stored (`StoredBentoBlock`, the one Block + its
+ * place), plus the `viewName` an exported view tile names its view by.
+ */
+type ExportedBentoBlock = StoredBentoBlock & { viewName?: string };
 
 /**
  * Serialize a live workspace into a `PackageDefinition`. READ-ONLY. The caller
@@ -227,12 +223,17 @@ export async function workspaceToPackageDefinition(opts: {
     slugForProfileId[id] = slug;
 
   /** viewId → viewName inside a bento block list (for re-appliable references). */
-  const deRefBlocks = (blocks: StoredBentoBlock[]): StoredBentoBlock[] =>
+  const deRefBlocks = (
+    blocks: ExportedBentoBlock[]
+  ): Array<Partial<ExportedBentoBlock>> =>
     blocks.map((b) => {
       if (b.kind === "view" && b.viewId) {
         const nm = viewNameById[b.viewId];
-        const next: StoredBentoBlock = { ...b, viewName: nm ?? b.viewName };
-        delete next.viewId;
+        const next: Partial<ExportedBentoBlock> = {
+          ...b,
+          viewName: nm ?? b.viewName,
+        };
+        delete (next as { viewId?: string }).viewId;
         return next;
       }
       return b;
@@ -246,15 +247,25 @@ export async function workspaceToPackageDefinition(opts: {
       const blocks = Array.isArray(
         (v.config as Record<string, unknown>)?.blocks
       )
-        ? ((v.config as Record<string, unknown>).blocks as StoredBentoBlock[])
+        ? ((v.config as Record<string, unknown>).blocks as ExportedBentoBlock[])
         : [];
-      const widgetBlocks = blocks.filter((b) => b.kind === "widget");
-      const viewBlocks = blocks.filter((b) => b.kind === "view");
-      if (widgetBlocks.length > 0) {
-        def.bentoLayout = widgetBlocks.map((b) => ({
-          widgetType: b.widgetType ?? "empty",
+      // Cell tiles in either spelling (legacy `widget`, canonical `cell`),
+      // written in the package's `bentoLayout` wire shape (`widgetType`).
+      const cellTiles = blocks.flatMap((b) => {
+        const block = readLegacyBlock(b);
+        return block?.kind === "cell" && block.cellKey
+          ? [{ b, cellKey: block.cellKey, props: block.props }]
+          : [];
+      });
+      const viewBlocks = blocks.filter(
+        (b): b is Extract<ExportedBentoBlock, { kind: "view" }> =>
+          b.kind === "view"
+      );
+      if (cellTiles.length > 0) {
+        def.bentoLayout = cellTiles.map(({ b, cellKey, props }) => ({
+          widgetType: cellKey,
           pos: b.pos ?? { x: 0, y: 0, w: 4, h: 2 },
-          config: b.config,
+          config: props,
         }));
       }
       if (viewBlocks.length > 0) {
@@ -280,7 +291,7 @@ export async function workspaceToPackageDefinition(opts: {
     if (config && Array.isArray(config.blocks)) {
       config = {
         ...config,
-        blocks: deRefBlocks(config.blocks as StoredBentoBlock[]),
+        blocks: deRefBlocks(config.blocks as ExportedBentoBlock[]),
       };
     }
     emittedViews.push({

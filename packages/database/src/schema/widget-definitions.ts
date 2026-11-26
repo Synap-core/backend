@@ -20,7 +20,12 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { CONTENT_KINDS, type ContentKind } from "@synap-core/types/renderables";
+import {
+  CONTENT_KINDS,
+  type ContentKind,
+  type Placement,
+} from "@synap-core/types/renderables";
+import type { AnchorKind } from "@synap-core/types/surfaces";
 import type {
   CellBridgeDeclaredReads,
   CellBridgeDeclaredWrites,
@@ -78,6 +83,20 @@ export function isPackageCellRendererType(
  * unspecified row can never write directly.
  */
 export type WidgetTrustLevel = "trusted" | "installed" | "generated";
+
+/**
+ * Where a stored cell type stands (migration 0457). `draft` = being authored,
+ * `proposed` = waiting on a person's approval, `active` = placeable,
+ * `retired` = uninstalled (kept for history and undo). Backfilled from
+ * `is_active`; the writers that flip `is_active` write it too.
+ */
+export const CELL_TYPE_STATUSES = [
+  "draft",
+  "proposed",
+  "active",
+  "retired",
+] as const;
+export type CellTypeStatus = (typeof CELL_TYPE_STATUSES)[number];
 
 /**
  * Functional role of a widget/cell definition — what surface it targets.
@@ -311,6 +330,22 @@ export const widgetDefinitions = pgTable(
      * the governed doors and the cell type's trust). NULL = declares nothing.
      */
     writes: jsonb("writes").$type<CellBridgeDeclaredWrites>(),
+
+    /**
+     * Where this cell type stands: draft | proposed | active | retired
+     * (`CELL_TYPE_STATUSES`). Backfilled from `is_active` (migration 0457);
+     * written with it by every writer that flips it.
+     */
+    status: text("status").notNull().default("active").$type<CellTypeStatus>(),
+
+    /** The markdown a host without this cell shows (the catalog's `fallback`). NULL = none. */
+    fallback: text("fallback"),
+
+    /** The bodies it may be placed in (the catalog's `placements`). NULL = every placement. */
+    placements: jsonb("placements").$type<Placement[]>(),
+
+    /** The objects it may be anchored to (`AnchorKind`). NULL = any. */
+    anchorKinds: jsonb("anchor_kinds").$type<AnchorKind[]>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
