@@ -873,7 +873,7 @@ async function writeCell(
     defaultSize: input.defaultSize ?? { w: 6, h: 4 },
     ...(input.minSize === undefined ? {} : { minSize: input.minSize }),
     isActive: true,
-    status: "active",
+    status: "active" as const,
     trustLevel: input.trustLevel ?? ("generated" as const),
     reads: reads ?? null,
     writes: writes ?? null,
