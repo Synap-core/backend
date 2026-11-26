@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 131,
+  "toolCount": 133,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -42,6 +42,7 @@
       "synap_diagnose",
       "synap_template_health",
       "synap_get_flow",
+      "synap_get_home",
       "synap_read_board"
     ],
     "data": [
@@ -5357,6 +5358,66 @@
           }
         },
         "required": ["profileSlug"]
+      }
+    },
+    {
+      "name": "synap_get_home",
+      "title": "Get Home or Moving now",
+      "group": "read",
+      "annotations": {
+        "title": "Get Home or Moving now",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.",
+      "parameters": [
+        {
+          "name": "view",
+          "type": "enum",
+          "required": false,
+          "description": "home (default) or moving.",
+          "enum": ["home", "moving"]
+        },
+        {
+          "name": "projectId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: only this project's spaces and things."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "moving only, optional: only this space."
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "moving only: things (default 30, max 100)."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": ["home", "moving"],
+            "description": "home (default) or moving."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Optional: only this project's spaces and things."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "moving only, optional: only this space."
+          },
+          "limit": {
+            "type": "number",
+            "description": "moving only: things (default 30, max 100)."
+          }
+        }
       }
     },
     {
@@ -11950,7 +12011,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type \"bento\"; think together → type \"whiteboard\"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+      "description": "Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type \"bento\"; think together → type \"whiteboard\"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of sheet, table, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
       "parameters": [
         { "name": "name", "type": "string", "required": true },
         {
@@ -11959,6 +12020,7 @@
           "required": true,
           "enum": [
             "sheet",
+            "table",
             "list",
             "grid",
             "gallery",
@@ -12039,6 +12101,7 @@
             "type": "string",
             "enum": [
               "sheet",
+              "table",
               "list",
               "grid",
               "gallery",

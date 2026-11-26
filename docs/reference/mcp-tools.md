@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 131 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 133 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -50,6 +50,7 @@ The pod's MCP server lists 131 tools. A new agent key lists the `entry` tools; t
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
 | [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
+| [`synap_get_home`](#synap_get_home)                                       | Get Home or Moving now            | read         | yes       |
 | [`synap_read_board`](#synap_read_board)                                   | Read a whiteboard                 | read         | yes       |
 | [`synap_find_surfaces`](#synap_find_surfaces)                             | Find an object's surfaces         | build        | yes       |
 | [`synap_inspect_surface`](#synap_inspect_surface)                         | Inspect a surface                 | build        | yes       |
@@ -880,6 +881,19 @@ How a kind's or role's work flows in a space, in ONE read — read-only. `states
 | `workspaceId` | string | no       | Optional: the space. Omitted = every space you see.        |
 | `projectId`   | string | no       | Optional: only this project's things.                      |
 | `firstN`      | number | no       | Cards per state (default 10, max 50); counts are exact.    |
+
+## synap_get_home
+
+**Get Home or Moving now** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.
+
+| Parameter     | Type   | Required | Description                                         |
+| ------------- | ------ | -------- | --------------------------------------------------- |
+| `view`        | enum   | no       | home (default) or moving. One of: `home`, `moving`. |
+| `projectId`   | string | no       | Optional: only this project's spaces and things.    |
+| `workspaceId` | string | no       | moving only, optional: only this space.             |
+| `limit`       | number | no       | moving only: things (default 30, max 100).          |
 
 ## synap_read_board
 
@@ -1824,12 +1838,12 @@ Serialize a live project for marketplace: returns { definition: thin suite, cons
 
 **Create view** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
-Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type "bento"; think together → type "whiteboard"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.
+Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type "bento"; think together → type "whiteboard"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of sheet, table, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.
 
 | Parameter        | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                               |
 | ---------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`           | string | yes      |                                                                                                                                                                                                                                                                                                                                                           |
-| `type`           | enum   | yes      | One of: `sheet`, `list`, `grid`, `gallery`, `kanban`, `matrix`, `masonry`, `calendar`, `gantt`, `timeline`, `graph`, `flow`, `map`, `bento`, `whiteboard`, `pipeline`.                                                                                                                                                                                    |
+| `type`           | enum   | yes      | One of: `sheet`, `table`, `list`, `grid`, `gallery`, `kanban`, `matrix`, `masonry`, `calendar`, `gantt`, `timeline`, `graph`, `flow`, `map`, `bento`, `whiteboard`, `pipeline`.                                                                                                                                                                           |
 | `attachTo`       | object | no       | Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.                                                                                                                                                                                                                  |
 | `workspaceId`    | string | no       | The workspace the view lives in. Required unless projectId is given.                                                                                                                                                                                                                                                                                      |
 | `projectId`      | string | no       | Pin the view to a project: it shows only the project's members. Without workspaceId it reads across every workspace the project spans.                                                                                                                                                                                                                    |
