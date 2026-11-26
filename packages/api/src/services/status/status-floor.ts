@@ -4,7 +4,9 @@
  * `readStatusOf` (`status-read.ts`) reads its things, goals and sessions
  * through these, and the realtime status events (`status-realtime.ts`) reach
  * exactly the users they admit. One floor, two consumers: a status event
- * never reaches anyone `statusOf` would answer `unknown`.
+ * never reaches anyone `statusOf` would answer `unknown`. A pod-wide
+ * entity's `entity:*` push (`domain-event-bridge.ts`) reaches the same
+ * readers of the thing ({@link entityAudience}).
  *
  *   thing    the entity read floor (`entityReadVisibleWhere`), not deleted;
  *   role     a role's status is read only through the thing's roles
@@ -187,18 +189,50 @@ const audienceMemo = new Map<
 >();
 
 function readAudience(subject: StatusSubjectRef): Promise<string[]> {
+  return readersOf((userId) => canReadStatus(userId, subject));
+}
+
+/**
+ * Every user of the pod `mayRead` admits, asked OUTSIDE the request that
+ * made the write (the writer's key grant never narrows another reader).
+ * THROWS: a failed read is not "nobody".
+ */
+function readersOf(
+  mayRead: (userId: string) => Promise<boolean>
+): Promise<string[]> {
   return runOutsideRequestContext(async () => {
     const everyone = await db.select({ id: users.id }).from(users);
     const readers: string[] = [];
     for (let i = 0; i < everyone.length; i += AUDIENCE_CONCURRENCY) {
       const part = everyone.slice(i, i + AUDIENCE_CONCURRENCY);
-      const ok = await Promise.all(
-        part.map((u) => canReadStatus(u.id, subject))
-      );
+      const ok = await Promise.all(part.map((u) => mayRead(u.id)));
       part.forEach((u, j) => {
         if (ok[j]) readers.push(u.id);
       });
     }
     return readers;
+  });
+}
+
+/**
+ * Every user who may read this ENTITY — the audience of a pod-wide entity's
+ * `entity:*` push (`domain-event-bridge.ts`): the thing's status audience
+ * (the entity read floor), so an entity's change and its status move reach
+ * the same people. A DELETED entity is floored without its `deletedAt` guard
+ * (a soft delete keeps the row and its roles); a row already gone (a hard
+ * delete) has no readers left to compute and answers []. THROWS.
+ */
+export function entityAudience(
+  entityId: string,
+  opts: { deleted?: boolean } = {}
+): Promise<string[]> {
+  if (!opts.deleted) return statusAudience({ type: "entity", id: entityId });
+  return readersOf(async (userId) => {
+    const rows = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(and(eq(entities.id, entityId), entityReadVisibleWhere(userId)))
+      .limit(1);
+    return rows.length > 0;
   });
 }

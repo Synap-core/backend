@@ -130,6 +130,16 @@ export async function createHubProtocolCaller(
  * `messageId` is intentionally excluded — messages aren't openable, and
  * post_message already resolves via `channelId` (which precedes it here).
  */
+/** A surface result's own `openUrl` (`/open/<kind>/<id>?surface=<id>`). */
+function surfaceOpenUrl(data: unknown): string | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    return undefined;
+  const url = (data as Record<string, unknown>).openUrl;
+  return typeof url === "string" && /\/open\/[^/?]+\/[^/?]+\?surface=/.test(url)
+    ? url
+    : undefined;
+}
+
 function primaryObjectId(data: unknown): string | undefined {
   if (!data || typeof data !== "object" || Array.isArray(data))
     return undefined;
@@ -255,10 +265,15 @@ export function ok(data: unknown): CallToolResult {
   // automation, channel, project, …). Every
   // handler flows through this one shaper, so no per-handler edits are needed;
   // arrays, id-less objects, and non-openable ids simply get no link.
-  const id = primaryObjectId(data);
+  // A surface write (Surfaces P3) already carries its one link: the object's
+  // page on that surface, `/open/<kind>/<id>?surface=<surfaceId>`
+  // (`attachedSurfaceOpenUrl`). It is the link, never a second one.
+  const surfaceLink = surfaceOpenUrl(data);
+  const id = surfaceLink ? undefined : primaryObjectId(data);
+  const link = surfaceLink ?? (id ? openLink(id) : undefined);
   let payload =
-    id && data && typeof data === "object" && !Array.isArray(data)
-      ? { ...(data as Record<string, unknown>), link: openLink(id) }
+    link && data && typeof data === "object" && !Array.isArray(data)
+      ? { ...(data as Record<string, unknown>), link }
       : data;
   if (
     payload &&

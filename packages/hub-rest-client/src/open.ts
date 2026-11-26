@@ -3,26 +3,49 @@
  *
  * HTTPS (canonical, type-probed by GET /open/:id):
  *   `{pod}/open/<id>`
+ * HTTPS, one surface ATTACHED to an object (Surfaces P3): the object's page,
+ * opened on that surface:
+ *   `{pod}/open/<kind>/<id>?surface=<surfaceId>`
  *
  * Desktop (needs a kind; the Browser route table is object-nav.ts):
  *   `synap://open/<kind>/<id>`
  *
  * Server-side sibling with PUBLIC_URL: packages/api/src/utils/deep-links.ts.
- * Keep the path `/open/<id>` byte-identical.
+ * Keep `openPath` (and `OpenPathOptions`) byte-identical with it.
  */
 
 function normalizePodUrl(podUrl: string): string {
   return podUrl.replace(/\/+$/, "");
 }
 
-/** Pod-relative path: `/open/<id>`. */
-export function openPath(id: string): string {
-  return `/open/${encodeURIComponent(id)}`;
+/**
+ * `kind` types the link (`/open/<kind>/<id>`); `surface` opens the object's
+ * page on one surface attached to it (`?surface=<surfaceId>`, needs `kind`).
+ */
+export interface OpenPathOptions {
+  kind?: string;
+  surface?: string;
 }
 
-/** Canonical https locator: `${podUrl}/open/<id>`. */
-export function openUrl(podUrl: string, id: string): string {
-  return `${normalizePodUrl(podUrl)}${openPath(id)}`;
+/**
+ * Pod-relative path: `/open/<id>`, `/open/<kind>/<id>`, or
+ * `/open/<kind>/<id>?surface=<surfaceId>`.
+ */
+export function openPath(id: string, opts?: OpenPathOptions): string {
+  const kind = opts?.kind ? `${encodeURIComponent(opts.kind)}/` : "";
+  const path = `/open/${kind}${encodeURIComponent(id)}`;
+  return opts?.kind && opts.surface
+    ? `${path}?surface=${encodeURIComponent(opts.surface)}`
+    : path;
+}
+
+/** Canonical https locator: `${podUrl}/open/<id>` (or typed, with a surface). */
+export function openUrl(
+  podUrl: string,
+  id: string,
+  opts?: OpenPathOptions
+): string {
+  return `${normalizePodUrl(podUrl)}${openPath(id, opts)}`;
 }
 
 /**

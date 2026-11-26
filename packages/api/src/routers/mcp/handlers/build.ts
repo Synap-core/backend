@@ -97,6 +97,12 @@ import {
   stagesRevision,
 } from "../../../services/playbooks/stage-edits.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
+import type {
+  CreatableSurfaceBody,
+  SurfaceAnchor,
+  SurfaceRef,
+  SurfaceSpec,
+} from "@synap-core/types/surfaces";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
@@ -112,6 +118,104 @@ import {
   compactScorecard,
   computePlaybookScorecards,
 } from "@synap/jobs/utils/playbook-scorecard.js";
+
+/**
+ * A surface write's answer: a refusal or a denial is a tool error (nothing was
+ * filed or written); `proposed` and every applied outcome go back as they are,
+ * with their `/open/<kind>/<id>?surface=<id>` link (`ok()`).
+ */
+function surfaceAnswer(
+  toolName: string,
+  outcome: { status: string }
+): CallToolResult {
+  const o = outcome as unknown as Record<string, unknown>;
+  if (o.status === "refused") {
+    return toolError(`Tool '${toolName}': ${o.error as string}`);
+  }
+  if (o.status === "denied") {
+    return toolError(`Tool '${toolName}': ${o.reason as string}`);
+  }
+  return ok(outcome);
+}
+
+/**
+ * `synap_promote_cell_to_renderer` for ONE playbook, aliased onto the surface
+ * door (Surfaces P3): binding makes the cell the playbook's look in `slot`
+ * (a new cell instance, attached, replacing the slot's earlier look); `clear`
+ * takes the slot's looks off. Same governance as the surface door: an agent's
+ * call is a proposal.
+ */
+async function promoteOntoAttachment(
+  ctx: McpToolContext,
+  input: {
+    playbookId: string;
+    slot: string;
+    cellKey: string | null;
+    props?: Record<string, unknown>;
+    workspaceId: string | null;
+    reasoning?: string;
+  }
+): Promise<CallToolResult> {
+  const { toolName, userId, agentUserId, sessionId } = ctx;
+  const actor = {
+    userId,
+    agentUserId: agentUserId ?? null,
+    sessionId: sessionId ?? null,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+    door: toolName,
+  };
+  const anchor = { kind: "playbook" as const, id: input.playbookId };
+  const target = { kind: "playbook", id: input.playbookId };
+  if (input.cellKey) {
+    const { createSurface } =
+      await import("../../../services/surfaces/create.js");
+    const outcome = await createSurface(
+      actor,
+      {
+        anchor,
+        body: "cell",
+        title: input.cellKey,
+        spec: {
+          cellKey: input.cellKey,
+          ...(input.props ? { props: input.props } : {}),
+          ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        },
+        slot: input.slot,
+      },
+      { replaceSlot: true }
+    );
+    const o = outcome as unknown as Record<string, unknown>;
+    if (o.status === "refused" || o.status === "denied") {
+      return surfaceAnswer(toolName, outcome);
+    }
+    return ok({ ...o, target, slot: input.slot, via: "attached" });
+  }
+  // Clear: every look the playbook carries in that slot comes off.
+  const { attachmentsInSlot, detachSurface } =
+    await import("../../../services/surfaces/attach.js");
+  const inSlot = await attachmentsInSlot(anchor, input.slot);
+  const outcomes = [];
+  for (const row of inSlot) {
+    const outcome = await detachSurface(actor, { anchor, surface: row });
+    const o = outcome as unknown as Record<string, unknown>;
+    if (o.status === "refused" || o.status === "denied") {
+      return surfaceAnswer(toolName, outcome);
+    }
+    outcomes.push(outcome);
+  }
+  return ok({
+    status:
+      outcomes.length === 0
+        ? "absent"
+        : outcomes.some((o) => o.status === "proposed")
+          ? "proposed"
+          : "detached",
+    outcomes,
+    target,
+    slot: input.slot,
+    via: "attached",
+  });
+}
 
 function playbookDoorIdentity(ctx: McpToolContext): PlaybookDoorIdentity {
   return {
@@ -217,6 +321,8 @@ export const buildHandlers: McpHandlerMap = {
         contentKind: z.enum(CONTENT_KINDS).optional(),
         /** Place the cell as a tile on this bento view when it is defined. */
         placeOn: CellPlacementSchema.optional(),
+        /** The frame's declared reads (checked below, `readDeclaredFrameIo`). */
+        reads: z.unknown().optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -226,6 +332,14 @@ export const buildHandlers: McpHandlerMap = {
           .join(", ")}`
       );
     }
+    // A declaration outside the ceiling is refused before anything is filed.
+    const { readDeclaredFrameIo, declaredFrameIoFields } =
+      await import("../../../services/cells/declared-frame-io.js");
+    const declared = readDeclaredFrameIo(parsed.data);
+    if (!declared.ok) {
+      throw new Error(`Invalid synap_create_cell args: ${declared.error}`);
+    }
+    const declaredFields = declaredFrameIoFields(declared);
     const cellWorkspaceId = parsed.data.workspaceId ?? null;
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
@@ -281,6 +395,9 @@ export const buildHandlers: McpHandlerMap = {
         // Where approving places the cell: the executor defines it AND adds
         // its tile to this view, in one act.
         ...(placeOn ? { placeOn } : {}),
+        // What its frame declares it reads / writes: the reviewer sees it,
+        // the executor stores it.
+        ...declaredFields,
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -323,6 +440,7 @@ export const buildHandlers: McpHandlerMap = {
       viewTypes: parsed.data.viewTypes,
       contentKind: parsed.data.contentKind,
       placeOn: parsed.data.placeOn,
+      ...declaredFields,
       userId,
     });
     return ok({ status: result.changeType, ...result });
@@ -352,6 +470,22 @@ export const buildHandlers: McpHandlerMap = {
     const reasoning = readReasoning(args);
     const props = args.props as Record<string, unknown> | undefined;
 
+    // ONE playbook's own look is an ATTACHED surface since Surfaces P3
+    // (founder decision 23 Nov 2026): the door is aliased onto the surface
+    // door — a cell instance attached to the playbook in its slot, the slot's
+    // earlier look taken off (`surface/create`); `clear` takes the slot's look
+    // off (`surface/detach`). A VIEW's own look stays a renderer binding: a
+    // view is not an anchor kind (`ANCHOR_KINDS`).
+    if (target.kind === "playbook") {
+      return promoteOntoAttachment(ctx, {
+        playbookId: target.id,
+        slot,
+        cellKey: clear ? null : cellKey!,
+        props,
+        workspaceId,
+        reasoning,
+      });
+    }
     // Governed: for an AI agent each door returns `status: 'proposed'`
     // (binding an AI-generated cell as a durable renderer is consequential);
     // an operator auto-applies.
@@ -402,6 +536,73 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: scope === "workspace" ? workspaceId : null,
     });
     return ok({ ...result, target, slot, nowBound });
+  },
+  /**
+   * Make a surface FOR one object (Surfaces P3): the body and its `attaches`
+   * link in one governed act (`surface/create`), through the service tRPC
+   * `surfaces.create` and Hub `POST /surfaces` call.
+   */
+  synap_create_surface: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { createSurface } =
+      await import("../../../services/surfaces/create.js");
+    const outcome = await createSurface(
+      {
+        userId,
+        agentUserId: agentUserId ?? null,
+        sessionId: sessionId ?? null,
+        ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+        door: toolName,
+      },
+      {
+        anchor: args.anchor as SurfaceAnchor,
+        body: args.body as CreatableSurfaceBody,
+        title: typeof args.title === "string" ? args.title : "",
+        spec: (args.spec ?? {}) as SurfaceSpec,
+        ...(typeof args.slot === "string" ? { slot: args.slot } : {}),
+        ...(typeof args.label === "string" ? { label: args.label } : {}),
+      }
+    );
+    return surfaceAnswer(toolName, outcome);
+  },
+  /**
+   * Put an existing surface on one object, or take it off (`detach: true`):
+   * `surface/attach` | `surface/detach`, the service tRPC and Hub REST call.
+   */
+  synap_attach_surface: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { attachSurface, detachSurface } =
+      await import("../../../services/surfaces/attach.js");
+    const actor = {
+      userId,
+      agentUserId: agentUserId ?? null,
+      sessionId: sessionId ?? null,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+      door: toolName,
+    };
+    const anchor = args.anchor as SurfaceAnchor;
+    const surface = args.surface as SurfaceRef;
+    const outcome =
+      args.detach === true
+        ? await detachSurface(actor, { anchor, surface })
+        : await attachSurface(actor, {
+            anchor,
+            surface,
+            ...(typeof args.slot === "string" ? { slot: args.slot } : {}),
+            ...(typeof args.label === "string" ? { label: args.label } : {}),
+            ...(typeof args.position === "number"
+              ? { position: args.position }
+              : {}),
+          });
+    return surfaceAnswer(toolName, outcome);
   },
   synap_propose_app_from_playbook: async (
     ctx: McpToolContext
@@ -943,6 +1144,48 @@ export const buildHandlers: McpHandlerMap = {
       confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // A view FOR one object (`attachTo`) is made by the surface door: the
+    // view and its `attaches` link in one governed act (Surfaces P3). Without
+    // it, the view's anchor is its space or project pin, as before.
+    if (args.attachTo !== undefined) {
+      if (args.initialContent !== undefined) {
+        return toolError(
+          `Tool '${toolName}': initialContent is not taken with attachTo. Make the board for the object, then add shapes with synap_update_view_content.`
+        );
+      }
+      const { createSurface } =
+        await import("../../../services/surfaces/create.js");
+      const type = String(args.type ?? "");
+      const outcome = await createSurface(
+        {
+          userId,
+          agentUserId: agentUserId ?? null,
+          sessionId: ctx.sessionId ?? null,
+          ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+          door: toolName,
+        },
+        {
+          anchor: args.attachTo as SurfaceAnchor,
+          body:
+            type === "bento" || type === "whiteboard"
+              ? type
+              : ("view" as const),
+          title: typeof args.name === "string" ? args.name : "",
+          spec: {
+            ...(type && type !== "bento" && type !== "whiteboard"
+              ? { viewType: type }
+              : {}),
+            ...(args.config
+              ? { config: args.config as Record<string, unknown> }
+              : {}),
+            ...(requestedWorkspaceId
+              ? { workspaceId: confinedWorkspaceId ?? requestedWorkspaceId }
+              : {}),
+          },
+        }
+      );
+      return surfaceAnswer(toolName, outcome);
+    }
     const projectId =
       typeof args.projectId === "string" && args.projectId.trim()
         ? args.projectId.trim()

@@ -96,14 +96,81 @@ export const DocumentAnchorSchema = z
   .strict();
 export type DocumentAnchor = z.infer<typeof DocumentAnchorSchema>;
 
+/** Longest frame / block / story id and `contentVersion` a locator carries. */
+export const COMMENT_LOCATOR_TOKEN_MAX = 200;
+
+const locatorToken = (what: string) =>
+  z
+    .string()
+    .trim()
+    .min(1, `${what} is empty`)
+    .max(
+      COMMENT_LOCATOR_TOKEN_MAX,
+      `${what} is longer than ${COMMENT_LOCATOR_TOKEN_MAX} characters`
+    );
+
+const locatorFraction = (axis: "x" | "y") =>
+  z
+    .number()
+    .min(0, `point.${axis} is a fraction of the frame, from 0 to 1`)
+    .max(1, `point.${axis} is a fraction of the frame, from 0 to 1`);
+
+/** What every pin carries, whatever surface it sits on. */
+const locatorPlace = {
+  /** The viewport the commenter saw the surface at. */
+  viewport: z.enum(["desktop", "tablet", "phone"]),
+  /** Where on the frame or story, as fractions: survives resizing. */
+  point: z
+    .object({ x: locatorFraction("x"), y: locatorFraction("y") })
+    .strict(),
+  /** The design revision or the component's source hash the commenter saw;
+   *  a later reader marks the pin stale when it differs (the stale mark, like
+   *  a document anchor's `revision`). */
+  contentVersion: locatorToken("contentVersion"),
+  /** A pod file (its id) holding the crop around the pin. Shape only: a
+   *  reader fetches it through the file door, under that reader's own floor. */
+  screenshot: z
+    .string()
+    .uuid("screenshot is a pod file id (a uuid)")
+    .optional(),
+};
+
 /**
- * A comment on an ENTITY: the entity's object room, optionally one field.
+ * WHERE on a designed surface an entity comment is pinned (Design app board
+ * annotations, plan 48854969 §10.1). A pin sits EITHER on a design (a frame,
+ * optionally one block in it) OR on a story (a component or page story),
+ * never both: each branch is strict, so a design pin naming a `storyId` (or a
+ * story pin naming a frame) is refused.
+ */
+export const CommentLocatorSchema = z.discriminatedUnion("surface", [
+  z
+    .object({
+      surface: z.literal("design"),
+      frameId: locatorToken("frameId"),
+      blockId: locatorToken("blockId").optional(),
+      ...locatorPlace,
+    })
+    .strict(),
+  z
+    .object({
+      surface: z.literal("story"),
+      storyId: locatorToken("storyId"),
+      ...locatorPlace,
+    })
+    .strict(),
+]);
+export type CommentLocator = z.infer<typeof CommentLocatorSchema>;
+
+/**
+ * A comment on an ENTITY: the entity's object room, optionally one field, and
+ * optionally the exact place on a designed surface (`locator`).
  */
 export const EntityAnchorSchema = z
   .object({
     kind: z.literal("entity"),
     entityId: z.string().uuid(),
     field: z.string().trim().min(1).max(MESSAGE_ANCHOR_TOKEN_MAX).optional(),
+    locator: CommentLocatorSchema.optional(),
   })
   .strict();
 export type EntityAnchor = z.infer<typeof EntityAnchorSchema>;

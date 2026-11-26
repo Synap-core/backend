@@ -6879,6 +6879,203 @@ declare const COMPOSITE_VIEW_TYPES: readonly [
 	"bento"
 ];
 export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
+declare const CELL_BRIDGE_READ_OPS: {
+	readonly "attention.count": readonly [
+		"profileSlug",
+		"trackId"
+	];
+	readonly "attention.needsYou": readonly [
+		"profileSlug",
+		"trackId",
+		"limit"
+	];
+	readonly "documents.get": readonly [
+		"documentId",
+		"format"
+	];
+	readonly "entities.get": readonly [
+		"id"
+	];
+	readonly "entities.list": readonly [
+		"profileSlug",
+		"facetSlug",
+		"includeDescendants",
+		"limit",
+		"offset"
+	];
+	readonly "flow.of": readonly [
+		"profileSlug",
+		"trackId",
+		"windowDays",
+		"firstN",
+		"properties"
+	];
+	readonly "lens.page": readonly [
+		"since"
+	];
+	readonly "lifecycle.board": readonly [
+		"profileSlug",
+		"trackId",
+		"windowDays",
+		"firstN",
+		"column",
+		"cursor",
+		"limit",
+		"workedBy"
+	];
+	readonly "lifecycle.get": readonly [
+		"profileSlug"
+	];
+	readonly "lifecycle.home": readonly [
+	];
+	readonly "lifecycle.moving": readonly [
+		"limit"
+	];
+	readonly "lifecycle.throughput": readonly [
+		"profileSlug",
+		"trackId",
+		"bucket",
+		"count"
+	];
+	readonly "playbook.process": readonly [
+		"playbookId"
+	];
+	readonly "playbook.scorecard": readonly [
+		"playbookId"
+	];
+	readonly "profiles.get": readonly [
+		"identifier",
+		"fill"
+	];
+	readonly "profiles.list": readonly [
+		"creatableOnly"
+	];
+	readonly "project.pillars": readonly [
+		"id"
+	];
+	readonly "propertyDefs.list": readonly [
+		"profileId"
+	];
+	readonly "sessions.get": readonly [
+		"id"
+	];
+	readonly "sessions.list": readonly [
+		"profileSlug",
+		"entityId",
+		"status",
+		"kind",
+		"limit"
+	];
+	readonly "views.execute": readonly [
+		"id",
+		"limit",
+		"offset"
+	];
+	readonly "views.get": readonly [
+		"id"
+	];
+	readonly "views.list": readonly [
+		"type",
+		"profileSlug",
+		"limit",
+		"offset"
+	];
+};
+export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;
+declare const CELL_BRIDGE_WRITE_OPS: {
+	readonly create_entity: {
+		readonly profileSlug: "string!";
+		readonly properties: "object";
+		readonly title: "string";
+	};
+	readonly create_relation: {
+		readonly sourceEntityId: "uuid!";
+		readonly targetEntityId: "uuid!";
+		readonly type: "slug64!";
+	};
+	readonly delete_entity: {
+		readonly id: "uuid!";
+	};
+	readonly update_entity: {
+		readonly expectedStatus: "string|null";
+		readonly id: "uuid!";
+		readonly properties: "object";
+		readonly title: "string";
+	};
+};
+export type CellBridgeWriteOp = keyof typeof CELL_BRIDGE_WRITE_OPS;
+declare const CELL_BRIDGE_ANY_VALUE: "*";
+/** One declared read: an op of the ceiling, optionally pinned params. */
+export interface CellBridgeDeclaredRead {
+	op: CellBridgeReadOp;
+	/** Param name (of the op's own list) → exact value, or `"*"`. */
+	params?: Partial<Record<string, string | typeof CELL_BRIDGE_ANY_VALUE>>;
+}
+export type CellBridgeDeclaredReads = CellBridgeDeclaredRead[];
+/** One declared write: an op of the write ceiling. */
+export interface CellBridgeDeclaredWrite {
+	op: CellBridgeWriteOp;
+}
+export type CellBridgeDeclaredWrites = CellBridgeDeclaredWrite[];
+/**
+ * What a frame is ABOUT, and the brand it draws in (frame contract v3).
+ *
+ * Every frame that runs stored code (a stored HTML page, a module cell, a
+ * renderer bundle cell) sits on something: an entity, a project, a session.
+ * The host knows that anchor, the space and project it belongs to, the goal
+ * a session serves, and the project's brand; the frame asks for them with one
+ * call:
+ *
+ *   window.synap.context() → Promise<SurfaceContext>
+ *
+ * which posts `synap:context` and resolves with the matching
+ * `synap:context:result` (`sdk.ts`). A module frame also receives the same
+ * fields in its `synap:init` context (`CellFrameInitContext`,
+ * `surfaceContextInitFields`).
+ *
+ * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
+ * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
+ * projection) with `brandFrameCss`, and written AFTER the host's tokens
+ * (`frameTokensWithBrand`), so a name the brand does not set keeps the
+ * host's value. No brand (no project, or a project with no token set) is
+ * `brand: null`, never a failure.
+ *
+ * Pure, like the rest of this leaf: no DOM, no fetch.
+ */
+/**
+ * The object a frame is anchored to. Structurally the same as
+ * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
+ * workspace, project, track, playbook, session); a host that renders a
+ * document or a view with no other anchor names that body itself
+ * (`document`, `view`).
+ */
+export interface SurfaceContextAnchor {
+	kind: string;
+	id: string;
+}
+/** The project's brand, as CSS the host writes after its own tokens. */
+export interface SurfaceContextBrand {
+	/** The brand identity's id (the record the brand door chose). */
+	id: string;
+	/** The brand token set's hash: a new one means new values. */
+	hash: string;
+	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
+	css: string;
+}
+/** Everything a frame may know about where it is (frame contract v3). */
+export interface SurfaceContext {
+	anchor: SurfaceContextAnchor | null;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The goal (track) the anchor serves, when it serves one. */
+	goalId: string | null;
+	/** The host's filters on what the frame shows (a bound view's), JSON only. */
+	filters: Record<string, unknown>;
+	brand: SurfaceContextBrand | null;
+	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
+	locale: string;
+	theme: "dark" | "light";
+}
 export type WidgetRendererType = "builtin" | "frame" | "iframe" | "mcp-app" | "native";
 /**
  * Trust level of a widget/cell definition — the server-side authority for
@@ -9564,6 +9761,9 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
+ *   entity|profile|workspace|project|track|playbook|session
+ *                       --attaches-->          view | document | cell_instance
+ *                                              (an ATTACHED surface, Surfaces P3)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -9571,7 +9771,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "agent" | "automation" | "capability" | "channel" | "command" | "document" | "entity" | "participant" | "playbook" | "profile" | "project" | "secret" | "session" | "skill" | "source" | "tool" | "track" | "workspace";
+export type LinkEndpointType = "agent" | "automation" | "capability" | "cell_instance" | "channel" | "command" | "document" | "entity" | "participant" | "playbook" | "profile" | "project" | "secret" | "session" | "skill" | "source" | "tool" | "track" | "view" | "workspace";
 /** The relationship an edge expresses. */
 export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds" | "grants" | "instantiated_from" | "member_of" | "produced" | "promoted_to" | "provided_by" | "requires" | "targets" | "used"
 /**
@@ -9711,7 +9911,21 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
  * REST links door lists and refuses it: an install writes it, never a key.
  */
- | "extends";
+ | "extends"
+/**
+ * <anchor> --attaches--> view | document | cell_instance. An ATTACHED
+ * surface (Surfaces P3, founder decision 23 Nov 2026): 0..n extra screens on
+ * ONE object, beside its kind's look (`renders`, kind-level, in
+ * `renderer_bindings`) and its one body (`entities.document_id`). The anchor
+ * is any of entity · profile · workspace · project · track · playbook ·
+ * session; one surface may be attached to several objects. `metadata`:
+ * `{ position, slot?, label? }` (`@synap-core/types/surfaces`
+ * `AttachmentMeta`). ONE producer: `services/surfaces/attach.ts` (governed
+ * `surface/create` | `surface/attach` | `surface/detach`, both ends floored);
+ * ONE reader: `surfaces.forObject` (`services/surfaces/for-object.ts`). The
+ * Hub REST links door lists and refuses it: `POST /surfaces/attach` writes it.
+ */
+ | "attaches";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -13109,7 +13323,8 @@ declare const INSTALLED_PACKAGE_KINDS: readonly [
 	"view",
 	"skill",
 	"automation",
-	"agent"
+	"agent",
+	"renderer-bundle"
 ];
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 declare const PACKAGE_UPDATE_COMPARED_BY: readonly [
@@ -13326,9 +13541,13 @@ declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
 	"combine"
 ];
 export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
-/** One field an apply (or an undo) changed. */
+/**
+ * One field an apply (or an undo) changed. A renderer bundle's update is one
+ * change of its `version` (`rowKind: "renderer-bundle"`, `rowId` its slug):
+ * Undo puts the version kept on the pod back (`renderer_bundle_versions`).
+ */
 export interface PackageUpdateChange {
-	rowKind: PackageUpdateRowKind;
+	rowKind: PackageUpdateRowKind | "renderer-bundle";
 	rowId: string;
 	field: string;
 	before: unknown;
@@ -13372,6 +13591,61 @@ export type PackageUpdateApplyResult = {
 	proposalIds: string[];
 	status: "proposed";
 };
+declare const RENDERER_BUNDLE_HOLD_REASONS: readonly [
+	"requires",
+	"kit",
+	"undone",
+	"failed"
+];
+export type RendererBundleHoldReason = (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+declare const RENDERER_BUNDLE_WAIT_REASONS: readonly [
+	"soak",
+	"auto_off",
+	"setting_unreadable",
+	"paused",
+	"held",
+	"frozen",
+	"no_owner",
+	"refused"
+];
+export type RendererBundleWaitReason = (typeof RENDERER_BUNDLE_WAIT_REASONS)[number];
+/**
+ * What the pod knows about its renderer bundle's updates
+ * (`renderers.updates`), written by the after-sync pass every 10 minutes.
+ * Dates are ISO strings.
+ */
+export interface RendererBundleUpdateState {
+	slug: string;
+	/** The control plane's newest version; null = never read. */
+	latestVersion: string | null;
+	latestPublishedAt: string | null;
+	/** The last read of the control plane that answered. */
+	checkedAt: string | null;
+	/** Synap retired the version installed here: no wait. */
+	installedRetired: boolean;
+	/**
+	 * The last read or install refused (`reasonCode` is the pod's machine reason,
+	 * e.g. `renderer_bundle_plan_required`); null once one went through.
+	 */
+	refusal: {
+		at: string;
+		message: string;
+		reasonCode: string;
+	} | null;
+	/** A hold on one version (see RENDERER_BUNDLE_HOLD_REASONS). */
+	hold: {
+		at: string;
+		detail: string;
+		reason: RendererBundleHoldReason;
+		version: string;
+	} | null;
+	/** The owner paused this bundle's updates; null = updates on. */
+	pausedAt: string | null;
+	/** Why the newest version waits; null when nothing waits. */
+	waitReason: RendererBundleWaitReason | null;
+	/** When it applies on its own (`waitReason: "soak"` only). */
+	applyAfter: string | null;
+}
 declare const SHIP_STAGES: readonly [
 	"working",
 	"checks",
@@ -17247,6 +17521,12 @@ export interface PostChannelMessageResult {
 	 * label (`ask-text.ts`): filed anyway, said back.
 	 */
 	slot?: {
+		/** ONE CARD PER QUESTION: the open card this question was filed on instead. */
+		deduped?: {
+			asked: string;
+			key: string | null;
+			label: string;
+		};
 		hint?: string;
 		status: string;
 		warnings?: string[];
@@ -25825,6 +26105,39 @@ declare const ObjectCommentAnchorSchema: z.ZodDiscriminatedUnion<[
 		entityId: z.ZodString;
 		field: z.ZodOptional<z.ZodString>;
 		kind: z.ZodLiteral<"entity">;
+		locator: z.ZodOptional<z.ZodDiscriminatedUnion<[
+			z.ZodObject<{
+				blockId: z.ZodOptional<z.ZodString>;
+				contentVersion: z.ZodString;
+				frameId: z.ZodString;
+				point: z.ZodObject<{
+					x: z.ZodNumber;
+					y: z.ZodNumber;
+				}, z.core.$strict>;
+				screenshot: z.ZodOptional<z.ZodString>;
+				surface: z.ZodLiteral<"design">;
+				viewport: z.ZodEnum<{
+					desktop: "desktop";
+					phone: "phone";
+					tablet: "tablet";
+				}>;
+			}, z.core.$strict>,
+			z.ZodObject<{
+				contentVersion: z.ZodString;
+				point: z.ZodObject<{
+					x: z.ZodNumber;
+					y: z.ZodNumber;
+				}, z.core.$strict>;
+				screenshot: z.ZodOptional<z.ZodString>;
+				storyId: z.ZodString;
+				surface: z.ZodLiteral<"story">;
+				viewport: z.ZodEnum<{
+					desktop: "desktop";
+					phone: "phone";
+					tablet: "tablet";
+				}>;
+			}, z.core.$strict>
+		], "surface">>;
 	}, z.core.$strict>
 ], "kind">;
 export type ObjectCommentAnchor = z.infer<typeof ObjectCommentAnchorSchema>;
@@ -25890,65 +26203,6 @@ export type ProposeRetireResult = {
 	reasons: string[];
 	status: "refused";
 };
-/**
- * What a frame is ABOUT, and the brand it draws in (frame contract v3).
- *
- * Every frame that runs stored code (a stored HTML page, a module cell, a
- * renderer bundle cell) sits on something: an entity, a project, a session.
- * The host knows that anchor, the space and project it belongs to, the goal
- * a session serves, and the project's brand; the frame asks for them with one
- * call:
- *
- *   window.synap.context() → Promise<SurfaceContext>
- *
- * which posts `synap:context` and resolves with the matching
- * `synap:context:result` (`sdk.ts`). A module frame also receives the same
- * fields in its `synap:init` context (`CellFrameInitContext`,
- * `surfaceContextInitFields`).
- *
- * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
- * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
- * projection) with `brandFrameCss`, and written AFTER the host's tokens
- * (`frameTokensWithBrand`), so a name the brand does not set keeps the
- * host's value. No brand (no project, or a project with no token set) is
- * `brand: null`, never a failure.
- *
- * Pure, like the rest of this leaf: no DOM, no fetch.
- */
-/**
- * The object a frame is anchored to. Structurally the same as
- * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
- * workspace, project, track, playbook, session); a host that renders a
- * document or a view with no other anchor names that body itself
- * (`document`, `view`).
- */
-export interface SurfaceContextAnchor {
-	kind: string;
-	id: string;
-}
-/** The project's brand, as CSS the host writes after its own tokens. */
-export interface SurfaceContextBrand {
-	/** The brand identity's id (the record the brand door chose). */
-	id: string;
-	/** The brand token set's hash: a new one means new values. */
-	hash: string;
-	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
-	css: string;
-}
-/** Everything a frame may know about where it is (frame contract v3). */
-export interface SurfaceContext {
-	anchor: SurfaceContextAnchor | null;
-	workspaceId: string | null;
-	projectId: string | null;
-	/** The goal (track) the anchor serves, when it serves one. */
-	goalId: string | null;
-	/** The host's filters on what the frame shows (a bound view's), JSON only. */
-	filters: Record<string, unknown>;
-	brand: SurfaceContextBrand | null;
-	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
-	locale: string;
-	theme: "dark" | "light";
-}
 /**
  * Where a binding was found. `binding` = a `renderer_bindings` row. `entity`
  * (per-entity override) is deferred (v1).
@@ -26068,6 +26322,23 @@ export interface SurfacesForObject {
 		error: string;
 		source: string;
 	}[];
+}
+declare const ATTACHABLE_SURFACE_TYPES: readonly [
+	"view",
+	"document",
+	"cell_instance"
+];
+export type AttachableSurfaceType = (typeof ATTACHABLE_SURFACE_TYPES)[number];
+export interface SurfaceRef {
+	type: AttachableSurfaceType;
+	id: string;
+}
+/** An agent's (or a ruled) write: filed for the person to approve. */
+export interface SurfaceWriteProposed {
+	status: "proposed";
+	proposalId: string;
+	reviewPath?: string;
+	reviewUrl?: string;
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -38912,6 +39183,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					field?: string | undefined;
 					kind: "entity";
+					locator?: {
+						blockId?: string | undefined;
+						contentVersion: string;
+						frameId: string;
+						point: {
+							x: number;
+							y: number;
+						};
+						screenshot?: string | undefined;
+						surface: "design";
+						viewport: "desktop" | "phone" | "tablet";
+					} | {
+						contentVersion: string;
+						point: {
+							x: number;
+							y: number;
+						};
+						screenshot?: string | undefined;
+						storyId: string;
+						surface: "story";
+						viewport: "desktop" | "phone" | "tablet";
+					} | undefined;
 				};
 				clientRequestId?: string | undefined;
 				content: string;
@@ -51478,6 +51771,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PackageUpdateList;
 		}>;
+		pauseUpdates: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				paused: boolean;
+				slug: string;
+			};
+			meta: object;
+			output: RendererBundleUpdateState | null;
+		}>;
 		undo: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				receiptId: string;
@@ -58227,6 +58528,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: RendererStatus;
 		}>;
+		updates: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: RendererBundleUpdateState | null;
+		}>;
 	}>>;
 	resourceState: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -60958,6 +61264,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		frameRead: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				op: string;
+				params?: Record<string, unknown> | undefined;
+				surface: {
+					kind: "cell";
+					typeKey: string;
+				} | {
+					id: string;
+					kind: "document";
+				};
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: unknown;
+		}>;
+	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		context: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -60970,6 +61293,73 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SurfaceContext;
 		}>;
 	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		attach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				label?: string | undefined;
+				position?: number | undefined;
+				reasoning?: string | undefined;
+				slot?: string | undefined;
+				surface: {
+					id: string;
+					type: "cell_instance" | "document" | "view";
+				};
+			};
+			meta: object;
+			output: {
+				linkId: string;
+				openUrl: string;
+				status: "attached" | "exists";
+			} | SurfaceWriteProposed;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				body: "bento" | "cell" | "document" | "html" | "view" | "whiteboard";
+				label?: string | undefined;
+				reasoning?: string | undefined;
+				slot?: string | undefined;
+				spec?: {
+					cellKey?: string | undefined;
+					config?: Record<string, unknown> | undefined;
+					content?: string | undefined;
+					props?: Record<string, unknown> | undefined;
+					url?: string | undefined;
+					viewType?: string | undefined;
+					workspaceId?: string | undefined;
+				} | undefined;
+				title: string;
+			};
+			meta: object;
+			output: SurfaceWriteProposed | {
+				openUrl: string;
+				status: "created";
+				surface: SurfaceRef;
+			};
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				reasoning?: string | undefined;
+				surface: {
+					id: string;
+					type: "cell_instance" | "document" | "view";
+				};
+			};
+			meta: object;
+			output: SurfaceWriteProposed | {
+				status: "absent" | "detached";
+			};
+		}>;
 		forObject: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -63828,6 +64218,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -63842,6 +64233,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -63850,22 +64242,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
+				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
+				writes: CellBridgeDeclaredWrites | null;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -63880,6 +64277,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -63888,22 +64286,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
+				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
+				writes: CellBridgeDeclaredWrites | null;
 			}[];
 		}>;
 		listMeta: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
 			output: Pick<{
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -63918,6 +64321,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -63926,16 +64330,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
+				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
+				writes: CellBridgeDeclaredWrites | null;
 			}, "category" | "createdAt" | "description" | "isActive" | "name" | "rendererType" | "typeKey" | "updatedAt" | "workspaceId">[];
 		}>;
 		upsert: import("@trpc/server").TRPCMutationProcedure<{
@@ -63963,6 +64371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -63977,6 +64386,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -63985,16 +64395,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
+				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
+				writes: CellBridgeDeclaredWrites | null;
 			};
 		}>;
 	}>>;

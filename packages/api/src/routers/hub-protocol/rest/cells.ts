@@ -19,6 +19,10 @@ import {
   installMarketplaceCell,
   retireCellType,
 } from "../../../services/cells/marketplace-cell-lifecycle.js";
+import {
+  declaredFrameIoFields,
+  readDeclaredFrameIo,
+} from "../../../services/cells/declared-frame-io.js";
 // typeKey PROVENANCE FLOOR — the SAME guard the tRPC door (`widgetDefinitions.
 // upsert`) applies, not a second implementation. This door declared `typeKey`
 // and passed it straight to `defineCell`, so an operator-scoped key could MINT
@@ -390,6 +394,25 @@ export function registerCellsRoutes(app: HubHono): void {
         reasoning: z.string().max(2000).optional(),
         /** Place the cell as a tile on this bento view when it is defined. */
         placeOn: CellPlacementSchema.optional(),
+        /**
+         * The reads its frame declares (`CellBridgeDeclaredReads`): a subset
+         * of `CELL_BRIDGE_READ_OPS`, enforced by `POST /frame/read`. Absent =
+         * undeclared (every ceiling read, logged).
+         */
+        reads: z
+          .array(
+            z.object({
+              op: z.string(),
+              params: z.record(z.string(), z.string()).optional(),
+            })
+          )
+          .nullable()
+          .optional(),
+        /** The writes its frame declares (`CellBridgeDeclaredWrites`). */
+        writes: z
+          .array(z.object({ op: z.string() }))
+          .nullable()
+          .optional(),
       })
       .safeParse(rawBody);
 
@@ -412,6 +435,10 @@ export function registerCellsRoutes(app: HubHono): void {
       reasoning,
       placeOn,
     } = parsed.data;
+    // Checked against the ceiling before anything is filed (400).
+    const declared = readDeclaredFrameIo(parsed.data);
+    if (!declared.ok) return c.json({ error: declared.error }, 400);
+    const declaredFields = declaredFrameIoFields(declared);
     const userId = c.get("userId");
     // body.agentUserId wins; fall back to the auto-injected context value the
     // auth middleware sets for an agent API key (same resolution order as the
@@ -525,6 +552,8 @@ export function registerCellsRoutes(app: HubHono): void {
             // Where approving places the cell: the executor defines it AND
             // adds its tile to this view, in one act.
             ...(proposedPlacement ? { placeOn: proposedPlacement } : {}),
+            // What its frame declares it reads / writes.
+            ...declaredFields,
           },
           reasoning,
         });
@@ -560,6 +589,7 @@ export function registerCellsRoutes(app: HubHono): void {
         viewTypes,
         contentKind,
         placeOn,
+        ...declaredFields,
         userId: userId ?? "",
       });
 

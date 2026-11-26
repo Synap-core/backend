@@ -13,9 +13,11 @@
  *   • Update now     — the exact host command. The console cannot run host
  *                      commands (the engine runs on the machine hosting the
  *                      pod), so it says so and offers the command to copy.
- *   • Renderers      — whether Synap's renderers are installed, and Install /
- *                      Reinstall latest (`_lib/renderers-card.tsx`). Its own
- *                      read: it shows even when the update status cannot.
+ *   • Renderers      — Synap's renderers and their updates
+ *                      (`_lib/renderers-card.tsx`). Its own read: it shows
+ *                      even when the update status cannot.
+ *
+ * Words: `_lib/copy.ts` (English source, French draft).
  *
  * A failed read is an error with Retry, never the default setting shown as the
  * owner's choice; a 404 is an older pod that cannot do this yet.
@@ -50,33 +52,44 @@ import {
   readPodUpdatesResponse,
   usePodUpdates,
 } from "./_lib/use-pod-updates";
-import { RenderersCard } from "./_lib/renderers-card";
+import {
+  AUTO_UPDATE_ANCHOR,
+  RenderersCard,
+  UPDATE_NOW_ANCHOR,
+} from "./_lib/renderers-card";
+import { en, fr } from "./_lib/copy";
+import { useT } from "../../../lib/i18n/locale-provider";
+
+const CATALOGS = { en, fr };
 
 export default function UpdatesPage() {
+  const t = useT(CATALOGS);
   const q = usePodUpdates();
 
   return (
     <PageShell>
       <PageHeader
         title={navLabel("updates")}
-        description="Which version your pod runs and how it updates."
+        description={t("page.description")}
       />
       {q.isLoading ? (
         // The three cards the page lands with, so nothing jumps on arrival.
         <div className="flex flex-col gap-4" aria-busy="true">
-          {["Release", "Auto-update", "How to update now"].map((title) => (
-            <SectionCard key={title} title={title}>
-              <ResourceRowSkeleton count={title === "Release" ? 2 : 1} />
-            </SectionCard>
-          ))}
+          {(["release.title", "auto.title", "now.title"] as const).map(
+            (key) => (
+              <SectionCard key={key} title={t(key)}>
+                <ResourceRowSkeleton count={key === "release.title" ? 2 : 1} />
+              </SectionCard>
+            )
+          )}
         </div>
       ) : q.isError || !q.data ? (
-        <SectionCard title="Release">
+        <SectionCard title={t("release.title")}>
           {q.error instanceof PodUpdatesError && q.error.status === 404 ? (
-            <ResourceRowEmpty message="This pod manages updates in a newer version. Update it once from the machine hosting it, then come back." />
+            <ResourceRowEmpty message={t("release.older")} />
           ) : (
             <ResourceRowError
-              message="Couldn't read this pod's update status."
+              message={t("release.failed")}
               onRetry={() => void q.refetch()}
             />
           )}
@@ -84,8 +97,12 @@ export default function UpdatesPage() {
       ) : (
         <div className="flex flex-col gap-4">
           <ReleaseCard view={q.data} />
-          <AutoUpdateCard view={q.data} />
-          <UpdateNowCard channel={q.data.settings.channel} />
+          <div id={AUTO_UPDATE_ANCHOR} className="scroll-mt-4">
+            <AutoUpdateCard view={q.data} />
+          </div>
+          <div id={UPDATE_NOW_ANCHOR} className="scroll-mt-4">
+            <UpdateNowCard channel={q.data.settings.channel} />
+          </div>
         </div>
       )}
       <div className="mt-4">
@@ -111,6 +128,7 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function ReleaseCard({ view }: { view: PodUpdatesView }) {
+  const t = useT(CATALOGS);
   const { lastUpdate } = view;
   const release = currentRelease(lastUpdate);
   const outcome =
@@ -118,22 +136,22 @@ function ReleaseCard({ view }: { view: PodUpdatesView }) {
   const when = lastUpdate.kind === "recorded" ? lastUpdate.outcome.at : null;
 
   return (
-    <SectionCard title="Release" hint="What this pod runs, and the last update">
+    <SectionCard title={t("release.title")} hint={t("release.hint")}>
       <div className="flex flex-col gap-4">
         <dl className="flex flex-col gap-2">
           <Fact
-            label="Current release"
+            label={t("release.current")}
             value={
               release ? (
                 <span className="font-mono">{release}</span>
               ) : (
-                "Not recorded"
+                t("release.notRecorded")
               )
             }
           />
           {when && (
             <Fact
-              label="Last update"
+              label={t("release.last")}
               value={`${formatTimestamp(when)} (${formatRelative(when)})`}
             />
           )}
@@ -146,7 +164,7 @@ function ReleaseCard({ view }: { view: PodUpdatesView }) {
               <p className="text-[13px] text-foreground">{outcome.sentence}</p>
               {outcome.reason && (
                 <p className="text-[12.5px] text-foreground/65">
-                  Why: {outcome.reason}
+                  {t("release.why", { reason: outcome.reason })}
                 </p>
               )}
             </div>
@@ -154,8 +172,8 @@ function ReleaseCard({ view }: { view: PodUpdatesView }) {
         ) : (
           <p className="text-[12.5px] text-foreground/65">
             {lastUpdate.kind === "unreadable"
-              ? "The record of the last update couldn't be read."
-              : "No update has run on this pod yet."}
+              ? t("release.unreadable")
+              : t("release.none")}
           </p>
         )}
       </div>
@@ -166,6 +184,7 @@ function ReleaseCard({ view }: { view: PodUpdatesView }) {
 // ─── Auto-update ────────────────────────────────────────────────────
 
 function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
+  const t = useT(CATALOGS);
   const queryClient = useQueryClient();
   const { settings, canEdit } = view;
 
@@ -183,11 +202,11 @@ function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
     onSuccess: (next) => queryClient.setQueryData(POD_UPDATES_KEY, next),
     onError: (err) =>
       addToast({
-        title: "Couldn't save",
+        title: t("auto.save.failed"),
         description:
           err instanceof PodUpdatesError && err.status === 403
-            ? "Only a pod admin can change this."
-            : "The setting wasn't changed. Try again.",
+            ? t("auto.save.forbidden")
+            : t("auto.save.retry"),
         color: "danger",
       }),
   });
@@ -198,20 +217,15 @@ function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
   )?.consequence;
 
   return (
-    <SectionCard
-      title="Auto-update"
-      hint="Whether the pod installs new releases by itself"
-    >
+    <SectionCard title={t("auto.title")} hint={t("auto.hint")}>
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-[13px] text-foreground">
-              Install updates automatically
+              {t("auto.switch")}
             </span>
             <span className="text-[12.5px] text-foreground/65">
-              {settings.auto
-                ? "New releases on your channel are installed as they come."
-                : "Nothing is installed until you update by hand."}
+              {settings.auto ? t("auto.on") : t("auto.off")}
             </span>
           </div>
           <Switch
@@ -219,12 +233,12 @@ function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
             isSelected={settings.auto}
             isDisabled={locked}
             onValueChange={(auto) => save.mutate({ auto })}
-            aria-label="Install updates automatically"
+            aria-label={t("auto.switch")}
           />
         </div>
 
         <RadioGroup
-          label="Channel"
+          label={t("auto.channel")}
           size="sm"
           value={settings.channel}
           isDisabled={locked}
@@ -244,7 +258,7 @@ function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
         )}
         {!canEdit && (
           <p className="text-[12.5px] text-foreground/65">
-            Only a pod admin can change these.
+            {t("auto.adminOnly")}
           </p>
         )}
       </div>
@@ -255,17 +269,12 @@ function AutoUpdateCard({ view }: { view: PodUpdatesView }) {
 // ─── Update now ─────────────────────────────────────────────────────
 
 function UpdateNowCard({ channel }: { channel: UpdateChannel }) {
+  const t = useT(CATALOGS);
   const command = updateCommand(channel);
   return (
-    <SectionCard
-      title="How to update now"
-      hint="Run this on the machine that hosts your pod"
-    >
+    <SectionCard title={t("now.title")} hint={t("now.hint")}>
       <div className="flex flex-col gap-3">
-        <p className="text-[12.5px] text-foreground/65">
-          This console can&apos;t run commands on the host, so updating by hand
-          happens in a terminal there.
-        </p>
+        <p className="text-[12.5px] text-foreground/65">{t("now.body")}</p>
         <CommandLine command={command} />
       </div>
     </SectionCard>

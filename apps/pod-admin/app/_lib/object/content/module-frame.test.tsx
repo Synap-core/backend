@@ -167,6 +167,8 @@ function harness(
     typeKey?: string;
     answer?: unknown;
     locale?: "en" | "fr";
+    /** What the frame read door throws, when it refuses. */
+    readError?: Error;
   } = {}
 ) {
   const posted: Posted[] = [];
@@ -187,6 +189,16 @@ function harness(
       get: { query: door("entities.get") },
     },
     relations: { create: { mutate: door("relations.create") } },
+    // THE frame read door: every read of the frame, as its surface.
+    surfaces: {
+      frameRead: {
+        query: async (input: unknown, options?: unknown) => {
+          calls.push(["surfaces.frameRead", input, options]);
+          if (opts.readError) throw opts.readError;
+          return opts.answer ?? { id: ENTITY };
+        },
+      },
+    },
   } as unknown as BridgeClient;
   const answers: unknown[] = [];
   const onMessage = createModuleFrameHost({
@@ -348,18 +360,57 @@ describe("createModuleFrameHost — writes", () => {
     });
   });
 
-  it("reads go through the console's read door with the host's lens", async () => {
+  const READ = {
+    type: "synap:query",
+    id: "r1",
+    operation: "entities.get",
+    // The frame may not choose its lens: dropped before the door.
+    params: { id: ENTITY, workspaceId: "someone-elses-space" },
+  };
+
+  it("a read goes to THE frame read door as the cell's type, in the host's lens", async () => {
     const h = harness();
-    await h.send({
-      type: "synap:query",
+    await h.send(READ);
+    expect(h.calls).toEqual([
+      [
+        "surfaces.frameRead",
+        {
+          surface: { kind: "cell", typeKey: TYPE },
+          op: "entities.get",
+          params: { id: ENTITY },
+          workspaceId: "ws-1",
+        },
+        undefined,
+      ],
+    ]);
+    expect(h.posted.at(-1)!.message).toEqual({
+      type: "synap:query:result",
       id: "r1",
-      operation: "entities.get",
-      params: { id: ENTITY, workspaceId: "someone-elses-space" },
+      data: { id: ENTITY },
     });
-    expect(h.calls).toEqual([["entities.get", { id: ENTITY }, undefined]]);
+  });
+
+  it("a read the door refuses reaches the frame as an error, never as data", async () => {
+    const h = harness({
+      readError: new Error(
+        'This cell does not declare the read "entities.get" with these params, so the pod refuses it.'
+      ),
+    });
+    await h.send(READ);
+    const answer = h.posted.at(-1)!.message;
+    expect(answer).toMatchObject({ type: "synap:query:result", id: "r1" });
+    expect(answer.error).toContain("does not declare the read");
+    expect(answer).not.toHaveProperty("data");
+  });
+
+  it("a frame with no type reads nothing: the door is never asked", async () => {
+    const h = harness({ typeKey: "" });
+    await h.send(READ);
+    expect(h.calls).toEqual([]);
     expect(h.posted.at(-1)!.message).toMatchObject({
       type: "synap:query:result",
       id: "r1",
+      error: "This view cannot read here.",
     });
   });
 });

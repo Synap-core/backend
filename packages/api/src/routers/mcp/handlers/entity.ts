@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import type { SurfaceAnchor } from "@synap-core/types/surfaces";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
@@ -591,11 +592,51 @@ export const entityHandlers: McpHandlerMap = {
     }
     const attachEntityId = args.entityId as string | undefined;
     // An entity's body is read as markdown on Relay and the desktop; a page
-    // runs only at /open/<id>. Refused before anything is written.
+    // runs only at /open/<id>. Refused before anything is written. An HTML
+    // artifact FOR an entity is attached instead (`attachTo`, below).
     if (args.type === "html" && attachEntityId) {
       throw new Error(
-        'A `type: "html"` page is not attached with `entityId` (an entity body is read as markdown): create the page without `entityId`; it opens at /open/<id>.'
+        'A `type: "html"` page is not an entity\'s body (`entityId`; a body is read as markdown): pass `attachTo: {kind: "entity", id}` to attach the page to the entity as one of its surfaces.'
       );
+    }
+    // A document FOR one object (`attachTo`): the surface door makes it and
+    // attaches it in one governed act (Surfaces P3). Kept apart from
+    // `entityId`, the entity's ONE body.
+    if (args.attachTo !== undefined) {
+      if (attachEntityId) {
+        throw new Error(
+          "Pass `entityId` (the entity's one body) or `attachTo` (one more surface on an object), not both."
+        );
+      }
+      const { createSurface } =
+        await import("../../../services/surfaces/create.js");
+      const outcome = (await createSurface(
+        {
+          userId,
+          agentUserId: agentUserId ?? null,
+          sessionId: sessionId ?? null,
+          reasoning: readReasoning(args) ?? "Created via MCP",
+          door: toolName,
+        },
+        {
+          anchor: args.attachTo as SurfaceAnchor,
+          body: args.type === "html" ? "html" : "document",
+          title: typeof args.title === "string" ? args.title : "",
+          spec: {
+            ...(typeof args.content === "string"
+              ? { content: args.content }
+              : {}),
+            ...(typeof args.url === "string" ? { url: args.url } : {}),
+            ...(requestedWorkspaceId
+              ? { workspaceId: requestedWorkspaceId }
+              : {}),
+          },
+        }
+      )) as unknown as Record<string, unknown>;
+      if (outcome.status === "refused" || outcome.status === "denied") {
+        throw new Error(String(outcome.error ?? outcome.reason));
+      }
+      return ok(outcome);
     }
     const replaceBody = args.replaceBody === true;
     // Refuse an attach that would replace a body BEFORE the document exists,
@@ -641,6 +682,8 @@ export const entityHandlers: McpHandlerMap = {
       ...(args.refreshAutomationId !== undefined
         ? { refreshAutomationId: args.refreshAutomationId as string | null }
         : {}),
+      // An html page's declared reads: checked and stored by the hub door.
+      ...(args.reads !== undefined ? { reads: args.reads } : {}),
     });
     // ATTACHMENT (the description used to claim it without doing it). The
     // link lives on `entities.documentId` — `documents.entityId` was removed —

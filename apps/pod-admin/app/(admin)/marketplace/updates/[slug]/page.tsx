@@ -459,7 +459,14 @@ function ReviewUpdate({
                 {t("after.package.add", { kind: kindWord.toLowerCase() })}
               </li>
               <li>{t("after.package.stamp")}</li>
-              <li>{t("after.package.noUndo")}</li>
+              {/* A renderer bundle keeps the version it replaces on the pod. */}
+              <li>
+                {t(
+                  plan.kind === "renderer-bundle"
+                    ? "after.undo"
+                    : "after.package.noUndo"
+                )}
+              </li>
             </>
           ) : (
             <>

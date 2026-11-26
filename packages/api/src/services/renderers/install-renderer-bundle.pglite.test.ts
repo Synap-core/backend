@@ -17,7 +17,13 @@
  *     this one runs is refused CONFLICT RENDERER_BUNDLE_INSTALL_RACED (retry
  *     safe, nothing written), never a raw key violation; two installs of one
  *     slug started together both land;
- *   - the reads: status and host modules (notModified, NOT_FOUND).
+ *   - the reads: status and host modules (notModified, NOT_FOUND);
+ *   - KEPT VERSIONS (0449, plan ad703ccd D7): the definition and its digest
+ *     are kept with the bundle row's `content_hash`, the answer names the
+ *     version replaced, only the current version and N-1 stay (a reinstall
+ *     of the same version keeps the one before it);
+ *   - a bundle whose `requires` this pod does not meet is refused
+ *     RENDERER_BUNDLE_REQUIRES_UNMET before anything is written.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -75,11 +81,13 @@ vi.mock("../cells/install-cell-from-definition.js", async (importOriginal) => {
 
 import { sql } from "drizzle-orm";
 import { rendererBindings, widgetDefinitions } from "@synap/database/schema";
+import { officialContentHash } from "@synap/jobs/workers/marketplace-source-verify.js";
 import {
   installRendererBundle,
   rendererSetSha256,
   RENDERER_BUNDLE_HASH_MISMATCH,
   RENDERER_BUNDLE_INSTALL_RACED,
+  RENDERER_BUNDLE_REQUIRES_UNMET,
   RENDERER_HOST_SET_TAKEN,
 } from "./install-renderer-bundle.js";
 import {
@@ -91,6 +99,13 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0436 = readFileSync(
   resolve(HERE, "../../../../database/migrations/0436_renderer_bundles.sql"),
+  "utf8"
+);
+const M0449 = readFileSync(
+  resolve(
+    HERE,
+    "../../../../database/migrations/0449_renderer_bundle_updates.sql"
+  ),
   "utf8"
 );
 
@@ -176,6 +191,7 @@ const reasonOf = (err: unknown) =>
 
 beforeAll(async () => {
   await h.client!.exec(M0436);
+  await h.client!.exec(M0449);
   await h.client!.exec(ddlFor(widgetDefinitions as never));
   await h.client!.exec(
     `CREATE UNIQUE INDEX widget_def_type_key_workspace_uniq ON widget_definitions (type_key, workspace_id);`
@@ -185,7 +201,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from renderer_host_modules; delete from renderer_bundles; delete from widget_definitions; delete from renderer_bindings;`
+    `delete from renderer_host_modules; delete from renderer_bundles; delete from renderer_bundle_versions; delete from widget_definitions; delete from renderer_bindings;`
   );
   h.emitted.length = 0;
   h.failOnKey = null;
@@ -461,6 +477,103 @@ describe("the version and racing installs", () => {
     expect(await count(`select count(*)::int as n from renderer_bundles`)).toBe(
       1
     );
+  });
+});
+
+describe("kept versions (D7) and requirements", () => {
+  /** A build that differs from `bundle()` by its tokens. */
+  function build(tokens: string) {
+    const def = bundle();
+    def.hostModules.tokensCss = mod(tokens);
+    def.setSha256 = rendererSetSha256(
+      Object.fromEntries(
+        Object.entries(def.hostModules).map(([k, v]) => [k, v.sha256])
+      )
+    );
+    return def;
+  }
+  const opts = (version: string) => ({
+    userId: "user-1",
+    source: "synap",
+    version,
+  });
+  const kept = async () =>
+    (
+      await h.client!.query<{ version: string; content_hash: string }>(
+        `select version, content_hash from renderer_bundle_versions order by installed_at`
+      )
+    ).rows;
+
+  it("keeps the definition with its digest, and names the version it replaced", async () => {
+    const a = build(":root{--a:1}");
+    const first = await installRendererBundle(a, opts("v-a"));
+    expect(first.previousVersion).toBeNull();
+    expect(first.contentHash).toBe(officialContentHash("renderer-bundle", a));
+    const row = await h.client!.query<{ content_hash: string }>(
+      `select content_hash from renderer_bundles`
+    );
+    expect(row.rows[0]!.content_hash).toBe(first.contentHash);
+
+    const second = await installRendererBundle(
+      build(":root{--b:1}"),
+      opts("v-b")
+    );
+    expect(second.previousVersion).toBe("v-a");
+    expect((await kept()).map((r) => r.version)).toEqual(["v-a", "v-b"]);
+    expect((await kept())[0]!.content_hash).toBe(first.contentHash);
+  });
+
+  it("keeps only the current version and N-1; a reinstall of the same version keeps N-1", async () => {
+    await installRendererBundle(build(":root{--a:1}"), opts("v-a"));
+    await installRendererBundle(build(":root{--b:1}"), opts("v-b"));
+    await installRendererBundle(build(":root{--c:1}"), opts("v-c"));
+    expect((await kept()).map((r) => r.version).sort()).toEqual(["v-b", "v-c"]);
+    const again = await installRendererBundle(
+      build(":root{--c:1}"),
+      opts("v-c")
+    );
+    expect(again.previousVersion).toBe("v-c");
+    expect((await kept()).map((r) => r.version).sort()).toEqual(["v-b", "v-c"]);
+  });
+
+  // Catches: a bundle built for a newer pod installed into frames that
+  // would call bridge ops this pod does not answer.
+  it("refuses a bundle whose requirements this pod does not meet, and writes nothing", async () => {
+    const def = { ...bundle(), requires: { bridgeOps: ["pods.teleport"] } };
+    const err = await installRendererBundle(def, opts("v-x")).catch(
+      (e: unknown) => e
+    );
+    expect((err as { code?: string }).code).toBe("PRECONDITION_FAILED");
+    expect(reasonOf(err)).toBe(RENDERER_BUNDLE_REQUIRES_UNMET);
+    expect((err as Error).message).toContain("pods.teleport");
+    expect(await count(`select count(*)::int as n from renderer_bundles`)).toBe(
+      0
+    );
+    expect(await kept()).toEqual([]);
+
+    // A newer bundle API is "not yet" too, never "invalid".
+    const newer = { ...bundle(), bundleApi: 2 };
+    expect(
+      reasonOf(await installRendererBundle(newer, opts("v-y")).catch((e) => e))
+    ).toBe(RENDERER_BUNDLE_REQUIRES_UNMET);
+
+    // A newer frame contract, and a requirement this pod does not know yet.
+    for (const requires of [{ bridgeContract: 99 }, { podFeature: "x" }]) {
+      expect(
+        reasonOf(
+          await installRendererBundle(
+            { ...bundle(), requires },
+            opts("v-c")
+          ).catch((e) => e)
+        )
+      ).toBe(RENDERER_BUNDLE_REQUIRES_UNMET);
+    }
+
+    // Ops this pod answers install as before.
+    const met = { ...bundle(), requires: { bridgeOps: ["entities.get"] } };
+    await expect(
+      installRendererBundle(met, opts("v-z"))
+    ).resolves.toMatchObject({ version: "v-z" });
   });
 });
 

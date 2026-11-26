@@ -7,6 +7,12 @@
 
 import { z } from "zod";
 import { RenderSettingsSchema } from "./schemas.js";
+import {
+  CellBlockSchema,
+  EntityBlockSchema,
+  ViewBlockSchema,
+  cellBlockIssues,
+} from "../blocks/index.js";
 
 // =============================================================================
 // Base Config Schema (Common Fields for Structured Views)
@@ -144,6 +150,75 @@ export const BentoBlockChromeSchema = z
   .enum(["auto", "none", "soft", "card", "inset", "hero"])
   .optional();
 
+/** Where a bento tile sits (12-column grid units): the bento's `place`. */
+const BentoPosSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  w: z.number().int().positive(),
+  h: z.number().int().positive(),
+});
+
+/** What every stored bento tile carries beside its Block. */
+const BentoTileFields = {
+  id: z.string(),
+  pos: BentoPosSchema,
+  chrome: BentoBlockChromeSchema,
+};
+
+/** A tile's data query (a cell tile's, legacy or canonical): bento-local, not part of the Block. */
+const BentoTileQuerySchema = z
+  .object({
+    scopeProfileIds: z.array(z.string().uuid()),
+    filters: z.array(z.any()).optional(),
+    sorts: z.array(z.any()).optional(),
+  })
+  .optional();
+
+/**
+ * A stored bento tile = the one `Block` (`@synap-core/types/blocks`) + its
+ * place (`id`, `pos`, `chrome`). Four arms: the three Block kinds, and the
+ * LEGACY `widget` spelling (`widgetType`, `config`, `cellInstanceId`) every
+ * stored bento still holds; readers map it with `readLegacyBlock`. The cell
+ * arms keep `instanceId` / `cellInstanceId` (this schema used to drop it) and
+ * enforce the placement rule (`cellBlockIssues`: a key or an instance, and no
+ * inline props on an instance).
+ */
+export const BentoBlockSchema = z
+  .discriminatedUnion("kind", [
+    ViewBlockSchema.extend(BentoTileFields),
+    EntityBlockSchema.extend(BentoTileFields),
+    // A bento draws a tile by its key: a cell tile always names it (with or
+    // without an instance), never an instance alone.
+    CellBlockSchema.extend({
+      ...BentoTileFields,
+      cellKey: z.string().min(1),
+      query: BentoTileQuerySchema,
+    }),
+    // Legacy cell tile (widgetType = opaque string; the frontend registry decides the renderer).
+    z.object({
+      ...BentoTileFields,
+      kind: z.literal("widget"),
+      widgetType: z.string().min(1),
+      query: BentoTileQuerySchema,
+      config: z.record(z.string(), z.unknown()).optional(),
+      cellInstanceId: z.string().min(1).optional(),
+    }),
+  ])
+  .superRefine((tile, ctx) => {
+    if (tile.kind === "cell") {
+      for (const message of cellBlockIssues(tile))
+        ctx.addIssue({ code: "custom", message });
+    } else if (tile.kind === "widget") {
+      for (const message of cellBlockIssues({
+        cellKey: tile.widgetType,
+        instanceId: tile.cellInstanceId,
+        props: tile.config,
+      }))
+        ctx.addIssue({ code: "custom", message });
+    }
+  });
+export type StoredBentoBlock = z.infer<typeof BentoBlockSchema>;
+
 export const BentoViewConfigSchema = z.object({
   layout: z.enum(["bento", "grid", "flow"]).default("bento"),
   breakpoints: z
@@ -171,59 +246,7 @@ export const BentoViewConfigSchema = z.object({
         .optional(),
     })
     .optional(),
-  blocks: z.array(
-    z.discriminatedUnion("kind", [
-      // View block
-      z.object({
-        id: z.string(),
-        kind: z.literal("view"),
-        viewId: z.string().uuid(),
-        pos: z.object({
-          x: z.number().int().nonnegative(),
-          y: z.number().int().nonnegative(),
-          w: z.number().int().positive(),
-          h: z.number().int().positive(),
-        }),
-        overrides: z.record(z.string(), z.unknown()).optional(),
-        chrome: BentoBlockChromeSchema,
-      }),
-      // Entity block
-      z.object({
-        id: z.string(),
-        kind: z.literal("entity"),
-        entityId: z.string().uuid(),
-        pos: z.object({
-          x: z.number().int().nonnegative(),
-          y: z.number().int().nonnegative(),
-          w: z.number().int().positive(),
-          h: z.number().int().positive(),
-        }),
-        variant: z.enum(["compact", "detailed"]).optional(),
-        chrome: BentoBlockChromeSchema,
-      }),
-      // Widget block (widgetType = opaque string; frontend registry decides renderer)
-      z.object({
-        id: z.string(),
-        kind: z.literal("widget"),
-        widgetType: z.string().min(1),
-        query: z
-          .object({
-            scopeProfileIds: z.array(z.string().uuid()),
-            filters: z.array(z.any()).optional(),
-            sorts: z.array(z.any()).optional(),
-          })
-          .optional(),
-        pos: z.object({
-          x: z.number().int().nonnegative(),
-          y: z.number().int().nonnegative(),
-          w: z.number().int().positive(),
-          h: z.number().int().positive(),
-        }),
-        config: z.record(z.string(), z.unknown()).optional(),
-        chrome: BentoBlockChromeSchema,
-      }),
-    ])
-  ),
+  blocks: z.array(BentoBlockSchema),
 });
 
 // =============================================================================

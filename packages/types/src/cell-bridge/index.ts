@@ -24,6 +24,11 @@
  *      viewer's OWN session — the pod floors every read to what this viewer
  *      may see. The host stamps the lens (the page's space); the page never
  *      chooses it.
+ *      A surface may DECLARE the reads it makes (`declared-reads.ts`, a
+ *      subset of the table): the pod's one frame read door
+ *      (`surfaces.frameRead`, Hub `POST /frame/read`) refuses a read outside
+ *      it (`FRAME_READ_UNDECLARED`) whatever the host checked, and logs
+ *      every call. Undeclared surfaces still read the whole table, logged.
  *      The host loop that applies these rules is here too, written once
  *      (`createCellBridgeHost`, `host.ts`): pod admin's and the desktop's
  *      HTML pages both run it, each with its own frame and read door.
@@ -71,6 +76,10 @@
 
 export { CELL_BRIDGE_CONTRACT_VERSION } from "./contract-version.js";
 export {
+  POD_BRIDGE_CONTRACT,
+  unmetRendererBundleRequirements,
+} from "./bundle-requirements.js";
+export {
   CELL_BRIDGE_READ_OPS,
   CELL_BRIDGE_READ_OP_NAMES,
   CELL_BRIDGE_SPACE_READ_OPS,
@@ -84,6 +93,19 @@ export {
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "./read-ops.js";
+export {
+  CELL_BRIDGE_ANY_VALUE,
+  CELL_BRIDGE_DECLARED_MAX,
+  FRAME_READ_UNDECLARED,
+  isReadDeclared,
+  parseDeclaredReads,
+  parseDeclaredWrites,
+  storedDeclaredReads,
+  type CellBridgeDeclaredRead,
+  type CellBridgeDeclaredReads,
+  type CellBridgeDeclaredWrite,
+  type CellBridgeDeclaredWrites,
+} from "./declared-reads.js";
 export {
   CELL_BRIDGE_WRITE_REFUSED,
   cellBridgeUnknownOp,

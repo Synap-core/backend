@@ -16,5 +16,7 @@
  *      `synap:context:result` (`window.synap.context()`,
  *      `SynapWidget.context()`), init `anchor` / `projectId` / `goalId` /
  *      `filters` / `brand`, and the brand's CSS after the host's tokens
+ *   4  `graph.of`: an entity's graph neighbours (semantic relations and
+ *      structural property links) for HTML pages and frames
  */
-export const CELL_BRIDGE_CONTRACT_VERSION = 3;
+export const CELL_BRIDGE_CONTRACT_VERSION = 4;

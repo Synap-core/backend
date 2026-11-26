@@ -90,6 +90,28 @@ function isBounceType(type: string): type is BounceType {
   return (BOUNCE_TYPES as readonly string[]).includes(type);
 }
 
+/**
+ * The `?surface=` of an object link (Surfaces P3,
+ * `/open/<kind>/<id>?surface=<surfaceId>`, built by the pod's `openLink` and
+ * hub-rest-client's `openUrl`): the id of ONE surface attached to the object,
+ * which the page opens on. Anything but a uuid is dropped (null), never
+ * fetched.
+ */
+export function parseOpenSurfaceParam(value: unknown): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string") return null;
+  const id = raw.trim();
+  return isUuid(id) ? id : null;
+}
+
+/** The kinds whose page can open on an attached surface (anchor kinds hosted here). */
+export const SURFACE_ANCHOR_HOST_TYPES = [
+  "entity",
+  "session",
+  "playbook",
+  "track",
+] as const satisfies readonly HostType[];
+
 export function parseOpenParams(type: string, id: string): ParsedOpen {
   const kind = type.trim().toLowerCase();
   const rawId = id.trim();
