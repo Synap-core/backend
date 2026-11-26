@@ -14066,213 +14066,6 @@ export interface RevertPass {
 	startedAt: Date;
 	entityIds: Set<string>;
 }
-/**
- * Context Types
- *
- * Proper type definitions for tRPC context to avoid `any` types.
- */
-/**
- * Database client type
- *
- * Note: Using `any` here to preserve Drizzle's schema inference.
- * Attempting to use PostgresJsDatabase<any> loses the schema generic
- * and breaks db.query.tableName access patterns.
- */
-export type DatabaseClient = any;
-/**
- * Ory Kratos identity
- */
-export interface KratosIdentity {
-	id: string;
-	traits: {
-		email: string;
-		name?: string;
-		[key: string]: unknown;
-	};
-}
-/**
- * Ory Kratos session
- */
-export interface KratosSession {
-	identity: KratosIdentity;
-	active: boolean;
-	expires_at?: string;
-	authenticated_at?: string;
-	/** How it was authenticated (Kratos); the step-up clock reads it. */
-	authentication_methods?: Array<{
-		completed_at?: string;
-		method?: string;
-		provider?: string;
-	}>;
-	/**
-	 * Set ONLY when the person came in on a Synap app's device token
-	 * (`appSessionMiddleware`): the device it was minted
-	 * for, and when the person last really authenticated for it (`authTime`,
-	 * the step-up clock). Absent on a Kratos session. Such a session has no
-	 * `authenticated_at`, so account recovery never counts it as a recent
-	 * sign-in.
-	 */
-	device?: {
-		authTime: Date | null;
-		clientId: string;
-		id: string;
-	};
-}
-/**
- * User object (simplified from Kratos identity)
- */
-export interface User {
-	id: string;
-	email: string;
-	name?: string;
-}
-/**
- * Full tRPC context
- */
-export interface Context {
-	db: DatabaseClient;
-	authenticated: boolean;
-	userId?: string | null;
-	user?: User | null;
-	session?: KratosSession | null;
-	/**
-	 * What kind of PERSON session `session` is: a Kratos session (browser
-	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
-	 * `createContext`, from what the app session gate resolved from the row
-	 * (`middleware/app-session.ts`); null when there is no session. A credential
-	 * door takes a `person_device` session only shortly after a real sign-in
-	 * (`requireFreshAuthentication`, trpc.ts).
-	 */
-	sessionKind?: "kratos" | "person_device" | null;
-	req?: Request;
-	socketIO?: any;
-	workspaceId?: string | null;
-	/**
-	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
-	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
-	 * with the user-access floor, so a stale/forged id can never widen access.
-	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
-	 */
-	projectId?: string | null;
-	workspaceRole?: string | null;
-	/**
-	 * Request source — "intelligence" when the request comes from the Intelligence Hub
-	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
-	 */
-	source?: string | null;
-	/**
-	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
-	 * Cannot be spoofed by a human JWT session.
-	 */
-	isHubProtocol?: boolean;
-	/**
-	 * Set ONLY by a Hub door that acts as the person (their own app token,
-	 * past `rejectAgentReviewer`) on the caller context it builds: the session
-	 * roster of the human doors applies there (`rosterReadFor`). Never set from
-	 * a request; ignored with an acting agent.
-	 */
-	personRoster?: boolean;
-	/**
-	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
-	 * its workspace binding, threaded from api-key-auth middleware. They let the
-	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
-	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
-	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
-	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
-	 * `hub-protocol/guard.ts`.
-	 */
-	keyType?: string | null;
-	keyWorkspaceId?: string | null;
-	/**
-	 * The agent user ID acting on behalf of this request, when the caller is an
-	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
-	 * governance membrane: when present, mutations route through
-	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
-	 * operator/human-driven requests, which stay synchronous.
-	 */
-	agentUserId?: string | null;
-	/**
-	 * INTERNAL CHANNEL — never from a request. No context factory populates it
-	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
-	 * ever read this from a header or input would hand any caller an "assume my
-	 * write is already approved" primitive.
-	 *
-	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
-	 * `applyProposalApproval`'s composite caller … it arrives solely from that
-	 * internal object literal." That was FALSE on the day it was written. There
-	 * are TWO producers, and the omission mattered because the field is read as a
-	 * security carve-out (below), so the comment understated where that carve-out
-	 * applies:
-	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
-	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
-	 *     auto-apply composite caller (its existence is asserted by
-	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
-	 *
-	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
-	 * set this ONLY from an internal caller that has ALREADY obtained a
-	 * governance decision for the write it is about to make. It means "a decision
-	 * exists for this", not merely "an internal caller made this".
-	 *
-	 * Two load-bearing meanings:
-	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
-	 *    APPROVER via `proposals.reviewedBy`.
-	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
-	 *    re-entering the governance membrane. Without that skip the ladder falls
-	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
-	 *    edge is silently never created while the receipt reports it linked.
-	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
-	 *    executor): it gates on the APPROVER, while its `agentUserId` input
-	 *    still owns the session.
-	 *
-	 * Declared here rather than cast at each reader: it was read through
-	 * `(ctx as { governanceProposalId?: string })` in seven places across three
-	 * files, one of which now guards the security fix above — so renaming the
-	 * field would have broken all seven with ZERO typecheck signal.
-	 */
-	governanceProposalId?: string;
-	/**
-	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
-	 * A proposal executor calling a router through `createCaller` sets it when
-	 * `applyProposalApproval` already checked the proof of presence for this
-	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
-	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
-	 * which files set it.
-	 */
-	presenceChecked?: "applyProposalApproval";
-	/**
-	 * INTERNAL CHANNEL — never from a request. An approval executor replaying an
-	 * agent's create sets it to the agent that wrote the proposal: the row
-	 * records it as its actor. Governance never reads it (the replay carries no
-	 * `agentUserId`, so it applies instead of proposing again).
-	 */
-	approvedAuthorAgentUserId?: string | null;
-	/**
-	 * The message ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this message.
-	 */
-	sourceMessageId?: string | null;
-	/**
-	 * Session ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this session.
-	 */
-	sessionId?: string | null;
-	/**
-	 * `"sync"` when this request materializes a bulk mirror of an external source
-	 * (a connection sync, or the approval of its grouped import). Forwarded by the
-	 * entity/relation doors to `recordDomainMutation`, so event automations skip
-	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
-	 */
-	origin?: "sync";
-	/**
-	 * The enclosing session revert pass (`revertSession`), so each per-proposal
-	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
-	 * and it is never read from procedure input: a client must not be able to
-	 * exempt entities from the edit check.
-	 */
-	revertPass?: RevertPass;
-}
 declare const PROMOTE_TO_BODY_REFUSALS: readonly [
 	"not_body_property",
 	"empty_value",
@@ -15106,6 +14899,230 @@ export interface CapturePlacement {
 		workspaceId: string;
 		workspaceName: string;
 	};
+}
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
+/** Counts per lifecycle category; a category with none is left out. */
+export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
+/** Which of `sessionIds` hold an open PR. Throws when the read fails. */
+export type OpenPrBlockingRead = (sessionIds: readonly string[]) => Promise<Set<string>>;
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
+	id: string;
+	traits: {
+		email: string;
+		name?: string;
+		[key: string]: unknown;
+	};
+}
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
+	identity: KratosIdentity;
+	active: boolean;
+	expires_at?: string;
+	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
+}
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
+	id: string;
+	email: string;
+	name?: string;
+}
+/**
+ * Full tRPC context
+ */
+export interface Context {
+	db: DatabaseClient;
+	authenticated: boolean;
+	userId?: string | null;
+	user?: User | null;
+	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
+	req?: Request;
+	socketIO?: any;
+	workspaceId?: string | null;
+	/**
+	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+	 * with the user-access floor, so a stale/forged id can never widen access.
+	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+	 */
+	projectId?: string | null;
+	workspaceRole?: string | null;
+	/**
+	 * Request source — "intelligence" when the request comes from the Intelligence Hub
+	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+	 */
+	source?: string | null;
+	/**
+	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+	 * Cannot be spoofed by a human JWT session.
+	 */
+	isHubProtocol?: boolean;
+	/**
+	 * Set ONLY by a Hub door that acts as the person (their own app token,
+	 * past `rejectAgentReviewer`) on the caller context it builds: the session
+	 * roster of the human doors applies there (`rosterReadFor`). Never set from
+	 * a request; ignored with an acting agent.
+	 */
+	personRoster?: boolean;
+	/**
+	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
+	 * its workspace binding, threaded from api-key-auth middleware. They let the
+	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
+	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
+	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
+	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
+	 * `hub-protocol/guard.ts`.
+	 */
+	keyType?: string | null;
+	keyWorkspaceId?: string | null;
+	/**
+	 * The agent user ID acting on behalf of this request, when the caller is an
+	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
+	 * governance membrane: when present, mutations route through
+	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
+	 * operator/human-driven requests, which stay synchronous.
+	 */
+	agentUserId?: string | null;
+	/**
+	 * INTERNAL CHANNEL — never from a request. No context factory populates it
+	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+	 * ever read this from a header or input would hand any caller an "assume my
+	 * write is already approved" primitive.
+	 *
+	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+	 * `applyProposalApproval`'s composite caller … it arrives solely from that
+	 * internal object literal." That was FALSE on the day it was written. There
+	 * are TWO producers, and the omission mattered because the field is read as a
+	 * security carve-out (below), so the comment understated where that carve-out
+	 * applies:
+	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+	 *     auto-apply composite caller (its existence is asserted by
+	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+	 *
+	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
+	 * set this ONLY from an internal caller that has ALREADY obtained a
+	 * governance decision for the write it is about to make. It means "a decision
+	 * exists for this", not merely "an internal caller made this".
+	 *
+	 * Two load-bearing meanings:
+	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+	 *    APPROVER via `proposals.reviewedBy`.
+	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+	 *    re-entering the governance membrane. Without that skip the ladder falls
+	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+	 *    edge is silently never created while the receipt reports it linked.
+	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
+	 *    executor): it gates on the APPROVER, while its `agentUserId` input
+	 *    still owns the session.
+	 *
+	 * Declared here rather than cast at each reader: it was read through
+	 * `(ctx as { governanceProposalId?: string })` in seven places across three
+	 * files, one of which now guards the security fix above — so renaming the
+	 * field would have broken all seven with ZERO typecheck signal.
+	 */
+	governanceProposalId?: string;
+	/**
+	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
+	 * A proposal executor calling a router through `createCaller` sets it when
+	 * `applyProposalApproval` already checked the proof of presence for this
+	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
+	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
+	 * which files set it.
+	 */
+	presenceChecked?: "applyProposalApproval";
+	/**
+	 * INTERNAL CHANNEL — never from a request. An approval executor replaying an
+	 * agent's create sets it to the agent that wrote the proposal: the row
+	 * records it as its actor. Governance never reads it (the replay carries no
+	 * `agentUserId`, so it applies instead of proposing again).
+	 */
+	approvedAuthorAgentUserId?: string | null;
+	/**
+	 * The message ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this message.
+	 */
+	sourceMessageId?: string | null;
+	/**
+	 * Session ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this session.
+	 */
+	sessionId?: string | null;
+	/**
+	 * `"sync"` when this request materializes a bulk mirror of an external source
+	 * (a connection sync, or the approval of its grouped import). Forwarded by the
+	 * entity/relation doors to `recordDomainMutation`, so event automations skip
+	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	origin?: "sync";
+	/**
+	 * The enclosing session revert pass (`revertSession`), so each per-proposal
+	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
+	 * and it is never read from procedure input: a client must not be able to
+	 * exempt entities from the edit check.
+	 */
+	revertPass?: RevertPass;
+	/**
+	 * The open-PR read of the enclosing needs-you read (`readAttention`,
+	 * `sharedOpenPrRead`), so `proposals.groups` classifies its pending rows
+	 * from the SAME one read the owed half and the clusters' order use.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	openPrRead?: OpenPrBlockingRead;
 }
 export interface PersistedCaptureResult {
 	messageId: string;
@@ -18774,12 +18791,6 @@ export interface ProposalCluster {
 	 */
 	attentionFloorCount: number;
 }
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 /** How many clusters out of the headline sit in each of the rule's folds. */
 export interface ClusterFoldCounts {
 	working: number;
@@ -22586,8 +22597,6 @@ export interface SessionsOwingGrade {
 		ungraded: number;
 	}>;
 }
-/** Counts per lifecycle category; a category with none is left out. */
-export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
 export interface GoalRollup {
 	/** When the goal entered its status (ISO); `sinceMeasured` false = created. */
 	since: string | null;
