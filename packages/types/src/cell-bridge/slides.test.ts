@@ -56,11 +56,14 @@ function boot(elements: Array<Record<string, string>>) {
       return nodes.filter((n) => n.hasAttribute("data-slide"));
     },
     createElement: () => new FakeElement(),
-    getElementById: (id: string) => head.children.find((c) => c.id === id) ?? null,
+    getElementById: (id: string) =>
+      head.children.find((c) => c.id === id) ?? null,
   };
   const listeners: Record<string, Listener[]> = {};
   const posted: Array<Record<string, unknown>> = [];
-  const parent = { postMessage: (msg: Record<string, unknown>) => posted.push(msg) };
+  const parent = {
+    postMessage: (msg: Record<string, unknown>) => posted.push(msg),
+  };
   const win = {
     parent,
     document,
@@ -71,7 +74,10 @@ function boot(elements: Array<Record<string, string>>) {
   new Function("window", CELL_BRIDGE_SDK)(win);
   const fromParent = (data: unknown) =>
     (listeners.message ?? []).forEach((fn) => fn({ source: parent, data }));
-  const key = (k: string, target: Record<string, unknown> = { tagName: "BODY" }) => {
+  const key = (
+    k: string,
+    target: Record<string, unknown> = { tagName: "BODY" }
+  ) => {
     const event = {
       key: k,
       target,
@@ -85,7 +91,17 @@ function boot(elements: Array<Record<string, string>>) {
   };
   const current = () =>
     nodes.findIndex((n) => n.hasAttribute("data-synap-slide-current"));
-  return { nodes, root, head, posted, parent, listeners, fromParent, key, current };
+  return {
+    nodes,
+    root,
+    head,
+    posted,
+    parent,
+    listeners,
+    fromParent,
+    key,
+    current,
+  };
 }
 
 const DECK = [
@@ -167,7 +183,12 @@ describe("the slide door: the SDK presents a page's data-slide elements", () => 
 });
 
 describe("parseFrameSlideChanged: the host trusts no frame", () => {
-  const ok = { type: FRAME_SLIDE_CHANGED_TYPE, slideId: "s", index: 1, total: 2 };
+  const ok = {
+    type: FRAME_SLIDE_CHANGED_TYPE,
+    slideId: "s",
+    index: 1,
+    total: 2,
+  };
   it("keeps a well-formed report", () => {
     expect(parseFrameSlideChanged({ ...ok, extra: "dropped" })).toEqual(ok);
   });

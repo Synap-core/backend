@@ -43,14 +43,19 @@ function bootSdk(html: string) {
   const win = {
     parent,
     document,
-    addEventListener: (type: string, fn: (e: { source: unknown; data: unknown }) => void) => {
+    addEventListener: (
+      type: string,
+      fn: (e: { source: unknown; data: unknown }) => void
+    ) => {
       if (type === "message") listeners.push(fn);
     },
   };
   new Function("window", CELL_BRIDGE_SDK)(win);
   const ask = (slideId: string, index: number) => {
     posted.length = 0;
-    listeners.forEach((fn) => fn({ source: parent, data: frameSlideGoto(slideId, index) }));
+    listeners.forEach((fn) =>
+      fn({ source: parent, data: frameSlideGoto(slideId, index) })
+    );
     return posted.map(parseFrameSlideChanged);
   };
   return { ask, document };
@@ -60,14 +65,25 @@ describe("the slide rule: the frame names slides as the pod's manifest does", ()
   const slides = htmlBlockManifest(DECK).filter((b) => b.kind === "slide");
 
   it("the manifest sees the deck (non-vacuity)", () => {
-    expect(slides.map((s) => s.id)).toEqual(["intro", "slide-2", "ask", "slide-4", "market"]);
+    expect(slides.map((s) => s.id)).toEqual([
+      "intro",
+      "slide-2",
+      "ask",
+      "slide-4",
+      "market",
+    ]);
   });
 
   it("every manifest slide, asked by its id, is shown at its position", () => {
     const { ask } = bootSdk(DECK);
     slides.forEach((slide, position) => {
       expect(ask(slide.id, 9_999)).toEqual([
-        { type: "synap:slide:changed", slideId: slide.id, index: position, total: slides.length },
+        {
+          type: "synap:slide:changed",
+          slideId: slide.id,
+          index: position,
+          total: slides.length,
+        },
       ]);
     });
   });
@@ -77,7 +93,9 @@ describe("the slide rule: the frame names slides as the pod's manifest does", ()
     slides.forEach((slide, position) => {
       expect(ask("not-a-slide", position)[0]?.slideId).toBe(slide.id);
       // Shown alone: the current mark is on that slide only.
-      expect(document.querySelectorAll("[data-synap-slide-current]").length).toBe(1);
+      expect(
+        document.querySelectorAll("[data-synap-slide-current]").length
+      ).toBe(1);
     });
   });
 });
