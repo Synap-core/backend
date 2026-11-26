@@ -54,6 +54,15 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(ddlFor(schema.automations as unknown as PgTable));
   await pg.exec(M0447);
+  // The structure floor's class row (`@agent-builds-structure`, 0451): off
+  // here, so an agent's create is never read further (`floor-switch.pglite`
+  // drives the switched-on rows through the real resolver).
+  await pg.exec(`CREATE TABLE governance_rules (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    principal_kind text NOT NULL, scope_kind text NOT NULL,
+    target_kind text NOT NULL, target_pattern text NOT NULL,
+    verdict text NOT NULL, created_by text, revoked_at timestamptz
+  );`);
   db = drizzle(pg, { schema });
 }, 120_000);
 afterAll(async () => pg?.close());

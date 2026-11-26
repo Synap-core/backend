@@ -180,7 +180,8 @@ beforeAll(async () => {
   // The share, published through the REAL snapshot builder with every key.
   const snapshot = await buildPublishedSnapshot(h.db as never, {
     requestedKind: "entity",
-    entityId: E,
+    resourceType: "entity",
+    resourceId: E,
     workspaceId: SITE,
     documentId: null,
     fields: ALL_FIELDS,

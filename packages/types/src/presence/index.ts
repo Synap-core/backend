@@ -601,6 +601,8 @@ export const SENSITIVE_ACTIONS = {
   "governanceRules.proposeNextRung": "governance",
   "governanceRules.setReversibleDefault": "governance",
   "governanceRules.setOwnOrganiseDefault": "governance",
+  "governanceRules.setPodFloorDefault": "governance",
+  "governanceRules.setPodSetting": "governance",
   // How a tool action runs for every AI (on its own / asks first / never).
   "governanceRules.setActionMode": "governance",
   "govConfig.set": "governance",
@@ -682,6 +684,11 @@ export const SENSITIVE_ACTION_TOKENS = {
     action: "update",
     objectKind: "rule",
   },
+  "governanceRules.setPodFloorDefault": {
+    action: "update",
+    objectKind: "rule",
+  },
+  "governanceRules.setPodSetting": { action: "update", objectKind: "rule" },
   "governanceRules.setActionMode": { action: "update", objectKind: "rule" },
   "govConfig.set": { action: "update", objectKind: "rule" },
 } as const satisfies Record<

@@ -58,7 +58,14 @@ vi.mock("@synap/database", async (importOriginal) => {
         }),
       }),
       select: () => ({
-        from: () => ({ where: async () => [] }),
+        from: () => ({
+          // Awaited as is, or read newest-first (a floor switch's row, none
+          // here: every floor holds).
+          where: () =>
+            Object.assign(Promise.resolve([]), {
+              orderBy: () => ({ limit: async () => [] }),
+            }),
+        }),
       }),
     },
   };

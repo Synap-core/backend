@@ -57,6 +57,12 @@ import {
   setReversibleDefault,
   readOwnOrganiseDefault,
   setOwnOrganiseDefault,
+  readPodClassDefault,
+  nonWidenableFloorAtPod,
+  setPodClassDefault,
+  readPodNumberSetting,
+  readPodNumberSettings,
+  POD_NUMBER_SETTING_KEYS,
 } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
@@ -88,9 +94,11 @@ import {
   fileRuleGrant,
   loadVisibleNextRungRow,
   projectNextRung,
+  floorsYieldFor,
   readAlwaysApproved,
   readNextRungs,
 } from "../services/proposals/next-rung.js";
+import { applyGovConfigChange } from "../services/proposals/gov-config.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
@@ -102,7 +110,10 @@ import {
   readActionModes,
   writeActionMode,
 } from "../services/governance/action-mode.js";
-import { ACTION_RUN_MODES } from "@synap-core/types/governance-rules";
+import {
+  ACTION_RUN_MODES,
+  isRootSwitchRule,
+} from "@synap-core/types/governance-rules";
 import {
   draftMatrixWiden,
   loadAgentOwner,
@@ -118,9 +129,11 @@ import {
   ADMIN_ACTIONS,
   AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
   AGENT_STRUCTURE_WRITE_EVENT_KEYS,
-  nonWidenableFloorFor,
   REVERSIBLE_EVENT_KEYS,
   OWN_ORGANISE_EVENT_KEYS,
+  AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
+  FLOOR_CLASS_PATTERNS,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
 } from "@synap/governance-policy";
 
 // The active-rule predicate, the pod∪workspace scope lens, and the agent-label
@@ -789,7 +802,7 @@ export const governanceRulesRouter = router({
           rung: "2.08",
           editable: false as const,
           actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
-          note: "An agent defining a kind or role always goes to review, and no rule can widen it. A person defining one is unaffected.",
+          note: "An agent defining a kind or role always goes to review, and no rule can widen it; only the pod switch @agent-defines-kinds lets the other approval rules decide. A person defining one is unaffected.",
         },
         {
           key: "agent-structure" as const,
@@ -797,7 +810,7 @@ export const governanceRulesRouter = router({
           rung: "2.09",
           editable: false as const,
           actions: AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[],
-          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it. A person doing the same is unaffected.",
+          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it; only the pod switch @agent-builds-structure lets the other approval rules decide its playbook, automation and workspace creates and automation activations. A person doing the same is unaffected.",
         },
         {
           key: "destructive" as const,
@@ -882,6 +895,75 @@ export const governanceRulesRouter = router({
     }),
 
   /**
+   * The floors a pod may switch (`FLOOR_CLASS_PATTERNS`): each family's class
+   * row state, the writes it covers, and the pod's number settings the
+   * governance reads (`POD_NUMBER_SETTINGS`). Read by Settings › Approvals.
+   */
+  podFloorDefaults: protectedProcedure.query(async ({ ctx }) => {
+    const families = await Promise.all(
+      FLOOR_CLASS_PATTERNS.map(async (pattern) => ({
+        pattern,
+        ...(await readPodClassDefault(db, pattern)),
+        actions:
+          pattern === AGENT_DEFINES_KINDS_CLASS_PATTERN
+            ? (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[])
+            : (AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[]),
+      }))
+    );
+    return {
+      families,
+      settings: await readPodNumberSettings(db),
+      canManage: await isPodAdmin(ctx.userId),
+    };
+  }),
+
+  /**
+   * Switch one floor family: on, its floor yields to the other approval
+   * rules (never auto by itself); off, the floor holds. Pod-admin only,
+   * humans only, with the reversible default's step-up.
+   */
+  setPodFloorDefault: credentialProcedure
+    .input(presenceInput)
+    .input(
+      z.object({
+        pattern: z.enum(FLOOR_CLASS_PATTERNS),
+        enabled: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      return setPodClassDefault(db, {
+        pattern: input.pattern,
+        enabled: input.enabled,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
+   * Set one of the pod's governance number settings, through the gov-config
+   * store-write (versioned). Pod-admin only, humans only, with step-up.
+   */
+  setPodSetting: credentialProcedure
+    .input(presenceInput)
+    .input(
+      z.object({
+        key: z.enum(POD_NUMBER_SETTING_KEYS),
+        value: z.number().int(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      // The one gov-config store-write, as every settings change.
+      await applyGovConfigChange({
+        store: "config_settings",
+        op: "set",
+        spec: { podSetting: { key: input.key, value: input.value } },
+        createdBy: ctx.userId,
+      });
+      return { value: await readPodNumberSetting(db, input.key) };
+    }),
+
+  /**
    * Create one rule — the "always approve for X" door. See file header for
    * how the five granularities map to inputs.
    *
@@ -900,12 +982,20 @@ export const governanceRulesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // A Settings switch owns its pod row (one active row each): a second one
+      // written here would make the switch read either of two rows.
+      if (isRootSwitchRule(input)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `ROOT_SWITCH: "${input.targetPattern}" is a Settings switch; switch it in Settings › Approvals.`,
+        });
+      }
       // A rule that can never fire is refused, not stored (B3). An exact action
       // key behind a non-widenable floor resolves ABOVE the rule store (rung
       // 2.8), so an `auto` row there would be a success toast for a grant that
       // does nothing. The answer comes from the engine itself, never a list here.
       if (input.verdict === "auto" && input.targetKind === "action") {
-        const floor = nonWidenableFloorFor(input.targetPattern);
+        const floor = await nonWidenableFloorAtPod(db, input.targetPattern);
         if (floor) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1115,7 +1205,7 @@ export const governanceRulesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const row = await loadVisibleNextRungRow(ctx.userId, input.itemRef.id);
-      const { rule } = projectNextRung(row);
+      const { rule } = projectNextRung(row, await floorsYieldFor([row]));
       let mayGrant = false;
       if (rule) {
         try {

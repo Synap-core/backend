@@ -61,7 +61,7 @@ const CountsSchema = z.object({
 const ComparedBySchema = z
   .enum(PACKAGE_UPDATE_COMPARED_BY)
   .describe(
-    "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+    "`field`: compared and applied field by field (view, skill, automation, agent template). `package`: applied as a whole through the kind's own door (workspace, capability, renderer bundle); no field rows."
   );
 
 const SummarySchema = z.object({

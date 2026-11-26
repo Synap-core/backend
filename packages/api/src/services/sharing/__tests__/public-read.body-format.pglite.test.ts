@@ -245,13 +245,17 @@ describe("GET /public/shares/:token serves a body in its real format", () => {
   it("an html document is served as html, never as markdown", async () => {
     const { status, body } = await readPublic(tokens.html);
     expect(status).toBe(200);
-    expect(body.body).toEqual({ format: "html", content: HTML_BODY });
+    expect(body.body).toMatchObject({ format: "html", content: HTML_BODY });
+    // Published mode (contract 3): the page composed to run with scripts.
+    expect(typeof body.body.page).toBe("string");
   });
 
   it("an html document whose checkpoint says text/markdown is still html (the document's type decides)", async () => {
     const { status, body } = await readPublic(tokens.legacyHtml);
     expect(status).toBe(200);
-    expect(body.body).toEqual({ format: "html", content: HTML_BODY });
+    expect(body.body).toMatchObject({ format: "html", content: HTML_BODY });
+    // Published mode (contract 3): the page composed to run with scripts.
+    expect(typeof body.body.page).toBe("string");
   });
 
   it("a pdf's bytes are never served as text: the publication reads with no body", async () => {

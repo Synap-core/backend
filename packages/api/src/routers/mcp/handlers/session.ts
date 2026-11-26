@@ -2062,6 +2062,8 @@ export const sessionHandlers: McpHandlerMap = {
           // changed reads off it, what is still owed rides `nudges`.
           session: sessionWriteEcho(result.session),
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
+          // ONE CARD PER QUESTION: the card the person already has, named.
+          ...(result.deduped ? { deduped: result.deduped } : {}),
           ...(result.targets ? { targets: result.targets } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }

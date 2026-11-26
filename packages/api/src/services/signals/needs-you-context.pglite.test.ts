@@ -8,7 +8,9 @@
  *     one whose `ref` names ANOTHER person's entity — a read that resolves
  *     refs without the floor serves that entity's title;
  *   - a proposal row whose proposal targets the same file — its subject is
- *     the target, read in the same entity read as the slot's;
+ *     the target, read in the same entity read as the slot's; and a facet
+ *     proposal, whose target is the facet row — its subject is the entity
+ *     the facet is on (`proposalObjectsOf`), not nothing;
  *   - another person's session — read as unreadable, never as empty;
  *   - a page of one session and a page of three sessions with more refs —
  *     a read per row issues more queries for the bigger page.
@@ -122,6 +124,7 @@ const FILE_DOC = randomUUID();
 const FOREIGN = randomUUID();
 const DOC = randomUUID();
 const PROPOSAL = randomUUID();
+const FACET_PROPOSAL = randomUUID();
 const NOW = Date.now();
 const at = (min: number) => new Date(NOW + min * 60_000);
 
@@ -230,6 +233,18 @@ beforeAll(async () => {
      values ($1, null, 'entity', $3, 'update', '{}'::jsonb, 'pending', $4, $2, $5, $5)`,
     [PROPOSAL, USER, FILE, S.main, at(-5)]
   );
+  await q(
+    `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, session_id, created_by, created_at, updated_at)
+     values ($1, null, 'facet', $3, 'attach', $4::jsonb, 'pending', $5, $2, $6, $6)`,
+    [
+      FACET_PROPOSAL,
+      USER,
+      randomUUID(),
+      JSON.stringify({ data: { entityId: FILE } }),
+      S.main,
+      at(-4),
+    ]
+  );
 });
 
 const slotRow = (
@@ -334,6 +349,21 @@ describe("readNeedsYouContext — subject: the object a request is about", () =>
     expect(theirs.rows[ROWS[1]!.id]!.subject).toMatchObject({
       status: "ok",
       value: { title: "Someone else's secret plan" },
+    });
+  });
+
+  it("a facet proposal's subject is the entity the facet is on", async () => {
+    const row: NeedsYouContextRow = {
+      id: `proposal:${FACET_PROPOSAL}`,
+      kind: "proposal-cluster",
+      title: "Mark the S11 board as a client asset",
+      target: { kind: "proposal", id: FACET_PROPOSAL },
+      proposalIds: [FACET_PROPOSAL],
+    };
+    const ctx = await readNeedsYouContext([row], reader);
+    expect(ctx.rows[row.id]!.subject).toMatchObject({
+      status: "ok",
+      value: { kind: "entity", id: FILE },
     });
   });
 

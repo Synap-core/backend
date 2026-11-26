@@ -1584,11 +1584,13 @@ export interface NeedsYouAccessRequest {
 	 * `capability`: one of the person's OWN tool connections broke (every
 	 * connection of that tool needs a sign-in again, `secrets.connection_state
 	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
+	 * `automation` / `playbook`: something a recent approval of the person's
+	 * landed whose next step is theirs alone (turn it on, enable what it uses).
 	 */
-	subject: "api_key" | "application" | "capability" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
+	subject: "api_key" | "application" | "automation" | "capability" | "issuer" | "playbook";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name; the landed object's name). */
 	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
+	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection or a landed object. */
 	from: string;
 }
 /**
@@ -7017,6 +7019,7 @@ export interface CellBridgeDeclaredWrite {
 	op: CellBridgeWriteOp;
 }
 export type CellBridgeDeclaredWrites = CellBridgeDeclaredWrite[];
+declare const FRAME_READ_UNDECLARED: "FRAME_READ_UNDECLARED";
 /**
  * What a frame is ABOUT, and the brand it draws in (frame contract v3).
  *
@@ -11006,7 +11009,8 @@ declare const PROPOSAL_LANDED_KINDS: readonly [
 	"track",
 	"agent",
 	"tool",
-	"channel"
+	"channel",
+	"cell"
 ];
 export type ProposalLandedKind = (typeof PROPOSAL_LANDED_KINDS)[number];
 declare const PROPOSAL_SOURCES: readonly [
@@ -12120,12 +12124,12 @@ export interface CompositeCreateDocumentOp {
 export interface PlanProjectEvidence {
 	/** In-plan entity refs + existing, caller-visible evidence entities. */
 	counted: number;
-	/** The agent floor a direct `projects.create` enforces. */
+	/** The pod's evidence count (`governance.project_evidence_min`, 5 by default). */
 	minimum: number;
 	/**
-	 * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
-	 * visible to the reviewer with this marker, and an agent-mode plan carrying
-	 * it can never auto-apply.
+	 * True when `counted < minimum`. NOT a refusal, in a plan or on a direct
+	 * `projects.create`: the step stays visible to the reviewer with this
+	 * marker, and an agent's create carrying it can never auto-apply.
 	 */
 	belowAgentFloor: boolean;
 }
@@ -12410,6 +12414,19 @@ export interface ReversibleDefaultState {
 	/** The active row, so a surface can open it; null when off. */
 	ruleId: string | null;
 }
+declare const POD_NUMBER_SETTINGS: {
+	readonly "governance.own_work_fresh_hours": {
+		readonly default: 24;
+		readonly max: 168;
+		readonly min: 1;
+	};
+	readonly "governance.project_evidence_min": {
+		readonly default: 5;
+		readonly max: 50;
+		readonly min: 0;
+	};
+};
+export type PodNumberSettingKey = keyof typeof POD_NUMBER_SETTINGS;
 declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
 	"purpose",
 	"goal",
@@ -13323,7 +13340,8 @@ declare const INSTALLED_PACKAGE_KINDS: readonly [
 	"view",
 	"skill",
 	"automation",
-	"agent"
+	"agent",
+	"renderer-bundle"
 ];
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 declare const PACKAGE_UPDATE_COMPARED_BY: readonly [
@@ -13540,9 +13558,13 @@ declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
 	"combine"
 ];
 export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
-/** One field an apply (or an undo) changed. */
+/**
+ * One field an apply (or an undo) changed. A renderer bundle's update is one
+ * change of its `version` (`rowKind: "renderer-bundle"`, `rowId` its slug):
+ * Undo puts the version kept on the pod back (`renderer_bundle_versions`).
+ */
 export interface PackageUpdateChange {
-	rowKind: PackageUpdateRowKind;
+	rowKind: PackageUpdateRowKind | "renderer-bundle";
 	rowId: string;
 	field: string;
 	before: unknown;
@@ -13586,6 +13608,61 @@ export type PackageUpdateApplyResult = {
 	proposalIds: string[];
 	status: "proposed";
 };
+declare const RENDERER_BUNDLE_HOLD_REASONS: readonly [
+	"requires",
+	"kit",
+	"undone",
+	"failed"
+];
+export type RendererBundleHoldReason = (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+declare const RENDERER_BUNDLE_WAIT_REASONS: readonly [
+	"soak",
+	"auto_off",
+	"setting_unreadable",
+	"paused",
+	"held",
+	"frozen",
+	"no_owner",
+	"refused"
+];
+export type RendererBundleWaitReason = (typeof RENDERER_BUNDLE_WAIT_REASONS)[number];
+/**
+ * What the pod knows about its renderer bundle's updates
+ * (`renderers.updates`), written by the after-sync pass every 10 minutes.
+ * Dates are ISO strings.
+ */
+export interface RendererBundleUpdateState {
+	slug: string;
+	/** The control plane's newest version; null = never read. */
+	latestVersion: string | null;
+	latestPublishedAt: string | null;
+	/** The last read of the control plane that answered. */
+	checkedAt: string | null;
+	/** Synap retired the version installed here: no wait. */
+	installedRetired: boolean;
+	/**
+	 * The last read or install refused (`reasonCode` is the pod's machine reason,
+	 * e.g. `renderer_bundle_plan_required`); null once one went through.
+	 */
+	refusal: {
+		at: string;
+		message: string;
+		reasonCode: string;
+	} | null;
+	/** A hold on one version (see RENDERER_BUNDLE_HOLD_REASONS). */
+	hold: {
+		at: string;
+		detail: string;
+		reason: RendererBundleHoldReason;
+		version: string;
+	} | null;
+	/** The owner paused this bundle's updates; null = updates on. */
+	pausedAt: string | null;
+	/** Why the newest version waits; null when nothing waits. */
+	waitReason: RendererBundleWaitReason | null;
+	/** When it applies on its own (`waitReason: "soak"` only). */
+	applyAfter: string | null;
+}
 declare const SHIP_STAGES: readonly [
 	"working",
 	"checks",
@@ -17461,6 +17538,12 @@ export interface PostChannelMessageResult {
 	 * label (`ask-text.ts`): filed anyway, said back.
 	 */
 	slot?: {
+		/** ONE CARD PER QUESTION: the open card this question was filed on instead. */
+		deduped?: {
+			asked: string;
+			key: string | null;
+			label: string;
+		};
 		hint?: string;
 		status: string;
 		warnings?: string[];
@@ -18457,7 +18540,7 @@ export interface ProposalSetup {
  *
  * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
  * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
- * `document`, `channel`, `view`), so a host opens each through its one route
+ * `document`, `channel`, `view`, `cell`), so a host opens each through its one route
  * table. A caller that already knows its refs (what a proposal landed) passes
  * them as `refs` instead of a payload.
  */
@@ -18920,6 +19003,8 @@ export interface ProposalExecutorResult {
 	 * key, a run). Absent: the target's kind. Read by the landed stamp.
 	 */
 	primaryKind?: ProposalLandedKind | null;
+	/** What approving did to `primaryId` when the verb cannot say (a define upserts). */
+	primaryRole?: ProposalLandedRole;
 	created?: number;
 	linked?: number;
 	/**
@@ -25791,6 +25876,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/** An HTML page: how many declared reads its snapshot answers, and how many it holds as errors. */
+	page?: {
+		failed: number;
+		reads: number;
+	};
 	/**
 	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
 	 * with the token, so present ONCE too — and only when the pod has a page.
@@ -26236,7 +26326,11 @@ export interface SurfaceRow {
 	cellKey?: string;
 	/** For a renders row: the renderer slot (list, detail, card, dashboard). */
 	slot?: string;
-	/** Today the existing `/open/<id>` link of the body. */
+	/**
+	 * Where it opens: an attached surface on its object's page
+	 * (`/open/<kind>/<id>?surface=<id>`, `OPENABLE_ANCHOR_KINDS`), any other
+	 * row the `/open/…` link of its own body.
+	 */
 	openUrl: string;
 	/** True when the surface cannot be edited through it (an HTML artifact). */
 	readOnly: boolean;
@@ -26267,6 +26361,101 @@ export interface SurfaceWriteProposed {
 	proposalId: string;
 	reviewPath?: string;
 	reviewUrl?: string;
+}
+export interface TokenFinding {
+	source: string;
+	line: number;
+	column: number;
+	kind: "colour" | "font";
+	/** The text found, e.g. `#1a73e8`, `rgb(0 0 0)`, `Inter, sans-serif`. */
+	found: string;
+	/** The CSS property it is set on, when one is written before it. */
+	property: string | null;
+	/** The token to use instead. */
+	suggestion: string;
+}
+declare const A11Y_RULES: readonly [
+	"img-alt",
+	"button-name",
+	"link-name",
+	"field-label",
+	"heading-order"
+];
+export type A11yRule = (typeof A11Y_RULES)[number];
+export interface A11yFinding {
+	source: string;
+	line: number;
+	rule: A11yRule;
+	/** The opening tag as written (cut at 120 characters). */
+	element: string;
+	message: string;
+}
+declare const INSPECT_SURFACE_KINDS: readonly [
+	"cell",
+	"document",
+	"view"
+];
+export type InspectSurfaceKind = (typeof INSPECT_SURFACE_KINDS)[number];
+export type Section<T> = ({
+	status: "ok";
+} & T) | {
+	reason: string;
+	status: "unavailable";
+};
+export interface OpCount {
+	op: string;
+	count: number;
+	lastAt: string;
+}
+/** What one logged surface (a cell type or a page) read. */
+export interface SurfaceReads {
+	surfaceKind: "cell" | "document";
+	key: string;
+	/** What it declares; null = it declares nothing (every read answered). */
+	declared: CellBridgeDeclaredReads | null;
+	used: OpCount[];
+	refused: Array<OpCount & {
+		code: typeof FRAME_READ_UNDECLARED;
+	}>;
+	declaredUnused: string[];
+	/** Ops it asked for that the declaration does not name (all, when it declares nothing). */
+	usedUndeclared: string[];
+}
+export interface ReadsReport {
+	days: number;
+	since: string;
+	surfaces: SurfaceReads[];
+	/** Cells whose reads do not go through the frame read door. */
+	notLogged: Array<{
+		key: string;
+		reason: string;
+	}>;
+}
+export interface LintReport<F> {
+	findings: F[];
+	linted: string[];
+	notLinted: Array<{
+		reason: string;
+		source: string;
+	}>;
+}
+export interface SurfaceInspection {
+	surface: {
+		/** view: the cell types it places. */
+		cellKeys?: string[];
+		id: string | null;
+		kind: InspectSurfaceKind;
+		title: string;
+		typeKey: string | null;
+		workspaceId: string | null;
+	};
+	reads: Section<ReadsReport>;
+	tokens: Section<LintReport<TokenFinding>>;
+	a11y: Section<LintReport<A11yFinding>>;
+	render: {
+		reason: string;
+		status: "unavailable";
+	};
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -26550,6 +26739,11 @@ export interface SettingsUpdateProposalData {
 	capabilityId?: string | null;
 	text?: string;
 	posture?: "auto" | "propose";
+	/** A pod number the governance reads (`POD_NUMBER_SETTINGS`), versioned. */
+	podSetting?: {
+		key: PodNumberSettingKey;
+		value: number;
+	};
 	targetId?: string;
 	agentName?: string | null;
 	currentLimit?: number;
@@ -30668,6 +30862,20 @@ export interface BrokenConnectionSignalInput {
 	/** When it broke: the newest auth failure, else the connection's last change. */
 	brokenAt: Date;
 }
+/**
+ * An object a recent approval landed whose next step only the person takes,
+ * as `listLandedNeedsPerson` reads it (`landed-needs.ts`).
+ */
+export interface LandedNeedSignalInput {
+	kind: "automation" | "playbook";
+	id: string;
+	/** The object's own name; "" when it has none. */
+	name: string;
+	/** Its next step (`objectNextOf`): turn it on, or enable what it uses. */
+	action: "enable" | "turn_on";
+	/** When the approval that landed it was applied. */
+	landedAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -30736,7 +30944,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "landed-needs" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -45961,6 +46169,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		podFloorDefaults: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				canManage: boolean;
+				families: {
+					actions: readonly string[];
+					enabled: boolean;
+					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
+					ruleId: string | null;
+				}[];
+				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
+			};
+		}>;
 		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				itemRef: {
@@ -46106,6 +46328,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ReversibleDefaultState;
+		}>;
+		setPodFloorDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				pattern: "@agent-builds-structure" | "@agent-defines-kinds";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: ReversibleDefaultState;
+		}>;
+		setPodSetting: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				key: "governance.own_work_fresh_hours" | "governance.project_evidence_min";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				value: number;
+			};
+			meta: object;
+			output: {
+				value: number;
+			};
 		}>;
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -51699,6 +51999,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PackageUpdateList;
 		}>;
+		pauseUpdates: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				paused: boolean;
+				slug: string;
+			};
+			meta: object;
+			output: RendererBundleUpdateState | null;
+		}>;
 		undo: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				receiptId: string;
@@ -54748,7 +55056,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -57154,6 +57462,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -57176,6 +57485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -57195,10 +57505,70 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
 				success: boolean;
+			};
+		}>;
+		approveSession: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				comment?: string | undefined;
+				expectedRevisions: Record<string, number>;
+				presenceByProposal?: Record<string, {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				}> | undefined;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				results: {
+					candidates?: Array<{
+						id: string;
+						title: string | null;
+						type: string;
+					}>;
+					error?: string;
+					errorCode?: import("@trpc/server").TRPCError["code"];
+					identities?: ProposalExecutorResult["identities"];
+					identity?: ProposalExecutorResult["identity"];
+					opRef?: string;
+					outcome?: "applied" | "failed" | "not_attempted" | "queued";
+					proposalId: string;
+					queued?: true;
+					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
+					refusals?: ProposalExecutorResult["refusals"];
+					relationsFailed?: ProposalExecutorResult["relationsFailed"];
+					success: boolean;
+				}[];
 			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
@@ -57263,7 +57633,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identities?: ProposalExecutorResult["identities"];
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
+					outcome?: "applied" | "failed" | "not_attempted" | "queued";
 					proposalId: string;
+					queued?: true;
 					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
@@ -58447,6 +58819,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: RendererStatus;
+		}>;
+		updates: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: RendererBundleUpdateState | null;
 		}>;
 	}>>;
 	resourceState: import("@trpc/server").TRPCBuiltRouter<{
@@ -59865,6 +60242,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						connections: BrokenConnectionSignalInput[];
 						issuers: PendingIssuerSignalInput[];
 						keys: PendingKeyRequestSignalInput[];
+						landed: LandedNeedSignalInput[];
 					};
 					accessRequestsTruncated: boolean;
 					allNotifications: (NotificationSignalInput & {
@@ -61189,6 +61567,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | {
 					id: string;
 					kind: "document";
+				} | {
+					draftId: string;
+					kind: "draft";
 				};
 				workspaceId?: string | null | undefined;
 			};
@@ -61245,6 +61626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					config?: Record<string, unknown> | undefined;
 					content?: string | undefined;
 					props?: Record<string, unknown> | undefined;
+					reads?: unknown[] | null | undefined;
 					url?: string | undefined;
 					viewType?: string | undefined;
 					workspaceId?: string | undefined;
@@ -61283,6 +61665,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: SurfacesForObject;
+		}>;
+		inspect: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				days?: number | undefined;
+				surface: {
+					id?: string | undefined;
+					kind: "cell" | "document" | "view";
+					typeKey?: string | undefined;
+				};
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: SurfaceInspection;
 		}>;
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

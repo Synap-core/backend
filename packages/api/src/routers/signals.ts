@@ -126,6 +126,7 @@ import {
   type OwedSlotSignalInput,
   type PermissionSessionSignalInput,
   type BrokenConnectionSignalInput,
+  type LandedNeedSignalInput,
   type PendingAppRequestSignalInput,
   type PendingKeyRequestSignalInput,
   type PendingIssuerSignalInput,
@@ -141,6 +142,7 @@ import {
   podAdminCheck,
 } from "../services/signals/access-requests.js";
 import { listBrokenConnections } from "../services/signals/broken-connections.js";
+import { listLandedNeedsPerson } from "../services/signals/landed-needs.js";
 import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
 import { listConvertibleGoals } from "../services/signals/convertible-goals.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
@@ -320,6 +322,7 @@ export type SignalSubRead =
   | "app-requests"
   | "key-requests"
   | "broken-connections"
+  | "landed-needs"
   | "invites"
   | "convertible-goals"
   | "liveness"
@@ -487,6 +490,7 @@ async function readAttention(
     appRequests,
     keyRequestRows,
     brokenConnections,
+    landedNeeds,
     spaceInvites,
     convertibleGoals,
   ] = await Promise.all([
@@ -642,6 +646,16 @@ async function readAttention(
           ? await listBrokenConnections({ userId })
           : { rows: [], truncated: false }
     ),
+    // What the person's recent approvals landed that only they can take on
+    // (turn it on, enable what it uses): the same floor-only rule.
+    half(
+      "landed-needs",
+      { rows: [] as LandedNeedSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listLandedNeedsPerson(reader)
+          : { rows: [], truncated: false }
+    ),
     half(
       "invites",
       { rows: [] as SpaceInviteSignalInput[], truncated: false },
@@ -724,12 +738,14 @@ async function readAttention(
       applications: appRequests.value.rows,
       keys: keyRequestRows.value.rows,
       connections: brokenConnections.value.rows,
+      landed: landedNeeds.value.rows,
     },
     accessRequestsTruncated:
       issuers.value.truncated ||
       appRequests.value.truncated ||
       keyRequestRows.value.truncated ||
-      brokenConnections.value.truncated,
+      brokenConnections.value.truncated ||
+      landedNeeds.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
     convertibleGoals: convertibleGoals.value,
@@ -752,6 +768,7 @@ async function readAttention(
         appRequests,
         keyRequestRows,
         brokenConnections,
+        landedNeeds,
         spaceInvites,
         convertibleGoals,
         containers,
@@ -1464,9 +1481,9 @@ export type NeedsYouClassifiedRows = Record<
  *    (`proposalUserFloor`, `proposal` subject), and only when the key holds
  *    `proposal.read`; otherwise withheld, never an empty fold.
  *  - `withheld`: rows no grant clause bounds: notifications are floored on
- *    their owner only (`notifCenter.list`); captures, access requests,
- *    invites and the goals card are the person's or the pod's own and live
- *    in no space.
+ *    their owner only (`notifCenter.list`); captures, access requests
+ *    (landed objects that need the person included), invites and the goals
+ *    card are the person's or the pod's own and live in no space.
  */
 const NARROWED_KEY_HALVES = {
   proposals: "proposal",
@@ -1480,6 +1497,8 @@ const NARROWED_KEY_HALVES = {
   "app-requests": "withheld",
   "key-requests": "withheld",
   "broken-connections": "withheld",
+  // Its objects resolve under the person's floor, not the key's grant.
+  "landed-needs": "withheld",
   invites: "withheld",
   "convertible-goals": "withheld",
 } as const satisfies Record<AttentionHalf, "grant" | "proposal" | "withheld">;
@@ -1695,6 +1714,7 @@ function narrowAttention(
             applications: [],
             keys: [],
             connections: [],
+            landed: [],
           },
           accessRequestsTruncated: false,
           spaceInvites: [],

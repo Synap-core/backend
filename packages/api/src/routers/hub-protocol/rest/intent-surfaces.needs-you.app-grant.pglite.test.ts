@@ -468,6 +468,7 @@ describe("needsYouWithheld — the rule, per key", () => {
     "app-requests",
     "key-requests",
     "broken-connections",
+    "landed-needs",
     "invites",
     "convertible-goals",
   ];

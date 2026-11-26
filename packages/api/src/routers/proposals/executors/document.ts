@@ -1,8 +1,8 @@
 import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
-import { parseDeclaredReads } from "@synap-core/types/cell-bridge";
 import { registerProposalExecutor } from "../execution-registry.js";
+import { readDeclaredFrameIo } from "../../../services/cells/declared-frame-io.js";
 import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
@@ -20,7 +20,7 @@ function declaredPageReadsOf(data: Record<string, unknown>): {
   if (data.reads === undefined || data.reads === null) return {};
   const parsed =
     data.type === "html"
-      ? parseDeclaredReads(data.reads)
+      ? readDeclaredFrameIo({ reads: data.reads })
       : ({ ok: false, error: "only an html page declares reads" } as const);
   if (!parsed.ok) {
     throw new TRPCError({
@@ -28,7 +28,7 @@ function declaredPageReadsOf(data: Record<string, unknown>): {
       message: `This document proposal declares reads a page may not ask (${parsed.error}), and nothing was written.`,
     });
   }
-  return { metadata: { reads: parsed.value } };
+  return parsed.reads ? { metadata: { reads: parsed.reads } } : {};
 }
 
 /** Register the document/* approve executors. */

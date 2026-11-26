@@ -12,8 +12,9 @@
  *     duplicate door (`findDuplicateCandidates`, @synap/api) puts on the
  *     proposal for the reviewer — never a refusal (FB1020 B2).
  *   - provenance: every create stamps who/where it came from into metadata.
- *   - evidence gravity: an agent-initiated project needs ≥ MIN_EVIDENCE_ENTITIES
- *     existing, caller-visible entities as evidence, or it is rejected.
+ *   - evidence gravity: an agent-initiated project below the pod's evidence
+ *     count (MIN_EVIDENCE_ENTITIES by default) is marked for the reviewer and
+ *     never auto-applies; it is not refused.
  *
  * DB-touching helpers (loadActiveProjectsForUser / findProjectDedupCandidates)
  * take an injected db so the pure functions above stay unit-testable without a
@@ -23,6 +24,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { projects } from "../schema/projects.js";
+import { POD_NUMBER_SETTINGS } from "./pod-settings.js";
 import type { getDb } from "../client-pg.js";
 
 // ── Provenance ────────────────────────────────────────────────────────────────
@@ -158,8 +160,9 @@ export function classifyProjectMatch(
 
 // ── Evidence gravity (pure) ───────────────────────────────────────────────────
 
-/** Minimum caller-visible entities an agent must link as project evidence. */
-export const MIN_EVIDENCE_ENTITIES = 5;
+/** The default evidence count (the pod setting `governance.project_evidence_min`). */
+export const MIN_EVIDENCE_ENTITIES =
+  POD_NUMBER_SETTINGS["governance.project_evidence_min"].default;
 
 export interface EvidenceGravityResult {
   ok: boolean;

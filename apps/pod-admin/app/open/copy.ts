@@ -67,8 +67,10 @@ export const en = {
     "Some places couldn’t be read, so this list may be short.",
   "surfaces.untitled": "Untitled",
   "surfaces.showAll": "Show all {n}",
-  "surfaces.showLess": "Show fewer",
-  "surfaces.back": "Back to the page",
+  "surfaces.showLess": "Show less",
+  "surfaces.back": "Back to {title}",
+  "surfaces.open": "Open {title}",
+  "surfaces.notFound": "Not found",
   "surfaces.missing":
     "This surface isn’t on this page any more, or you can’t see it.",
 } as const;
@@ -134,7 +136,9 @@ export const fr: Catalog<typeof en> = {
   "surfaces.untitled": "Sans titre",
   "surfaces.showAll": "Tout afficher ({n})",
   "surfaces.showLess": "En afficher moins",
-  "surfaces.back": "Retour à la page",
+  "surfaces.back": "Retour à {title}",
+  "surfaces.open": "Ouvrir {title}",
+  "surfaces.notFound": "Introuvable",
   "surfaces.missing":
     "Cette surface n’est plus sur cette page, ou vous ne pouvez pas la voir.",
 };

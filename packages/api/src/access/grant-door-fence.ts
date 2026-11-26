@@ -147,6 +147,22 @@ export function processReadableByGrant(
 }
 
 /**
+ * THE RUNS DIGEST (`services/playbooks/runs-digest.ts`): MCP
+ * `synap_list_playbooks({ playbookId, runs: 'digest' })` (classified
+ * `playbook`) counts the playbook's run sessions and their verdicts. A key
+ * this door does not bound gets `runsDigestWithheld`, never a digest of zero
+ * runs.
+ */
+export const RUNS_DIGEST_READ = READS("playbook", "session");
+
+/** May this request's key read a playbook's runs digest (null grant = a person, always)? */
+export function runsDigestReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(RUNS_DIGEST_READ, grant!);
+}
+
+/**
  * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
  * MCP `synap_read_board` call the same function, so they share this one
  * declaration.
@@ -170,6 +186,15 @@ const SURFACES_FIND = READS(
   "relation",
   "share"
 );
+/**
+ * The surface inspect (`inspectSurface`, Surfaces P7): Hub
+ * `GET /surfaces/inspect` and MCP `synap_inspect_surface` share it. The view,
+ * the page and the cell instance are read through `scopedDb`; the cell type
+ * (`widget_definitions`) and the frame read log are read outside the seams
+ * (the log floored on the caller's spaces), so a fenced key passes only when
+ * it reads every subject unnarrowed.
+ */
+const SURFACES_INSPECT = READS("view", "document", "cell", "widget");
 
 /**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
@@ -1318,6 +1343,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [route("/whiteboards/:id/scene"), BOARD_SCENE],
   // The surface find, the twin of MCP `synap_find_surfaces` (SURFACES_FIND).
   [/^\/surfaces\/?$/, SURFACES_FIND],
+  // The surface inspect, the twin of MCP `synap_inspect_surface`.
+  [/^\/surfaces\/inspect\/?$/, SURFACES_INSPECT],
 ];
 
 /**
@@ -1486,6 +1513,10 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   // aggregate over several stores, some read outside the seams (workspace
   // settings, the renderer ladder), so it declares what it reads.
   synap_find_surfaces: SURFACES_FIND,
+  // The surface inspect (`inspectSurface`, shared with
+  // `GET /surfaces/inspect`): the cell type and the read log are read
+  // outside the seams, so it declares what it reads.
+  synap_inspect_surface: SURFACES_INSPECT,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
   // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).

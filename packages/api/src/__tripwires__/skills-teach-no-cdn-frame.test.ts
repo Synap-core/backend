@@ -62,7 +62,7 @@ describe("tripwire: skills never teach loading code from a CDN", () => {
   it("scans a plausible skills corpus", () => {
     const rel = files.map((f) => relative(SKILLS_DIR, f));
     expect(files.length).toBeGreaterThan(40);
-    expect(rel).toContain("synap/viewframe-cells.md");
+    expect(rel).toContain("surfaces/cell-authoring.md");
     expect(rel).toContain("_teaching.json");
   });
 
@@ -95,7 +95,7 @@ describe("tripwire: skills never teach loading code from a CDN", () => {
     );
     expect(
       offenders,
-      "a frame gets React and @synap/kit from the host and loads no code from the network; teach that (skills/synap/viewframe-cells.md)"
+      "a frame gets React and @synap/kit from the host and loads no code from the network; teach that (skills/surfaces/cell-authoring.md)"
     ).toEqual([]);
   });
 });

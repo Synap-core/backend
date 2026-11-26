@@ -72,13 +72,14 @@ import {
 // The `sql` re-exported by @synap/database is postgres.js's tagged template,
 // NOT drizzle's — a raw fragment inside a drizzle `where()` must use this one.
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
-import type {
-  AnchorKind,
-  SurfaceAnchor,
-  SurfaceBody,
-  SurfaceRelation,
-  SurfaceRow,
-  SurfacesForObject,
+import {
+  isAnchorIdShaped,
+  type AnchorKind,
+  type SurfaceAnchor,
+  type SurfaceBody,
+  type SurfaceRelation,
+  type SurfaceRow,
+  type SurfacesForObject,
 } from "@synap-core/types/surfaces";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
@@ -125,6 +126,14 @@ export async function surfacesForObject(
   ctx: SurfacesForObjectContext,
   input: SurfacesForObjectInput
 ): Promise<SurfacesForObject> {
+  // A malformed id is the caller's error (400), never a failed read: every
+  // door (tRPC, Hub REST, MCP) answers through here.
+  if (!isAnchorIdShaped(input.kind, input.id)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `A ${input.kind} is named by its uuid: "${input.id}" is not one.`,
+    });
+  }
   const workspaceId = input.workspaceId ?? null;
   const access = workspaceId ? ctx.access.withLens(workspaceId) : ctx.access;
   const loaded = await loadAnchor(ctx, access, input);

@@ -33,6 +33,7 @@ import {
   workspaces,
   playbooks,
   notAnAppAgent,
+  readPodFloorsYield,
 } from "@synap/database";
 import {
   createReadSnapshot,
@@ -83,11 +84,13 @@ const OTHER_ACTIONS = [
  * joins by existing. Door keys are `subject/action`; the event key is
  * `subject.action`.
  */
-export function floorProbes(): MatrixProbe[] {
+export function floorProbes(
+  floorsYield?: Parameters<typeof nonWidenableFloorFor>[1]
+): MatrixProbe[] {
   const byReason = new Map<string, string>();
   for (const door of Object.keys(REVERSIBILITY_DOOR_CLASS).sort()) {
     const action = door.replace("/", ".");
-    const reason = nonWidenableFloorFor(action);
+    const reason = nonWidenableFloorFor(action, floorsYield);
     if (reason && !byReason.has(reason)) byReason.set(reason, action);
   }
   return [...byReason.values()]
@@ -147,7 +150,7 @@ async function readColumns(
       workspaceId: null,
       workspaceName: null,
       playbookId: null,
-      probes: floorProbes(),
+      probes: floorProbes(await readPodFloorsYield(db)),
     },
   ];
   for (const space of spaces) {

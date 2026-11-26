@@ -217,6 +217,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_grant_profile_access",
     "cp-connector": "pod__grant_profile_access",
   },
+  synap_inspect_surface: {
+    "pod-mcp": "synap_inspect_surface",
+    "cp-connector": null,
+  },
   synap_link_entities: {
     "pod-mcp": "synap_link_entities",
     "cp-connector": "pod__link_entities",

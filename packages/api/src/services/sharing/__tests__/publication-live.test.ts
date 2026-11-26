@@ -32,6 +32,10 @@ const LIVE: PublicationLiveInput = {
 describe("isPublicationLive", () => {
   it("a published, unrevoked, unexpired entity with a url is live (positive control)", () => {
     expect(isPublicationLive(LIVE, { now: NOW })).toBe(true);
+    // An HTML page published as itself (Surfaces P6b) is served by its token.
+    expect(
+      isPublicationLive({ ...LIVE, resourceType: "document" }, { now: NOW })
+    ).toBe(true);
     expect(
       isPublicationLive({ ...LIVE, expiresAt: new Date(NOW + 1) }, { now: NOW })
     ).toBe(true);
@@ -69,6 +73,10 @@ describe("isPublicationLive via a site (a MEMBER row of a site, C1b)", () => {
     ["unpublished (draft)", { state: "draft" }],
     ["no publishedAt", { publishedAt: null }],
     ["not an entity", { resourceType: "project" }],
+    [
+      "a page (the site door serves entities only)",
+      { resourceType: "document" },
+    ],
     ["not a public row", { audience: "link" }],
   ] as Array<[string, Record<string, unknown>]>)(
     "%s ⇒ not live via the site",

@@ -2817,6 +2817,19 @@
                     }
                   },
                   "required": ["op", "automationId"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["replace_block"] },
+                    "blockId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "html": { "type": "string", "maxLength": 1000000 }
+                  },
+                  "required": ["op", "blockId", "html"]
                 }
               ]
             },
@@ -8027,7 +8040,11 @@
       "PublicShare": {
         "type": "object",
         "properties": {
-          "resourceType": { "type": "string", "enum": ["entity"] },
+          "resourceType": {
+            "type": "string",
+            "enum": ["entity", "document"],
+            "description": "entity = a record; document = an HTML page published as itself."
+          },
           "title": {
             "type": "string",
             "description": "Present only when the publisher allowlisted `title`."
@@ -8051,7 +8068,11 @@
                 "enum": ["markdown", "html"],
                 "description": "markdown = parse as safe markdown; html = render only inside a sandboxed frame (no scripts)."
               },
-              "content": { "type": "string" }
+              "content": { "type": "string" },
+              "page": {
+                "type": "string",
+                "description": "An HTML page in published mode: render ONLY in a sandbox that allows scripts and nothing else (`allow-scripts`, never `allow-same-origin`). Its reads answer from the publish-time snapshot; it reaches no network."
+              }
             },
             "required": ["format", "content"],
             "description": "The pinned published revision's text in its real format, or null (none pinned, or not a text body)."
@@ -9518,7 +9539,7 @@
                           "comparedBy": {
                             "type": "string",
                             "enum": ["field", "package"],
-                            "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                            "description": "`field`: compared and applied field by field (view, skill, automation, agent template). `package`: applied as a whole through the kind's own door (workspace, capability, renderer bundle); no field rows."
                           },
                           "name": { "type": "string" },
                           "installedVersion": { "type": ["string", "null"] },
@@ -9581,7 +9602,8 @@
                               "view",
                               "skill",
                               "automation",
-                              "agent"
+                              "agent",
+                              "renderer-bundle"
                             ]
                           },
                           "name": { "type": "string" },
@@ -9656,7 +9678,7 @@
                     "comparedBy": {
                       "type": "string",
                       "enum": ["field", "package"],
-                      "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                      "description": "`field`: compared and applied field by field (view, skill, automation, agent template). `package`: applied as a whole through the kind's own door (workspace, capability, renderer bundle); no field rows."
                     },
                     "name": { "type": "string" },
                     "installedVersion": { "type": ["string", "null"] },
@@ -54895,11 +54917,12 @@
                       "url": { "type": "string", "format": "uri" },
                       "cellKey": { "type": "string", "maxLength": 200 },
                       "props": { "type": "object", "additionalProperties": {} },
+                      "reads": { "type": ["array", "null"], "items": {} },
                       "workspaceId": { "type": "string", "format": "uuid" }
                     }
                   },
                   "slot": { "type": "string", "maxLength": 40 },
-                  "label": { "type": "string", "maxLength": 200 },
+                  "label": { "type": "string", "maxLength": 120 },
                   "userId": { "type": "string" },
                   "agentUserId": { "type": "string", "format": "uuid" },
                   "reasoning": { "type": "string", "maxLength": 2000 },
@@ -54972,6 +54995,164 @@
         }
       }
     },
+    "/surfaces/inspect": {
+      "get": {
+        "tags": ["Surfaces"],
+        "summary": "Inspect one framed surface",
+        "description": "Before you hand a surface over, read what it does: `kind` cell (by `typeKey`, or a cell instance `id`), document (an HTML page `id`) or view (`id`: the cells it places). Four sections, each `{status:'ok', …}` or `{status:'unavailable', reason}`: `reads` (what the frame read door logged in the last `days` days, at most 30: ops used, refused, declared but unused, asked but undeclared), `tokens` (hard-coded colours and fonts, each with its line and the token to use), `a11y` (static HTML accessibility lint) and `render` (always unavailable on the pod: no browser). 404 when the surface does not exist or you cannot see it.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["cell", "document", "view"]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "required": false,
+            "name": "typeKey",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "required": false,
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "surface": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["cell", "document", "view"]
+                        },
+                        "id": { "type": ["string", "null"] },
+                        "typeKey": { "type": ["string", "null"] },
+                        "title": { "type": "string" },
+                        "workspaceId": { "type": ["string", "null"] },
+                        "cellKeys": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id",
+                        "typeKey",
+                        "title",
+                        "workspaceId"
+                      ]
+                    },
+                    "reads": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "tokens": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "a11y": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "render": {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unavailable"] },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status", "reason"]
+                    }
+                  },
+                  "required": ["surface", "reads", "tokens", "a11y", "render"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such surface",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/surfaces/attach": {
       "post": {
         "tags": ["Surfaces"],
@@ -55015,7 +55196,7 @@
                     "required": ["type", "id"]
                   },
                   "slot": { "type": "string", "maxLength": 40 },
-                  "label": { "type": "string", "maxLength": 200 },
+                  "label": { "type": "string", "maxLength": 120 },
                   "position": { "type": "integer", "minimum": 0 },
                   "userId": { "type": "string" },
                   "agentUserId": { "type": "string", "format": "uuid" },
@@ -55205,7 +55386,7 @@
       "post": {
         "tags": ["Surfaces"],
         "summary": "A framed surface's read, checked against what it declares",
-        "description": "The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:\"cell\", typeKey}` or `{kind:\"document\", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. The read runs as the caller, floored to what they may see. Every call is logged. Surface kinds: cell, document.",
+        "description": "The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:\"cell\", typeKey}`, `{kind:\"document\", id}` for an html page, or `{kind:\"draft\", draftId}` for the caller's own unsaved draft) and its lens (`workspaceId`, used for a cell or a draft; a page reads in its own space). The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. A draft declares nothing: it is answered with the caller's access and logged as a draft (a preview); another person's draft is refused (403, `code: FRAME_DRAFT_NOT_YOURS`). The read runs as the caller, floored to what they may see. Every call is logged. Surface kinds: cell, document, draft.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -55234,6 +55415,14 @@
                           "id": { "type": "string", "format": "uuid" }
                         },
                         "required": ["kind", "id"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["draft"] },
+                          "draftId": { "type": "string", "format": "uuid" }
+                        },
+                        "required": ["kind", "draftId"]
                       }
                     ]
                   },

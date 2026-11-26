@@ -33,7 +33,11 @@ export const PublicShareParamsSchema = z
 /** A published share, as a stranger holding the token sees it. */
 export const PublicShareResponseSchema = z
   .object({
-    resourceType: z.literal("entity"),
+    resourceType: z
+      .enum(["entity", "document"])
+      .describe(
+        "entity = a record; document = an HTML page published as itself."
+      ),
     title: z
       .string()
       .optional()
@@ -44,7 +48,16 @@ export const PublicShareResponseSchema = z
         "The publish-time snapshot of allowlisted values (plain values only; internal ids removed)."
       ),
     body: z
-      .object({ format: PublicBodyFormatSchema, content: z.string() })
+      .object({
+        format: PublicBodyFormatSchema,
+        content: z.string(),
+        page: z
+          .string()
+          .optional()
+          .describe(
+            "An HTML page in published mode: render ONLY in a sandbox that allows scripts and nothing else (`allow-scripts`, never `allow-same-origin`). Its reads answer from the publish-time snapshot; it reaches no network."
+          ),
+      })
       .nullable()
       .describe(
         "The pinned published revision's text in its real format, or null (none pinned, or not a text body)."

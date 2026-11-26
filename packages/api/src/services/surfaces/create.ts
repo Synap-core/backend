@@ -1,6 +1,6 @@
 /**
  * `surfaces.create` — make a surface FOR an object, in one governed act
- * (Surfaces wave P3, plan 187bbb25 §0: "one create door"): the body (a View,
+ * ("one create door"): the body (a View,
  * Bento, Whiteboard, Document, HTML artifact or Cell) and its `attaches` edge
  * to the anchor.
  *
@@ -35,6 +35,7 @@ import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertCellBindable } from "../renderers/renderer-target-checks.js";
 import { materializeApprovedDocument } from "../proposals/materialize-approved-document.js";
+import { readDeclaredFrameIo } from "../cells/declared-frame-io.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import {
   anchorWorkspaceId,
@@ -67,11 +68,25 @@ export function surfaceTypeOf(body: CreatableSurfaceBody): SurfaceRef["type"] {
   return "view";
 }
 
+/**
+ * An html page's declared reads, through the one parser of a framed
+ * surface's declaration (`readDeclaredFrameIo`, the document and cell doors'
+ * too). Absent or null: the page declares nothing.
+ */
+function declaredPageReads(spec: SurfaceSpec) {
+  return spec.reads === undefined || spec.reads === null
+    ? ({ ok: true } as const)
+    : readDeclaredFrameIo({ reads: spec.reads });
+}
+
 /** One sentence naming what the spec lacks for its body, or null. */
 export function surfaceSpecProblem(
   body: CreatableSurfaceBody,
   spec: SurfaceSpec
 ): string | null {
+  if (body !== "html" && spec.reads !== undefined && spec.reads !== null) {
+    return "spec.reads declares what an html page reads: only an html body takes it.";
+  }
   switch (body) {
     case "view":
       return spec.viewType !== undefined && typeof spec.viewType !== "string"
@@ -88,13 +103,17 @@ export function surfaceSpecProblem(
       if (typeof spec.content !== "string" || !spec.content.trim()) {
         return "An HTML artifact needs spec.content (the page).";
       }
-      return Buffer.byteLength(spec.content, "utf8") > HTML_SURFACE_MAX_BYTES
-        ? "An HTML artifact is at most 2 MB."
-        : null;
+      if (Buffer.byteLength(spec.content, "utf8") > HTML_SURFACE_MAX_BYTES) {
+        return "An HTML artifact is at most 2 MB.";
+      }
+      {
+        const reads = declaredPageReads(spec);
+        return reads.ok ? null : `spec.reads: ${reads.error}`;
+      }
     case "cell":
       return typeof spec.cellKey === "string" && spec.cellKey.trim()
         ? null
-        : "A cell needs spec.cellKey (a cell type key: synap_list_widgets).";
+        : "A cell needs spec.cellKey (a cell type key: synap_list_cells).";
   }
 }
 
@@ -381,7 +400,13 @@ async function makeBody(input: {
         return { ok: true };
       }
       case "document":
-      case "html":
+      case "html": {
+        // Checked again at approval: the stored spec is what lands.
+        const reads =
+          body === "html" ? declaredPageReads(spec) : ({ ok: true } as const);
+        if (!reads.ok) {
+          return { ok: false, why: `spec.reads: ${reads.error}` };
+        }
         await materializeApprovedDocument({
           documentId: id,
           title: name,
@@ -391,8 +416,12 @@ async function makeBody(input: {
           userId: owner,
           workspaceId,
           sourceProposalId: input.proposalId,
+          ...("reads" in reads && reads.reads
+            ? { metadata: { reads: reads.reads } }
+            : {}),
         });
         return { ok: true };
+      }
       case "cell":
         await db
           .insert(cellInstances)

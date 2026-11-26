@@ -34,7 +34,7 @@ Model first, UI second. An app built on the pod never hard-codes a status, a sta
 
 A tailored UI over the person's pod is built IN the pod first: views, bento
 dashboards, cells, and HTML pages bound as a kind's renderer, shown on the
-desktop (load `system/synap-ui/skill`; cells: `system/synap/viewframe-cells`).
+desktop (load `system/surfaces/skill`; cells: `system/surfaces/cells`).
 Build a standalone site or app only when the person asks for one.
 
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
@@ -43,14 +43,14 @@ pod, and **every write is governed** (see `governance.md`).
 
 ## Decide the path first
 
-| The user has…                                                      | Do this                                                                                                                                | Read                                                                 |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod                                                                                               | `system/synap-ui/skill`                                              |
-| an existing app (any framework)                                    | add the SDK                                                                                                                            | `using-the-sdk.md`, `install-commands.md`                            |
-| a server app people sign in to with their own pod                  | `@synap-core/sdk/connect` (`createPodAppAuth`, SDK 1.3+)                                                                               | the SDK's own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`) |
-| an app on their own pod, with its own key                          | `synap app init`, then `synap app connect`                                                                                             | `install-commands.md`                                                |
-| nothing yet, wants a full app fast                                 | a Next.js app on shadcn + Tailwind v4, plus the SDK. A public starter is decided but not published yet; the HeroUI base app is retired | `using-the-sdk.md`                                                   |
-| a server / script / CLI (no browser)                               | SDK with a session token, or the REST client with an API key                                                                           | `using-the-sdk.md`                                                   |
+| The user has… | Do this | Read |
+|---|---|---|
+| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod | `system/surfaces/skill` |
+| an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
+| a server app people sign in to with their own pod | `@synap-core/sdk/connect` (`createPodAppAuth`, SDK 1.3+) | the SDK's own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`) |
+| an app on their own pod, with its own key | `synap app init`, then `synap app connect` | `install-commands.md` |
+| nothing yet, wants a full app fast | a Next.js app on shadcn + Tailwind v4, plus the SDK. A public starter is decided but not published yet; the HeroUI base app is retired | `using-the-sdk.md` |
+| a server / script / CLI (no browser) | SDK with a session token, or the REST client with an API key | `using-the-sdk.md` |
 
 Every path uses the same packages; only the amount of scaffolding differs.
 
@@ -92,7 +92,7 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
   it or keep it as a tool).
 - A space can open on your site: its start page (`settings.layout.primarySurface`,
   set by the space's template, or by `synap_set_start_page { workspaceId, url,
-podAppClientId }`) is `{ kind: "url", url, podApp: { clientId } }`,
+  podAppClientId }`) is `{ kind: "url", url, podApp: { clientId } }`,
   `clientId` being the app's client metadata URL. The desktop then opens the site
   with this pod's address, so the app starts the pod's own sign-in. It grants the
   site nothing.
@@ -186,20 +186,17 @@ const synap = createSynapClient({
   podUrl: "https://pod.example.com", // NO trailing slash, NO /trpc suffix
   sessionToken: process.env.SYNAP_SESSION_TOKEN, // see auth below
   workspaceId: process.env.SYNAP_WORKSPACE_ID ?? "",
-  onAuthError: () => {
-    /* 401: sign in again */
-  },
+  onAuthError: () => {/* 401: sign in again */},
 });
 
 // It's a typed tRPC client — full autocomplete over every router.
 const me = await synap.users.me.query();
-const entities = await synap.entities.list.query({/* filter */});
-const result = await synap.entities.create.mutate({/* ... */});
+const entities = await synap.entities.list.query({ /* filter */ });
+const result = await synap.entities.create.mutate({ /* ... */ });
 // result.status may be "proposed" — that is success. See governance.md.
 ```
 
 ### Auth modes (pick ONE)
-
 - **`sessionToken`** — an Ory Kratos session token from a Kratos API (native)
   login flow, sent as `X-Session-Token`. The normal choice for servers, scripts,
   CLIs and mobile.
@@ -255,10 +252,10 @@ dependency — the package does not bundle its own.
 import { createRealtimeClient } from "@synap-core/sdk-realtime";
 
 const rt = createRealtimeClient({
-  url: podUrl, // pod base URL; the client adds the /presence namespace
+  url: podUrl,            // pod base URL; the client adds the /presence namespace
   workspaceId,
-  sessionToken, // a Kratos session token…
-  userId, // …and the identity id it belongs to (both required)
+  sessionToken,           // a Kratos session token…
+  userId,                 // …and the identity id it belongs to (both required)
   // or, as a service account: apiKey (scope realtime:observe), no userId
   onInvalidate: (event) => {
     // entity/relation changed — refetch, e.g.
@@ -266,7 +263,7 @@ const rt = createRealtimeClient({
   },
 });
 
-rt.connect(); // nothing connects until you call this
+rt.connect();   // nothing connects until you call this
 // … later
 rt.disconnect();
 ```
@@ -292,15 +289,13 @@ first release after 0.1.0. Until then, authenticate realtime with
 `sessionToken` + `userId`.
 
 ## Two transports, on purpose
-
 - `@synap-core/sdk` (tRPC) — for apps signed in as a user. Typed, React hooks.
 - `@synap-core/hub-rest-client` (REST against `/api/hub/*`, zero-dep) — for
   agents/CLIs/scripts holding an API key. `new HubRestClient({ podUrl, apiKey,
-workspaceId })`. Carries agent verbs the tRPC surface has no first-class path
+  workspaceId })`. Carries agent verbs the tRPC surface has no first-class path
   for (`ask`, `orient`, `discover`).
 
 ## Keep types fresh
-
 The SDK is typed by `@synap-core/api-types`, generated from the pod's live router.
 If the pod adds a procedure and you don't see it, bump `@synap-core/api-types`.
 
@@ -390,11 +385,11 @@ mutates a Synap pod.
 Every governed mutation (`entities.create`, `entities.update`, `relations.create`, …)
 has one of three outcomes, decided **by the pod**, not by your app:
 
-| Outcome  | How it arrives                                                                                                           | What your code should do                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| applied  | resolves with the procedure's own status (`"created"`, `"updated"`, …)                                                   | proceed                                                        |
+| Outcome | How it arrives | What your code should do |
+|---|---|---|
+| applied | resolves with the procedure's own status (`"created"`, `"updated"`, …) | proceed |
 | proposed | resolves with `status: "proposed"`, `proposalId`, `reviewUrl`, `message` — queued for the pod owner's review (like a PR) | **surface the review — do NOT treat as failure, do NOT retry** |
-| denied   | **rejects** with a tRPC `FORBIDDEN` error whose message is the reason                                                    | show why; do not retry blindly                                 |
+| denied | **rejects** with a tRPC `FORBIDDEN` error whose message is the reason | show why; do not retry blindly |
 
 ## Why it matters for your code
 

@@ -21,7 +21,10 @@
  *     installs; a definition naming another slug or a row at another version
  *     than asked is refused in every mode;
  *   - VERSION: the CP row's `package.version` is what is checked and stored,
- *     never `_meta.version`.
+ *     never `_meta.version`;
+ *   - the METADATA read (`?meta=1`, lane I1 contract, plan ad703ccd §3b.1):
+ *     the newest row or one version's, parsed; the same refusals; a malformed
+ *     answer throws (an unread version is never "no update").
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
@@ -66,9 +69,14 @@ vi.mock("@synap-core/core/control-plane-url", () => ({
 vi.mock("./install-renderer-bundle.js", () => ({
   installRendererBundle: h.install,
 }));
+// The update row is the install doors' bookkeeping (its own pglite tests).
+vi.mock("./renderer-bundle-update-state.js", () => ({
+  clearAfterRendererBundleInstall: async () => undefined,
+}));
 
 import { officialContentHash } from "@synap/jobs/workers/marketplace-source-verify.js";
 import {
+  fetchOfficialRendererBundleMeta,
   installOfficialRendererBundle,
   RENDERER_BUNDLE_INSECURE_CONTROL_PLANE,
   RENDERER_BUNDLE_NO_CONTROL_PLANE,
@@ -386,6 +394,83 @@ describe("installOfficialRendererBundle: authenticity (the signed index)", () =>
     h.signature = { ...okStatus(), state: "bad_signature", message: "no" };
     served();
     expect((await refusal(install())).code).toBe("PRECONDITION_FAILED");
+    expect(h.install).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchOfficialRendererBundleMeta (?meta=1)", () => {
+  const META = {
+    slug: "synap-renderers",
+    version: VERSION,
+    contentHash: HASH,
+    publishedAt: "2026-11-22T10:00:00.000Z",
+    retired: false,
+  };
+
+  it("reads the newest row's metadata with the pod-signed token", async () => {
+    answer(200, { package: META });
+    expect(
+      await fetchOfficialRendererBundleMeta({ slug: "synap-renderers" })
+    ).toEqual({
+      slug: "synap-renderers",
+      version: VERSION,
+      contentHash: HASH,
+      publishedAt: new Date(META.publishedAt),
+      retired: false,
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://cp.test/internal/renderer-bundles/synap-renderers?meta=1"
+    );
+    expect((init as RequestInit).headers).toEqual(POD_JWT.headers);
+  });
+
+  it("reads one version's row, retired included", async () => {
+    answer(200, { package: { ...META, retired: true } });
+    const meta = await fetchOfficialRendererBundleMeta({
+      slug: "synap-renderers",
+      version: VERSION,
+    });
+    expect(meta.retired).toBe(true);
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      `https://cp.test/internal/renderer-bundles/synap-renderers/${VERSION}?meta=1`
+    );
+  });
+
+  it("the same refusals as the fetch", async () => {
+    answer(403, { code: "OFFICIAL_BUNDLE_PLAN_REQUIRED" });
+    expect(
+      await refusal(
+        fetchOfficialRendererBundleMeta({ slug: "synap-renderers" })
+      )
+    ).toEqual({ code: "FORBIDDEN", reason: RENDERER_BUNDLE_PLAN_REQUIRED });
+    h.auth = null;
+    expect(
+      await refusal(
+        fetchOfficialRendererBundleMeta({ slug: "synap-renderers" })
+      )
+    ).toEqual({ code: "FORBIDDEN", reason: RENDERER_BUNDLE_POD_NOT_ENROLLED });
+  });
+
+  // Catches: a half-read answer taken for "nothing new".
+  it("a malformed answer throws, field by field", async () => {
+    for (const broken of [
+      { ...META, version: undefined },
+      { ...META, contentHash: "" },
+      { ...META, publishedAt: "not a date" },
+      { ...META, retired: "no" },
+      { ...META, slug: "acme-renderers" },
+    ]) {
+      answer(200, { package: broken });
+      expect(
+        (
+          await refusal(
+            fetchOfficialRendererBundleMeta({ slug: "synap-renderers" })
+          )
+        ).code
+      ).toBe("INTERNAL_SERVER_ERROR");
+    }
+    // The definition is never asked for by a metadata read.
     expect(h.install).not.toHaveBeenCalled();
   });
 });

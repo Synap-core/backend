@@ -63,6 +63,18 @@ describe("classifySettingSensitivity", () => {
     ).toBe("loosening");
   });
 
+  it("a pod number the governance reads is always the person's (loosening)", () => {
+    expect(
+      classifySettingSensitivity({
+        store: "config_settings",
+        op: "set",
+        spec: {
+          podSetting: { key: "governance.project_evidence_min", value: 9 },
+        },
+      })
+    ).toBe("loosening");
+  });
+
   it("an unknown store falls to loosening (safe default)", () => {
     expect(
       classifySettingSensitivity({ store: "bogus" as never, op: "set" })

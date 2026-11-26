@@ -12,7 +12,8 @@
  * whole-package update. None of them compares versions itself.
  *
  * Cheap: local reads only (the workspaces, the capability containers, the
- * source-linked rows, `cp_catalog_cache`). The field-by-field comparison of a
+ * source-linked rows, `cp_catalog_cache`, the renderer bundles and what the
+ * after-sync pass last read from the control plane about them). The field-by-field comparison of a
  * view/skill/automation package (one definition fetch per package) is the
  * plan's (`plan.ts`), run only for the packages this says have an update.
  *
@@ -22,10 +23,14 @@
 
 import {
   db,
+  and,
+  eq,
   workspaces,
   capabilities,
   readTemplateState,
 } from "@synap/database";
+import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
+import { rendererBundles } from "@synap/database/schema";
 import {
   contentHashVersion,
   packageHasUpdate,
@@ -39,6 +44,11 @@ import {
   loadInstalledStandaloneRows,
   type InstalledStandaloneRow,
 } from "../capabilities/reconcile-standalone-configs-to-templates.js";
+import { readRendererBundleLatest } from "../renderers/renderer-bundle-updates.js";
+import {
+  rendererBundleName,
+  SYNAP_RENDERERS_SLUG,
+} from "../renderers/official-renderer-bundle.js";
 import {
   readOverlayLedger,
   resolveTemplateCatalog,
@@ -304,6 +314,48 @@ async function standalonePackages(): Promise<InstalledPackage[]> {
   return out;
 }
 
+/** Never read from the control plane yet: the after-sync pass has not run. */
+const RENDERERS_NOT_READ =
+  "This pod has not read its control plane's renderers yet: it does every 10 minutes.";
+
+/**
+ * Synap's renderer bundle (the only one the after-sync pass reads): the
+ * installed version against the newest one the pass read. A pass that was
+ * refused leaves the last version it read, else says why there is none.
+ */
+async function rendererBundlePackages(): Promise<InstalledPackage[]> {
+  const rows = await db
+    .select({ slug: rendererBundles.slug, version: rendererBundles.version })
+    .from(rendererBundles)
+    .where(
+      and(
+        eq(rendererBundles.slug, SYNAP_RENDERERS_SLUG),
+        eq(rendererBundles.source, OFFICIAL_SOURCE_ID)
+      )
+    );
+  if (rows.length === 0) return [];
+  const latest = await readRendererBundleLatest();
+  return rows.map((row) => {
+    const read = latest.get(row.slug);
+    const latestVersion = read?.latestVersion ?? null;
+    return {
+      slug: row.slug,
+      kind: "renderer-bundle" as const,
+      name: rendererBundleName(row.slug),
+      installedVersion: row.version,
+      latestVersion,
+      ...verdict(
+        row.version,
+        latestVersion,
+        read?.reason ?? RENDERERS_NOT_READ
+      ),
+      workspaceIds: [],
+      containerIds: [],
+      rows: [],
+    };
+  });
+}
+
 /**
  * Every installed package with its verdict, one per slug + kind, sorted by
  * kind then slug. A failed read THROWS: a reader must never show "nothing
@@ -314,6 +366,7 @@ export async function listInstalledPackages(): Promise<InstalledPackage[]> {
     ...(await workspacePackages()),
     ...(await capabilityPackages()),
     ...(await standalonePackages()),
+    ...(await rendererBundlePackages()),
   ];
   const byKey = new Map<string, InstalledPackage>();
   for (const p of all) {

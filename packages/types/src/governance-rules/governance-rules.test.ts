@@ -6,12 +6,15 @@
 import { describe, expect, it } from "vitest";
 import { resolveGovernanceRungLabel } from "../vocabulary/index.js";
 import {
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
   ALL_COMPUTERS_PRINCIPAL,
   GOVERNANCE_PRINCIPAL_KINDS,
   type GovernanceRuleRowLike,
   OWN_ORGANISE_CLASS_PATTERN,
   POD_DEFAULT_WORDS,
   REVERSIBLE_CLASS_PATTERN,
+  ROOT_SWITCH_PATTERNS,
   describeWritePattern,
   governanceRuleTitle,
   humanizePrincipal,
@@ -117,12 +120,18 @@ describe("where it holds, what it covers, where it came from", () => {
     for (const pattern of [
       REVERSIBLE_CLASS_PATTERN,
       OWN_ORGANISE_CLASS_PATTERN,
+      AGENT_DEFINES_KINDS_CLASS_PATTERN,
+      AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
     ]) {
       const row = rule({ targetPattern: pattern });
       expect(ruleTitle(row)).toBe(POD_DEFAULT_WORDS[pattern]!.label);
       expect(isRootSwitchRule(row)).toBe(true);
     }
     expect(isRootSwitchRule(rule({ targetPattern: "*" }))).toBe(false);
+    // Every switch has its words, and nothing else does.
+    expect(Object.keys(POD_DEFAULT_WORDS).sort()).toEqual(
+      [...ROOT_SWITCH_PATTERNS].sort()
+    );
   });
 
   it("a profiled action grant names its kind", () => {

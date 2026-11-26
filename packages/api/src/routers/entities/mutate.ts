@@ -1574,6 +1574,21 @@ export const mutateProcs = {
           },
         });
         bentoViewId = newViewId;
+        // The bento is ATTACHED to the entity (links `attaches`, the one
+        // store of an object's surfaces since the founder decision of 23 Nov
+        // 2026): the edge the `entity-bento` conversion folds
+        // `system_data.bentoViewId` into, written here so this door keeps
+        // both stores in step. Same gate as the view above.
+        const { insertAttachment } =
+          await import("../../services/surfaces/attach.js");
+        await insertAttachment({
+          anchor: { kind: "entity", id: input.entityId },
+          surface: { type: "view", id: newViewId },
+          workspaceId: entity.workspaceId ?? null,
+          createdBy: ctx.userId,
+          meta: {},
+          attribution: { agentUserId: ctx.agentUserId ?? null },
+        });
       }
 
       // Write to systemData column (not properties) — clean separation from
@@ -1610,7 +1625,7 @@ export const mutateProcs = {
    *   3. workspace overlay / profile default  (profiles.setProfileRendererOverride)
    *   4. hardcoded host fallback
    *
-   * ALIASED onto the attach door (Surfaces P3): the look is written as the
+   * ALIASED onto the attach door: the look is written as the
    * entity's `detail` slot attachment (`replaceDetailCellLook`), a cell
    * instance attached to the entity; `system_data.renderer` is kept as its
    * mirror for the clients that still read it.
@@ -1695,7 +1710,7 @@ export const mutateProcs = {
           updatedAt: new Date(),
         })
         .where(eq(entities.id, input.entityId));
-      // The look IS an attached surface since Surfaces P3 (founder decision
+      // The look IS an attached surface (founder decision
       // 23 Nov 2026): the entity's `detail` slot attachment is the record;
       // `system_data.renderer` above stays as its mirror for the clients that
       // still read it, until they read `attached` (one release).

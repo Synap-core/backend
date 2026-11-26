@@ -357,13 +357,24 @@ describe("createProjectGoverned — tRPC and Hub REST are one door", () => {
     await q(`delete from projects where id = $1`, [twin]);
   });
 
-  it("an agent with no evidence is refused BEFORE governance on both doors", async () => {
-    await expect(trpc(true).create({ name: "Cygnus" })).rejects.toMatchObject({
-      code: "BAD_REQUEST",
+  it("an agent with too little evidence is filed for review, marked, on both doors", async () => {
+    // Marked, never refused: the reviewer sees the count, and the create
+    // cannot auto-apply (the pod's evidence count, 5 by default).
+    const marked = {
+      forcePropose: true,
+      data: {
+        evidence: { counted: 0, minimum: 5, belowAgentFloor: true },
+      },
+    };
+    await expect(trpc(true).create({ name: "Cygnus" })).resolves.toMatchObject({
+      status: "proposed",
     });
+    expect(h.permCalls[0]).toMatchObject(marked);
+
+    h.permCalls.length = 0;
     const viaRest = await restCreate({ name: "Cygnus" }, true);
-    expect(viaRest.status).toBe(400);
-    expect(h.permCalls).toEqual([]);
+    expect(viaRest.status).toBe(202);
+    expect(h.permCalls[0]).toMatchObject(marked);
   });
 });
 
