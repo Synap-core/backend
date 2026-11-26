@@ -11,7 +11,7 @@ description: >
   their life, work, or projects; posting to their personal AI channel. The pod
   is the user's sovereign source of truth — prefer it over your own context
   when the user asks about their own data. Do NOT use this skill for extending
-  the schema (use synap-schema) or building dashboards and views (use synap-ui).
+  the schema (use synap-schema) or making UI: dashboards, views, pages, decks (use surfaces).
 metadata:
   synap:
     requires:
@@ -60,47 +60,47 @@ Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `fr
 
 The ONE glossary; other skills point here. Word = what the user sees; internal = tools and tables.
 
-| Word                | Internal                | Answers                               | Test · e.g. · not                                                                                                                                                                                    |
-| ------------------- | ----------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Space**           | workspace               | which domain: kinds + tools?          | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                                                     |
-| **Project**         | project                 | what am I committed to, with whom?    | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                                                       |
-| **Pillar**          | project-to-space link (`uses`) + purpose | which space carries this project, and why? | a space the project uses, with a purpose; its health is derived from the goals that advance it · not a kind, not the Content OS `pillar` kind or Brand "content pillars" (editorial themes) |
-| **Goal**            | project_tracks          | what goal am I pursuing?              | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track"                                |
-| **Step**            | stage                   | where does this work stand?           | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                                                             |
-| **Work**            | focus_session           | what am I doing this sitting?         | one aim · no noun: "Start work"                                                                                                                                                                      |
-| **Pathway**         | goal (`workKind: pathway`) + its sessions | how do I get there, step by step?     | a plan lived once: a goal, a root session, steps that wait on each other (born planned), decisions for the choices · fund to seed · a lens, not a store; not a Process (repeated work) · `from-intent` §2d |
-| **Process**         | playbook                | how do I reuse it?                    | kind DERIVED, never declared: scope session = process (a method a session or worker follows), project = goal process (legacy) · "Template" now names only a space template                           |
-| **Pack**            | suite                   | which templates come together?        | a bundle; depends on space templates, never creates a space                                                                                                                                          |
-| **Rule**            | skill rule              | what do my agents always follow?      | a standing instruction written for agents · "always cite sources" · not an Automation, not Approvals                                                                                                 |
-| **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                               |
-| **Approvals**       | governance rules        | which AI writes wait for me?          | decides review vs auto, does no work                                                                                                                                                                 |
-| **Tools**           | capability, skill, tool | what can it act with?                 | one word; the detail shows the kind                                                                                                                                                                  |
-| **Cell**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · one word for users and agents (23 Nov 2026) · in a bento, a document or a board · "card" is only a renderer slot · never Widget                              |
-| **Display**         | renderer                | how does this kind look?              | a cell bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                     |
-| **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Cell                                                                                                                                        |
-| **App**             | built-in surface        | what do I open in Synap?              | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                                                       |
-| **Connected app**   | application             | which outside software holds a grant? | reaches the pod with a grant · not an App                                                                                                                                                            |
-| **Account**         | provider connection     | which of my accounts is linked?       | a person's link to an outside service · never Connection, Connector or Integration                                                                                                                   |
-| **Kind**            | profile                 | what shape does a thing have?         | its fields and status list · never Data type, Schema or Profile                                                                                                                                      |
-| **Make**            | destination             | where do I make things?               | a view, a cell, a space, an automation · pairs with Work                                                                                                                                             |
-| **Get more**        | destination             | where do I add more?                  | the store · never Marketplace or Get more tools                                                                                                                                                      |
-| **To review**       | proposal                | what awaits my approval?              | `proposed` is success                                                                                                                                                                                |
-| **Role**            | role profile + facet    | which hat does it wear?               | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                                                      |
-| **Thing**           | entity                  | what is being worked on?              | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                                                      |
-| **Status**          | lifecycle               | where does it stand?                  | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                                                           |
-| **Health**          | derived read | is this pillar or project moving? | worst-of its goals, with counts (moving · needs attention · not validated yet · stalled · no active goal); never typed in, never an average |
-| **Pipeline**        | pipeline view           | what is in each status?               | computed from a lifecycle, never created · not an object                                                                                                                                             |
-| **Flow**            | `flow.of`               | how does this kind of work run?       | one read of a kind or role: its statuses in order, the stage that owns each, the things in each with who works them and their next step · `synap_get_flow` · not a second status list, not an object |
-| **Blocker**         | slot with `blocks`      | what holds this thing up?             | a slot on a session that names the thing it holds and the status it cannot reach yet; the thing stays in its status, marked, with whose move it is · never a status of its own                       |
-| **Worker**          | playbook activator      | what starts work by itself?           | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a goal or project turns it on · not `synap worker`, a runner (`hand-off`)                             |
-| **Inbox**           | needs-you signals       | what needs me?                        | one list: decisions, questions, routine changes, broken · not Work                                                                                                                                   |
-| **Questions**       | owed slot ask           | what did an agent ask me?             | an Inbox filter · answer it, the work resumes                                                                                                                                                        |
-| **Routine changes** | reversible proposal     | what can I approve in a batch?        | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                                                    |
-| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a run nobody claimed (`blocked`), a stuck session                                                                                                                                  |
-| **Library**         | data (things, files)    | what did we bring in?                 | what you and your agents kept or made: things, files, imports · not a space                                                                                                                          |
-| **Unfiled**         | entity in no project    | what is not filed yet?                | things outside every project · file them into one                                                                                                                                                    |
-| **Agents**          | agent users + keys      | who acts for me?                      | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                                               |
-| **Getting started** | first-run Home card     | what do I try first?                  | goes away once done                                                                                                                                                                                  |
+| Word                | Internal                                  | Answers                                    | Test · e.g. · not                                                                                                                                                                                          |
+| ------------------- | ----------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Space**           | workspace                                 | which domain: kinds + tools?               | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                                                           |
+| **Project**         | project                                   | what am I committed to, with whom?         | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                                                             |
+| **Pillar**          | project-to-space link (`uses`) + purpose  | which space carries this project, and why? | a space the project uses, with a purpose; its health is derived from the goals that advance it · not a kind, not the Content OS `pillar` kind or Brand "content pillars" (editorial themes)                |
+| **Goal**            | project_tracks                            | what goal am I pursuing?                   | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track"                                      |
+| **Step**            | stage                                     | where does this work stand?                | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                                                                   |
+| **Work**            | focus_session                             | what am I doing this sitting?              | one aim · no noun: "Start work"                                                                                                                                                                            |
+| **Pathway**         | goal (`workKind: pathway`) + its sessions | how do I get there, step by step?          | a plan lived once: a goal, a root session, steps that wait on each other (born planned), decisions for the choices · fund to seed · a lens, not a store; not a Process (repeated work) · `from-intent` §2d |
+| **Process**         | playbook                                  | how do I reuse it?                         | kind DERIVED, never declared: scope session = process (a method a session or worker follows), project = goal process (legacy) · "Template" now names only a space template                                 |
+| **Pack**            | suite                                     | which templates come together?             | a bundle; depends on space templates, never creates a space                                                                                                                                                |
+| **Rule**            | skill rule                                | what do my agents always follow?           | a standing instruction written for agents · "always cite sources" · not an Automation, not Approvals                                                                                                       |
+| **Automation**      | automation                                | what runs by itself, when?                 | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                                     |
+| **Approvals**       | governance rules                          | which AI writes wait for me?               | decides review vs auto, does no work                                                                                                                                                                       |
+| **Tools**           | capability, skill, tool                   | what can it act with?                      | one word; the detail shows the kind                                                                                                                                                                        |
+| **Cell**            | cell                                      | what block did I make?                     | the made UI block · "a deals summary" · one word for users and agents (23 Nov 2026) · in a bento, a document or a board · "card" is only a renderer slot · never Widget                                    |
+| **Display**         | renderer                                  | how does this kind look?                   | a cell bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                           |
+| **View**            | view                                      | how do I look at the data?                 | a saved arrangement of things · a table, a board · not a Cell                                                                                                                                              |
+| **App**             | built-in surface                          | what do I open in Synap?                   | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                                                             |
+| **Connected app**   | application                               | which outside software holds a grant?      | reaches the pod with a grant · not an App                                                                                                                                                                  |
+| **Account**         | provider connection                       | which of my accounts is linked?            | a person's link to an outside service · never Connection, Connector or Integration                                                                                                                         |
+| **Kind**            | profile                                   | what shape does a thing have?              | its fields and status list · never Data type, Schema or Profile                                                                                                                                            |
+| **Make**            | destination                               | where do I make things?                    | a view, a cell, a space, an automation · pairs with Work                                                                                                                                                   |
+| **Get more**        | destination                               | where do I add more?                       | the store · never Marketplace or Get more tools                                                                                                                                                            |
+| **To review**       | proposal                                  | what awaits my approval?                   | `proposed` is success                                                                                                                                                                                      |
+| **Role**            | role profile + facet                      | which hat does it wear?                    | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                                                            |
+| **Thing**           | entity                                    | what is being worked on?                   | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                                                            |
+| **Status**          | lifecycle                                 | where does it stand?                       | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                                                                 |
+| **Health**          | derived read                              | is this pillar or project moving?          | worst-of its goals, with counts (moving · needs attention · not validated yet · stalled · no active goal); never typed in, never an average                                                                |
+| **Pipeline**        | pipeline view                             | what is in each status?                    | computed from a lifecycle, never created · not an object                                                                                                                                                   |
+| **Flow**            | `flow.of`                                 | how does this kind of work run?            | one read of a kind or role: its statuses in order, the stage that owns each, the things in each with who works them and their next step · `synap_get_flow` · not a second status list, not an object       |
+| **Blocker**         | slot with `blocks`                        | what holds this thing up?                  | a slot on a session that names the thing it holds and the status it cannot reach yet; the thing stays in its status, marked, with whose move it is · never a status of its own                             |
+| **Worker**          | playbook activator                        | what starts work by itself?                | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a goal or project turns it on · not `synap worker`, a runner (`hand-off`)                                   |
+| **Inbox**           | needs-you signals                         | what needs me?                             | one list: decisions, questions, routine changes, broken · not Work                                                                                                                                         |
+| **Questions**       | owed slot ask                             | what did an agent ask me?                  | an Inbox filter · answer it, the work resumes                                                                                                                                                              |
+| **Routine changes** | reversible proposal                       | what can I approve in a batch?             | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                                                          |
+| **Broken**          | failed or stuck work                      | what needs a fix?                          | an Inbox filter · a failed run, a run nobody claimed (`blocked`), a stuck session                                                                                                                          |
+| **Library**         | data (things, files)                      | what did we bring in?                      | what you and your agents kept or made: things, files, imports · not a space                                                                                                                                |
+| **Unfiled**         | entity in no project                      | what is not filed yet?                     | things outside every project · file them into one                                                                                                                                                          |
+| **Agents**          | agent users + keys                        | who acts for me?                           | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                                                     |
+| **Getting started** | first-run Home card                       | what do I try first?                       | goes away once done                                                                                                                                                                                        |
 
 Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`, `update_entity` + `expectedStatus` (a status). How they fit (sizes, workers, tenses): `work-model`.
 
@@ -236,7 +236,7 @@ Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 
-A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe, params and shapes: `system/surfaces/cells` and `system/surfaces/cell-authoring`. For ONE object rather than the kind, attach a surface to it (`synap_attach_surface`). A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
 
 ### Rules of thumb
 
@@ -370,7 +370,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | Layer          | The user wants…                                                        | Door                                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
-| **surface**    | to SEE or SHOW something: a list, a board, a dashboard, a page, a deck, a brainstorm | Pick the body first and say which and why: records of one kind → a View; text to read → a Document (`synap_create_document`); a cockpit to monitor → a Bento (`synap_create_view` type `bento`); a page or deck for outside the pod → an HTML artifact (`synap_create_document` type `html`); thinking together → a Whiteboard. `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them. |
+| **surface**    | to SEE or SHOW something: a list, a board, a dashboard, a page, a deck, a brainstorm | Pick the body first and say which and why: records of one kind → a View; text to read → a Document (`synap_create_document`); a cockpit to monitor → a Bento (`synap_create_view` type `bento`); a page or deck for outside the pod → an HTML artifact (`synap_create_document` type `html`); thinking together → a Whiteboard. `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them. The full rule: `synap_load_skill("system/surfaces/skill")`. |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
 | **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
@@ -537,7 +537,7 @@ Example, "fund the company to seed": a goal "Fund to seed" (`workKind: "pathway"
 | -------------------------------------------- | ---------------------------------------------------------- |
 | Schema: facet, overlay, child kind, new kind | `system/synap-schema/extend-first` then `extend-vs-create` |
 | Missing operational domain                   | `system/agent-os/skill`                                    |
-| Views / cards once the model exists          | `system/synap-ui/skill`                                    |
+| Views / cards once the model exists          | `system/surfaces/skill`                                    |
 | What a word means (the one glossary)         | `system/synap/concepts`                                    |
 | Lenses, gravity, sessions                    | `system/synap/lenses`                                      |
 | Four-test for a workspace                    | `system/synap/workspace-design`                            |
@@ -684,9 +684,8 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 | `synap:capture`           | User pastes multi-entity text (email, transcript, bio) |
 | `synap:governance`        | Write was proposed or denied; need to explain policy   |
 | `synap:linking`           | Custom relation types, auto-sync edge cases            |
-| `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
+| `surfaces:SKILL`          | Making any UI on an object (picks the body)            |
 | `synap-ui:view-types`     | Specific view type config shapes                       |
-| `synap-ui:widget-catalog` | Available cell kinds and their configSchema            |
 | `synap-schema:SKILL`      | Creating custom profiles or property definitions       |
 
 ---
@@ -1452,31 +1451,10 @@ awaiting review. Other optional fields: `url` (an https link — creates a refer
 document with no stored bytes), `idempotencyKey` (a retry with the same key returns
 the prior document), `expectedLabel` (the session-output slot it fulfils).
 
-`type: "html"` stores self-contained HTML. The browser renders it via the `html-doc` cell in a sandboxed iframe. Use for AI-generated reports, rich visualisations, custom charts, or anything beyond markdown.
-
-**HTML document workflow:**
-
-```json
-// 1. Create the HTML document
-POST /api/hub/documents
-{ "userId": "{userId}", "workspaceId": "{workspaceId}",
-  "title": "Q2 Revenue Report", "type": "html",
-  "content": "<!DOCTYPE html><html>…</html>",
-  "entityId": "ent_project_..." }
-// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", ... }
-
-// 2. Replace the HTML (read it first: GET → `revision`)
-PATCH /api/hub/documents/doc_abc
-{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>", "baseRevision": 3 }
-// → a pending proposal; readers see the new HTML only once it is approved
-```
-
-`html-doc` is **not** an agent-placeable bento cell: `arrange` rejects it. The
-document renders where it is opened (the Files app, or the entity it is attached
-to). For HTML you want to embed elsewhere, create an HTML cell instance
-(`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
-
-The iframe uses `sandbox="allow-scripts"` — scripts run but have no same-origin access to the parent app. The HTML is fully isolated.
+`type: "html"` makes an HTML artifact: a designed page or deck to present or share
+outside the pod, never an entity's body (`entityId` is refused for it). How to
+create, attach, edit and feed one (declared reads, context, brand): skill `surfaces`,
+"HTML artifacts" (`synap_load_skill("system/surfaces/html")`).
 
 ### Update a document's content (a patch, reviewed)
 
@@ -2916,377 +2894,7 @@ Every arrow above is one of the four edge types. That is the whole model: name t
 - Full governance whitelist, proposal lifecycle, agent users → **`governance.md`**
 - Unstructured capture pipeline → **`capture.md`**
 - Extending the data model (new profiles, new properties) → install the **`synap-schema`** skill
-- Building views, dashboards, and bento layouts → install the **`synap-ui`** skill
-
----
-
-## ViewFrame Cells — Custom View Generation
-
-ViewFrame is the standard way to create custom data visualizations in Synap. Use it whenever an existing cell (table, kanban, list, chart) does not cover the needed chart type, 3D layout, map, or bespoke AI-generated UI.
-
-### When to Use ViewFrame
-
-| Situation                                                                                                                    | Action                        |
-| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| An existing cell or view type covers the need: check `synap_list_cells` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
-| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                            | Generate a ViewFrame cell     |
-
-A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
-
-### Default vs. generated — never the reflex, always the explicit ask
-
-Every kind already renders as a familiar, kind-shaped card — its built-in `entity-card` (small block) / `entity-detail` (full page) / `entity-profile` (dashboard) renderer. That built-in is the DEFAULT for everyone, including brand-new user-defined kinds (which get an automatic card built from the schema — no generation needed). **Never generate a frame renderer as a kind's default presentation.** Generate one ONLY when the user explicitly asks for a custom look — a specific chart type, a redesigned card, a bespoke layout — and bind it PER KIND (one profile's one renderer slot), never as a blanket replacement for every kind. The sandbox's egress holes (see Security below) are still open, so treat "generate a view/card" as a deliberate, scoped request, not something to reach for by default.
-
-After binding, tell the user where the result lives: **"⋯ → Customize display"** on that kind's page (Renderer Studio itself now lives in Builder mode / Settings, not a designer mode you build). That is the one place a human reverts it or picks something else — never invent a second, agent-only way to switch it back.
-
-### What ViewFrame Is
-
-- A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
-- Keep generated cells self-contained. The frame never loads code from the network (no CDN, no esm.sh): React and the shared kit come from the host, and any other library has to be bundled into the cell's own source.
-- The host injects a `SynapWidget` bridge for data access and shell actions
-- Security: `sandbox="allow-scripts allow-modals"` — no `allow-popups`, no `allow-same-origin`, no cookies, no pod token
-
-### Authoring contract
-
-A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`):
-
-- The module **default-exports a React component** (or calls `SynapWidget.onInit()` for plain JS).
-- The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
-- **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
-- Leave `deps` out (or `{}`). A cell that declares runtime `deps`, names `esm.sh`, imports anything the host does not provide, or loads code or a stylesheet from the network is **refused when you define it** (`synap_create_cell`, `POST /cells/define`): nothing is saved or proposed, and the error names the line and the fix.
-- A person approves **exactly the content** a cell proposal holds: its source, its mechanism, its `deps` and its egress. Changing any of them is a new approval: define the cell again (a new proposal), or revise the pending one. The stored cell records the fingerprint of the content it holds.
-- Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
-- No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
-- An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
-- Write the cell for the web and desktop frame. The phone (Relay) runs an ES-module cell bound as a kind's `detail` renderer, on that thing's page, with the same `SynapWidget` bridge (queries and the four governed writes); an HTML page, or a cell in another slot, shows the generic page there. The phone frame allows no approved outside host: a cell that needs one renders blank there.
-
-### Define a cell: the one recipe
-
-1. **Check what exists**: `synap_list_cells` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
-2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
-3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
-4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
-
-   | Target                        | Call                                                                              | Slots                                 |
-   | ----------------------------- | --------------------------------------------------------------------------------- | ------------------------------------- |
-   | a kind's records (every deal) | `{ profileSlug: "deal", slot, cellKey }` (or `target: { kind: "profile", slug }`) | `card`, `detail`, `list`, `dashboard` |
-   | one capability's page         | `{ target: { kind: "capability", id }, slot, cellKey }`                           | `detail`, `dashboard`                 |
-   | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
-   | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
-
-   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind the `typeKey` its reply returns, in the same breath; an accented name is folded, `Page cédant` -> `generated:page-cedant`). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
-
-5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
-
-### The same door over REST: `POST /api/hub/cells/define`
-
-It is idempotent (upserts on typeKey) and pod-global by default (no workspaceId needed). **It IS governed for agent callers** — `POST /cells/define` runs `checkPermissionOrPropose({ resource: "cell", action: "define", trustLevel: "generated" })`; a `status: "proposed"` response is the normal outcome for AI-generated renderer source, not an error — surface `reviewUrl` and keep going. Only an operator-initiated define auto-applies.
-
-```
-POST /api/hub/cells/define
-Authorization: Bearer {SYNAP_HUB_API_KEY}
-Content-Type: application/json
-
-{
-  "name": "Deal Stage Funnel",
-  "rendererSource": "<!DOCTYPE html>…</html>",
-  "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
-  "description": "Funnel chart of deal pipeline stages",  // optional
-  "defaultSize": { "w": 8, "h": 6 },    // optional
-  "deps": {}                             // optional; leave empty: the frame refuses runtime deps
-}
-```
-
-**`deps`:** a `deps` map that names anything the host does not provide is refused (400, nothing proposed): the frame loads no runtime dependency. Send `{}` or omit it, and bundle any library into `rendererSource` instead.
-
-**`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
-
-Response: `{ "success": true, "typeKey": "generated:deal-stage-funnel" }`
-
-The typeKey is auto-prefixed `generated:` when not explicitly provided.
-
-**List cells (all pod-global + optionally workspace-specific):**
-
-```
-GET /api/hub/cells                         — pod-global only
-GET /api/hub/cells?workspaceId={id}        — pod-global + workspace-scoped
-Authorization: Bearer {SYNAP_HUB_API_KEY}
-```
-
-**Delete a cell:**
-
-```
-DELETE /api/hub/cells/{typeKey}            — pod-global row
-DELETE /api/hub/cells/{typeKey}?workspaceId={id}  — workspace-scoped row
-Authorization: Bearer {SYNAP_HUB_API_KEY}
-```
-
-**Open the cell in the browser (deep link):**
-
-```
-synap://open/cell/{typeKey}
-```
-
-The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
-
-> **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
-
-### CLI commands (when running as Claude Code or another terminal agent)
-
-```bash
-# Build a multi-file cell source into a single ES module bundle.
-# --bundle-deps inlines every third-party library (only react and react-dom
-# stay external, the host provides them). Always pass it: without it the CLI
-# leaves libraries external and the frame refuses the cell.
-synap cell build <entry> --out ./dist/my-chart.js --bundle-deps
-
-# Push a built cell to the pod (no --deps: the bundle has none)
-synap cell define \
-  --name "My Chart" \
-  --file ./dist/my-chart.js \
-  [--type-key my-chart] \
-  [--workspace <id>]
-
-# Document operations
-synap doc create --title "Q2 Report" --file ./report.md
-synap doc update <docId> --file ./updated-report.md
-
-# Arrange cells on an existing bento view
-echo '[{"key":"generated:my-chart","x":0,"y":0,"w":8,"h":6}]' | synap view arrange <viewId>
-```
-
-### The SynapWidget Bridge (inside the iframe)
-
-`window.SynapWidget` is injected automatically — do NOT import or `<script>` it.
-
-#### Queries (read-only, always approved)
-
-```js
-SynapWidget.onInit(async ({ config, context }) => {
-  // context: { workspaceId, viewId?, entityId?, sdkVersion }
-
-  // List entities
-  const deals = await SynapWidget.query("entities.list", {
-    profileSlug: "deal",
-    limit: 200,
-  });
-
-  // Get a single entity
-  const entity = await SynapWidget.query("entities.get", { id: "uuid" });
-
-  // List views
-  const views = await SynapWidget.query("views.list", {
-    workspaceId: context.workspaceId,
-  });
-
-  // List profiles
-  const profiles = await SynapWidget.query("profiles.list", {});
-
-  render(deals ?? []);
-  SynapWidget.resize(document.body.scrollHeight);
-});
-```
-
-All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, properties, createdAt, … }`.
-
-#### Intent reads (a kind's pipeline, goal, needs-you, sessions)
-
-The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
-
-| Operation              | Params                                                                                                                    | Returns                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy`                     | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }`                                                                                                                         |
-| `flow.of`              | `profileSlug` (a kind or a role, required), `trackId`, `windowDays`, `firstN` (cards per state, at most 50), `properties` | `{ profileSlug, profileKind, states: [{ key, label, category, owners: [{ playbookId, playbookName, stageKey, stageName }], count, stuck, cards: [{ id, name, since, stuck, workedBy, next }] }], unclassified, flows, totals, window, withheld }`: the states in declared order with the playbook stage that owns each. Draw a board from a playbook from it |
-| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                                    | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                                                                                                                                                    |
-| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                                         | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                                                                                                                                              |
-| `attention.count`      | `profileSlug`, `trackId`                                                                                                  | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                                                                                                                                           |
-| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`                          | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                                                                                                                                        |
-
-```js
-const board = await SynapWidget.query("lifecycle.board", {
-  profileSlug: "post",
-  firstN: 5,
-});
-if (board?.error) return showError(board.error); // 404 = unknown kind, 412 = no lifecycle
-const month = await SynapWidget.query("lifecycle.throughput", {
-  profileSlug: "post",
-  bucket: "month",
-  count: 1,
-});
-```
-
-A board drawn from a playbook, in an HTML page (`window.synap.query`, the same ops): one column per state, in declared order, headed by the stage that owns it.
-
-```html
-<div id="board"></div>
-<script>
-  window.synap.query("flow.of", { profileSlug: "deal", firstN: 5 }).then(
-    (flow) => {
-      document.getElementById("board").replaceChildren(
-        ...flow.states.map((state) => {
-          const col = document.createElement("section");
-          const owner = state.owners[0];
-          col.append(
-            Object.assign(document.createElement("h3"), {
-              textContent: `${state.label} · ${state.count}`,
-            }),
-            Object.assign(document.createElement("p"), {
-              textContent: owner ? owner.stageName : "",
-            }),
-            ...state.cards.map((card) =>
-              Object.assign(document.createElement("div"), {
-                textContent: card.name ?? "",
-              })
-            )
-          );
-          return col;
-        })
-      );
-    },
-    (err) => {
-      document.getElementById("board").textContent = err.message; // a failure, never an empty board
-    }
-  );
-</script>
-```
-
-A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
-
-#### Work reads (a view per type of work)
-
-A view per type of work (its state and plan, the work running now, what finished and what it showed, how the week went against the intent) reads ONE object by its id, the same read that object's own page makes. Each answers what this viewer may read; an object they cannot see is an error, never an empty answer. The id is a param; the space is not (the host still stamps it on the other reads).
-
-| Operation            | Params                     | Returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| -------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sessions.get`       | `id` (a session, required) | `{ continuation: { session: { id, displayTitle, goal, status, statusLabel, currentStage, progress }, nextMove, userMustDecide, openRoomQuestions, blockedBy, waitingOn, workUnits, room, gates, live, stageRuns }, outcomes: { status, counts: { met, total }, outcomes: [{ key, label, kind, owner, met, retired, state }], inputs: [{ key, label, need, open, answered, blocksOutcomeKey }] }, cost }`: what the session must yield (criteria are outcomes of kind `fact`), what it waits on from the person, its next move. `outcomes.status: "unavailable"` = not read, not empty |
-| `playbook.process`   | `playbookId` (required)    | `{ playbook, when, steps, checks: { criteria, gates }, moves, needs, skills, runs: { counts, recent }, health, unavailable }`: the playbook seen whole. A part named in `unavailable` was not read                                                                                                                                                                                                                                                                                                                                                                                    |
-| `playbook.scorecard` | `playbookId` (required)    | `{ runs: { total, closed, evaluated, reopened, instantiated, attached }, escalations, overrides, criteria: [{ key, statement, required, sessions, passed, failed, unmeasured, passRate, overrides }] }`: how this viewer's runs of it went. `passRate: null` = nothing measured, not 0                                                                                                                                                                                                                                                                                                |
-| `project.pillars`    | `id` (a project, required) | `{ mainGoal, pillars, rootHealth }`: where the project stands, pillar by pillar. A part that could not be read is `{ status: "unavailable" }`                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-
-#### Open an object from an HTML page
-
-A page knows no address: no pod URL reaches the frame. To open a session, an entity, a document, a playbook, a goal (`track`) or a proposal, ask the host by kind and id; it opens the object where it opens everywhere (the console's page, the app's route). Nothing comes back. Call it from a click: without one the host may ignore it.
-
-```html
-<button id="open">Open the session</button>
-<script>
-  document
-    .getElementById("open")
-    .addEventListener("click", () => window.synap.open("session", sessionId));
-  // window.synap.opens lists the kinds a page may open.
-</script>
-```
-
-#### Tokens in an HTML page
-
-The host writes its design tokens into the frame before the page: every `--synap-*` variable, at the value the reader's theme gives it (light, dark, a theme). Draw with `var(--synap-…)` and the page follows the reader's theme; never copy token values into the page, and never link a stylesheet (the frame loads nothing from the network). Your own styles still win where you set them.
-
-#### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
-
-```js
-// Create an entity
-const result = await SynapWidget.mutate("create_entity", {
-  profileSlug: "task",
-  title: "Follow up",
-  properties: { status: "todo" },
-});
-// result.status === "approved" → result.id is the new entity id
-// result.status === "proposed" → result.proposalId, result.reviewUrl
-
-// Update an entity
-await SynapWidget.mutate("update_entity", {
-  id: "uuid",
-  properties: { status: "done" },
-});
-
-// Delete an entity (always proposed for agent-generated cells)
-await SynapWidget.mutate("delete_entity", { id: "uuid" });
-
-// Create a relation
-await SynapWidget.mutate("create_relation", {
-  sourceEntityId: "uuid-a",
-  targetEntityId: "uuid-b",
-  type: "relates_to",
-});
-```
-
-**Always check `result.status`.** `"proposed"` is not an error — surface `result.reviewUrl` to the user.
-
-#### Shell actions
-
-```js
-SynapWidget.navigate({ entityId: "entity-uuid" }); // open entity detail in side panel
-SynapWidget.openPanel("entity-detail", { entityId: "uuid" }); // explicit panel open
-SynapWidget.toast("Saved!", "success"); // 'success' | 'error' | 'info'
-SynapWidget.resize(document.body.scrollHeight); // resize the iframe to content height
-SynapWidget.updateContext({ viewId: "uuid" }); // update ambient context
-
-// Subscribe to live entity changes
-SynapWidget.subscribe("entity:changed", ({ entityId }) => {
-  // re-fetch and re-render when any entity in the pod changes
-});
-```
-
-### What the frame provides
-
-The host hands every frame these modules from its own bundle, with no network:
-
-- `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime`: one React 19 build, the host's.
-- `@synap/kit`: the shared components and helpers a space package is built against. It exports exactly these names, and nothing else: `LensPageView`, `SYNAP_CHANGED_EVENT`, `SpatialAppHeader`, `SpatialButton`, `SpatialPageFrame`, `encodeActivityScope`, `encodeLensScope`, `installFrameBridge`, `lensActivityScope`, `resolveActionLabel`, `resolveDestinationLabel`, `resolveObjectNoun`, `useLensPageClock`, `useLensPageModelOf`. Do not import a name that is not in this list.
-- `window.SynapWidget`: the data and shell bridge (below). Data reaches the cell only through it.
-
-A charting, map or 3D library is not provided. Draw with plain SVG or canvas in the cell's own source, or bundle the library at build time with `synap cell build --bundle-deps`. Never name `recharts`, `d3` or any other package in `deps`.
-
-### Minimal Cell Template
-
-```html
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      * {
-        box-sizing: border-box;
-        margin: 0;
-      }
-      body {
-        font-family: -apple-system, sans-serif;
-        padding: 16px;
-        background: transparent;
-      }
-    </style>
-    <!-- a page gets no host modules: inline script only, no import, no importmap -->
-  </head>
-  <body>
-    <p id="root"></p>
-    <script>
-      SynapWidget.onInit(async ({ context }) => {
-        const items = await SynapWidget.query("entities.list", {
-          profileSlug: "deal",
-          limit: 200,
-        }).catch(() => []);
-
-        document.getElementById("root").textContent =
-          `Loaded ${(items ?? []).length} deals`;
-
-        SynapWidget.resize(document.body.scrollHeight);
-      });
-    </script>
-  </body>
-</html>
-```
-
-### Rules
-
-- **Always call `SynapWidget.onInit()`** — the host will not send data until you register this handler.
-- **Call `SynapWidget.resize()`** after rendering to prevent clipping.
-- **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
-- **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
-- **Transparent background** — `background: transparent` on `body` inherits the host surface color.
-- **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.
-- **Import only what the host provides** — React and `@synap/kit`, in an ES-module cell (a page imports nothing). Bundle anything else into the source; never declare it in `deps`, never load it from a CDN.
-
----
+- Making UI over the data (views, dashboards, documents, HTML pages, whiteboards, cells) → install the **`surfaces`** skill (its references: **`synap-ui`**)
 
 ---
 
