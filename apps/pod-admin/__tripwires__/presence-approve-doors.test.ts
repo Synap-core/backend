@@ -46,6 +46,9 @@ const DOORS: Record<string, RegExp> = {
     /\bproposals\s*\.\s*approve\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC proposals.batchApprove":
     /\bproposals\s*\.\s*batchApprove\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // A session's page approves the plan it shows (`presenceByProposal`).
+  "tRPC proposals.approveSession":
+    /\bproposals\s*\.\s*approveSession\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC secretsVault.grantAIAccess":
     /\bsecretsVault\s*\.\s*grantAIAccess\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   // `…/approve`, `/approve-batch`, or a templated verb (`…/${action}`), which
@@ -128,8 +131,12 @@ for (const path of SENSITIVE_PATHS) {
  */
 const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   "proposals.ts": {
-    inputs: 2,
-    doors: ["tRPC proposals.approve", "tRPC proposals.batchApprove"],
+    inputs: 3,
+    doors: [
+      "tRPC proposals.approve",
+      "tRPC proposals.batchApprove",
+      "tRPC proposals.approveSession",
+    ],
   },
   "secrets-vault.ts": {
     inputs: 1,

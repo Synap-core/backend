@@ -16,6 +16,7 @@ import { withProposalTargetPlace } from "../access/proposal-target-place.js";
 import {
   isPresenceCode,
   presenceProofSchema,
+  type PresenceProof,
   type PresenceRefusalCode,
 } from "@synap-core/types/presence";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
@@ -679,7 +680,7 @@ async function approveOneOfMany(args: {
   proposalId: string;
   expectedRevision: number | undefined;
   resolution: z.infer<typeof identityResolutionByRefInput>[string] | undefined;
-  presence: z.infer<typeof presenceProofSchema> | null | undefined;
+  presence: PresenceProof | null | undefined;
   comment: string | undefined;
   door: string;
   /**

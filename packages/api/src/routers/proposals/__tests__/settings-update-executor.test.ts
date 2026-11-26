@@ -31,6 +31,13 @@ const dbStub = {
     return this;
   },
   query: { proposals: { findFirst: async () => undefined } },
+  // A pod floor switch's row (read newest first): none here, so every floor
+  // holds.
+  select: () => ({
+    from: () => ({
+      where: () => ({ orderBy: () => ({ limit: async () => [] }) }),
+    }),
+  }),
   insert: (_table: unknown) => ({
     values: (values: Record<string, unknown>) => {
       inserts.push(values);

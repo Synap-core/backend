@@ -51,7 +51,12 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: {
       select: () => ({
         from: () => ({
-          where: () => ({ limit: async () => (h.row ? [h.row] : []) }),
+          where: () => ({
+            limit: async () => (h.row ? [h.row] : []),
+            // A pod setting read (newest row first): none stored, so its
+            // default holds.
+            orderBy: () => ({ limit: async () => [] }),
+          }),
         }),
       }),
       query: { relationDefs: { findMany: async () => [] } },
