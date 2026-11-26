@@ -3,7 +3,9 @@
 /**
  * A stored HTML page, RUNNING: the author's scripts execute in an isolated
  * frame, and the page can read live pod objects through the read-only bridge,
- * answered with the viewer's own permissions. The contract — sandbox, policy,
+ * answered by THE frame read door (`surfaces.frameRead`, `frame-read-door`)
+ * with the viewer's own permissions, checked against what the page (or the
+ * HTML cell) declares. The contract — sandbox, policy,
  * allowed reads, the in-frame `window.synap.query` — is the shared leaf
  * `@synap-core/types/cell-bridge`; its header holds the security model and
  * what it does NOT cover.
@@ -25,6 +27,9 @@ import {
   CELL_FRAME_SANDBOX,
   createCellBridgeHost,
   frameNetworkCodeRefusal,
+  type CellBridgeEventLike,
+  type CellBridgeTarget,
+  type SurfaceContext,
   frameTokensCss,
   wrapHtmlForFrame,
 } from "@synap-core/types/cell-bridge";
@@ -44,7 +49,8 @@ import { humanizeBytes } from "../../../../lib/format";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
-import { readForPage } from "./html-bridge-reads";
+import type { BridgeClient } from "./html-bridge-reads";
+import { frameReadFor, type FrameSurface } from "./frame-read-door";
 import {
   browserFrameLinkEnv,
   handleFrameLink,
@@ -131,6 +137,29 @@ export function SandboxedFrame({
 }
 
 /**
+ * The message handler of one running page, wired to pod admin's read door:
+ * every read goes to THE frame read door as `surface` (none: the page reads
+ * nothing). Pure of React: `HtmlFrame` runs it, tests drive it with a fake
+ * window and a recording client.
+ */
+export function createPageFrameHost(options: {
+  frameWindow: () => CellBridgeTarget | null;
+  client: BridgeClient;
+  surface: FrameSurface | null;
+  /** The page's space: a cell's reads run in it (a page reads in its own). */
+  workspaceId: string | null;
+  context?: () => Promise<SurfaceContext>;
+}): (event: CellBridgeEventLike) => Promise<void> {
+  return createCellBridgeHost({
+    frameWindow: options.frameWindow,
+    read: frameReadFor(options.client, options.surface, {
+      workspaceId: options.workspaceId,
+    }),
+    ...(options.context ? { context: options.context } : {}),
+  });
+}
+
+/**
  * A page running in its frame, with the bridge answering its reads. A page
  * that loads code from the network is NOT run: the frame policy names no
  * remote origin (decision R3), so that code would never load and the frame
@@ -146,10 +175,17 @@ export function HtmlFrame({
   fullSize,
   bridge = true,
   anchor,
+  surface,
 }: {
   html: string;
   /** The page's space: the lens every read is stamped with. */
   workspaceId: string | null;
+  /**
+   * What the frame draws, as the frame read door names it: the stored page
+   * (`{kind: "document", id}`) or the HTML cell (`{kind: "cell", typeKey}`).
+   * Every read goes to the door as it; without one the page reads nothing.
+   */
+  surface?: FrameSurface | null;
   title: string;
   /**
    * What the page is about (its document): the page's `window.synap.context()`
@@ -216,17 +252,42 @@ export function HtmlFrame({
     loads.current = 0;
   }, [srcDoc, waiting]);
 
+  // The surface by value: a caller's new but equal object keeps the bridge.
+  const surfaceKind = surface?.kind ?? null;
+  const surfaceKey = surface
+    ? surface.kind === "cell"
+      ? surface.typeKey
+      : surface.id
+    : null;
   useEffect(() => {
     if (!bridge || left || refusal) return;
-    const host = createCellBridgeHost({
+    const readAs: FrameSurface | null =
+      surfaceKind === "cell" && surfaceKey
+        ? { kind: "cell", typeKey: surfaceKey }
+        : surfaceKind === "document" && surfaceKey
+          ? { kind: "document", id: surfaceKey }
+          : null;
+    const host = createPageFrameHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
-      read: (op, params) => readForPage(client, op, params, { workspaceId }),
-      ...(answerContext ? { context: answerContext } : {}),
+      client,
+      surface: readAs,
+      workspaceId,
+      context: answerContext,
     });
     const onMessage = (event: MessageEvent) => void host(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [client, workspaceId, bridge, left, refusal, run, answerContext]);
+  }, [
+    client,
+    workspaceId,
+    surfaceKind,
+    surfaceKey,
+    bridge,
+    left,
+    refusal,
+    run,
+    answerContext,
+  ]);
 
   // The link door and the "open this" intent: the page asks, the reader's
   // browser follows (or not). They answer with or without the data bridge: a
@@ -352,6 +413,7 @@ export function HtmlPageBody({
   fullSize,
   bridge,
   anchor,
+  surface,
 }: {
   view: HtmlPageView;
   html: string;
@@ -368,6 +430,8 @@ export function HtmlPageBody({
   bridge?: boolean;
   /** `HtmlFrame`'s `anchor`: what the page is about. */
   anchor?: FrameAnchor | null;
+  /** `HtmlFrame`'s `surface`: what its reads are asked as. */
+  surface?: FrameSurface | null;
 }) {
   if (view === "source") return <>{sourceBody(source)}</>;
   const t = frameT();
@@ -397,6 +461,7 @@ export function HtmlPageBody({
       fullSize={fullSize}
       bridge={bridge}
       anchor={anchor}
+      surface={surface}
     />
   );
 }
@@ -484,6 +549,11 @@ export function HtmlPageSection({
         onShowSource={() => setView("source")}
         fullSize={fullSize}
         anchor={anchor}
+        // The stored page IS the document it is anchored to: its reads go to
+        // the frame read door as that page.
+        surface={
+          anchor?.kind === "document" ? { kind: "document", id: anchor.id } : null
+        }
       />
       {footer?.(view)}
     </SectionCard>
