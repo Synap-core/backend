@@ -2084,13 +2084,11 @@ export const tools = {
                   },
                   blockId: {
                     type: "string",
-                    description:
-                      "replace_block: the block id.",
+                    description: "replace_block: the block id.",
                   },
                   html: {
                     type: "string",
-                    description:
-                      "replace_block: its new outer HTML, same id.",
+                    description: "replace_block: its new outer HTML, same id.",
                   },
                 },
                 required: ["op"],

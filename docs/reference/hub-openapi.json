@@ -2817,6 +2817,19 @@
                     }
                   },
                   "required": ["op", "automationId"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["replace_block"] },
+                    "blockId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "html": { "type": "string", "maxLength": 1000000 }
+                  },
+                  "required": ["op", "blockId", "html"]
                 }
               ]
             },
@@ -7913,7 +7926,11 @@
       "PublicShare": {
         "type": "object",
         "properties": {
-          "resourceType": { "type": "string", "enum": ["entity"] },
+          "resourceType": {
+            "type": "string",
+            "enum": ["entity", "document"],
+            "description": "entity = a record; document = an HTML page published as itself."
+          },
           "title": {
             "type": "string",
             "description": "Present only when the publisher allowlisted `title`."
@@ -7937,7 +7954,11 @@
                 "enum": ["markdown", "html"],
                 "description": "markdown = parse as safe markdown; html = render only inside a sandboxed frame (no scripts)."
               },
-              "content": { "type": "string" }
+              "content": { "type": "string" },
+              "page": {
+                "type": "string",
+                "description": "An HTML page in published mode: render ONLY in a sandbox that allows scripts and nothing else (`allow-scripts`, never `allow-same-origin`). Its reads answer from the publish-time snapshot; it reaches no network."
+              }
             },
             "required": ["format", "content"],
             "description": "The pinned published revision's text in its real format, or null (none pinned, or not a text body)."

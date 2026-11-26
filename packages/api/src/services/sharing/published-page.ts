@@ -141,7 +141,9 @@ export async function buildPublishedPage(
     }
     const base = {
       op: entry.op,
-      ...(entry.params ? { params: entry.params as Record<string, string> } : {}),
+      ...(entry.params
+        ? { params: entry.params as Record<string, string> }
+        : {}),
     };
     if (Object.values(pinned).some((v) => isUuid(v) || UUID_ANYWHERE.test(v))) {
       reads.push({
@@ -300,7 +302,7 @@ export function publishedPageSdk(payload: PublishedPagePayload): string {
 })();`;
 }
 
-const LEADING_DOCTYPE = /^(﻿?\s*<!doctype[^>]*>)/i;
+const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;
 
 /**
  * The page a reader shows in a scripts-allowed sandbox: the frame policy

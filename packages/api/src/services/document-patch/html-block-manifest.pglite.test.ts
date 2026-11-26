@@ -82,12 +82,15 @@ const stamp = async (id: string) =>
 
 describe("the after-save reactor stamps an html page's block manifest", () => {
   it("a save of the page stamps metadata.blocks at the revision it read", async () => {
-    await documentDiagnosticsReactor.handler({
-      subjectType: "document",
-      action: "update",
-      subjectId: PAGE,
-      data: { id: PAGE },
-    } as never);
+    await documentDiagnosticsReactor.handler(
+      {
+        subjectType: "document",
+        action: "update",
+        subjectId: PAGE,
+        data: { id: PAGE },
+      } as never,
+      {} as never
+    );
     const meta = await stamp(PAGE);
     expect(meta.blocks).toEqual({
       revision: 4,
