@@ -74,6 +74,14 @@ import {
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { commentsRouter } from "../../routers/comments.js";
 import { buildHandlers } from "../../routers/mcp/handlers/build.js";
+import { readHandlers } from "../../routers/mcp/handlers/read.js";
+import { registerCommentsRoutes } from "../../routers/hub-protocol/rest/comments.js";
+import type {
+  HubHono,
+  HubVariables,
+} from "../../routers/hub-protocol/rest/_shared.js";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import { runWithGrant } from "@synap/database";
 
 const OWNER = "owner-1";
 const EDITOR = "ws-editor";
@@ -786,5 +794,222 @@ describe("an entity comment pinned to an exact place (locator)", () => {
     );
 
     expect(await messageCount()).toBe(before);
+  });
+});
+
+/**
+ * The same pins through the Design app's door (Hub REST `/comments`, the
+ * person's app token) and an agent's read (MCP `synap_get_thread_context`
+ * with `object`). The routes are the real ones over the real service; a
+ * scoped key is bounded by its grant: the object's own update right
+ * (`entity.<kind>.update`) to comment or resolve, and an agent never resolves.
+ */
+describe("pins through Hub REST /comments and the MCP object read", () => {
+  const pin = {
+    surface: "design" as const,
+    frameId: "frame-pricing",
+    viewport: "desktop" as const,
+    point: { x: 0.1, y: 0.9 },
+    contentVersion: "rev-9",
+  };
+  const pinAnchor = { kind: "entity", entityId: ENTITY, locator: pin };
+  const entityPin = (locator: unknown) =>
+    ({ kind: "entity", entityId: ENTITY, locator }) as never;
+  const messageCount = async () =>
+    Number(
+      (await q<{ n: string }>(`select count(*)::text as n from messages`))
+        .rows[0]!.n
+    );
+  const hubApp = (
+    userId: string,
+    opts: { scopes?: string[]; agentUserId?: string } = {}
+  ) => {
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("*", async (c, next) => {
+      c.set("userId", userId);
+      c.set("scopes", opts.scopes ?? ["hub-protocol.read", "hub-protocol.write"]);
+      if (opts.agentUserId) c.set("agentUserId", opts.agentUserId);
+      await next();
+    });
+    registerCommentsRoutes(app);
+    return app;
+  };
+  const post = (app: HubHono, path: string, body: unknown) =>
+    app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const grantOf = (permissions: string[]) =>
+    ({
+      scopes: [
+        { permissions, workspaceIds: [WS], projectIds: null, entityIds: null },
+      ],
+      clientId: null,
+    }) as never;
+  const READ_ONLY = ["entity.*.read", "channel.read"];
+
+  it("Hub REST: posts a pin, lists it back with its locator, and the person resolves it", async () => {
+    const posted = await post(hubApp(EDITOR), "/comments", {
+      anchor: pinAnchor,
+      content: "Pricing cards overlap at desktop",
+      clientRequestId: "pin-hub-1",
+    });
+    expect(posted.status).toBe(200);
+    const { messageId } = (await posted.json()) as { messageId: string };
+
+    const open = await hubApp(VIEWER).request(
+      `/comments?objectType=entity&objectId=${ENTITY}&state=open`
+    );
+    expect(open.status).toBe(200);
+    const listing = (await open.json()) as {
+      threads: Array<{ id: string; anchor: unknown; resolvedAt: unknown }>;
+    };
+    const thread = listing.threads.find((t) => t.id === messageId)!;
+    expect(thread.anchor).toEqual(pinAnchor);
+    expect(thread.resolvedAt).toBeNull();
+
+    // An agent's key never resolves (it replies; the person resolves).
+    const byAgent = await post(
+      hubApp(EDITOR, { agentUserId: "agent-1" }),
+      `/comments/${messageId}/resolved`,
+      { resolved: true }
+    );
+    expect(byAgent.status).toBe(403);
+    expect(((await byAgent.json()) as { error: string }).error).toMatch(
+      /person's act/
+    );
+
+    const resolved = await post(
+      hubApp(EDITOR),
+      `/comments/${messageId}/resolved`,
+      { resolved: true }
+    );
+    expect(resolved.status).toBe(200);
+    expect(await resolved.json()).toMatchObject({
+      rootId: messageId,
+      changed: true,
+    });
+    const done = await hubApp(VIEWER).request(
+      `/comments?objectType=entity&objectId=${ENTITY}&state=resolved`
+    );
+    const doneThreads = ((await done.json()) as typeof listing).threads;
+    expect(doneThreads.find((t) => t.id === messageId)?.anchor).toEqual(
+      pinAnchor
+    );
+  });
+
+  it("Hub REST: refuses without the scope, an invalid locator (naming the field), and a bad query", async () => {
+    const before = await messageCount();
+    expect(
+      (
+        await post(hubApp(EDITOR, { scopes: ["hub-protocol.read"] }), "/comments", {
+          anchor: pinAnchor,
+          content: "no write scope",
+        })
+      ).status
+    ).toBe(403);
+    expect(
+      (
+        await hubApp(VIEWER, { scopes: [] }).request(
+          `/comments?objectType=entity&objectId=${ENTITY}`
+        )
+      ).status
+    ).toBe(403);
+    const bad = await post(hubApp(EDITOR), "/comments", {
+      anchor: { ...pinAnchor, locator: { ...pin, point: { x: 0.5, y: -1 } } },
+      content: "off the frame",
+    });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toMatch(
+      /^Invalid comment anchor: locator\.point\.y: /
+    );
+    expect(
+      (
+        await hubApp(VIEWER).request(
+          `/comments?objectType=widget&objectId=${ENTITY}`
+        )
+      ).status
+    ).toBe(400);
+    expect(await messageCount()).toBe(before);
+  });
+
+  it("a scoped key comments only with the object's update right; reading needs only read", async () => {
+    const before = await messageCount();
+    const refused = await runWithGrant(grantOf(READ_ONLY), () =>
+      post(hubApp(EDITOR), "/comments", {
+        anchor: pinAnchor,
+        content: "read-only app",
+      })
+    );
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: string }).error).toContain(
+      "entity.company.update"
+    );
+    expect(await messageCount()).toBe(before);
+
+    const listed = await runWithGrant(grantOf(READ_ONLY), () =>
+      hubApp(EDITOR).request(
+        `/comments?objectType=entity&objectId=${ENTITY}&state=open`
+      )
+    );
+    expect(listed.status).toBe(200);
+
+    const allowed = await runWithGrant(
+      grantOf([...READ_ONLY, "entity.company.update"]),
+      () =>
+        post(hubApp(EDITOR), "/comments", {
+          anchor: pinAnchor,
+          content: "the app may change this entity",
+        })
+    );
+    expect(allowed.status).toBe(200);
+  });
+
+  it("MCP: synap_get_thread_context {object, state} reads an entity's pins, fenced", async () => {
+    const posted = await postComment({
+      userId: EDITOR,
+      anchor: entityPin({ ...pin, frameId: "frame-faq" }),
+      content: "FAQ accordion clips",
+    });
+    const res = await readHandlers.synap_get_thread_context!({
+      toolName: "synap_get_thread_context",
+      args: { object: { type: "entity", id: ENTITY }, state: "open" },
+      userId: VIEWER,
+      apiKeyScopes: ["mcp.read"],
+    } as never);
+    expect(res.isError).toBeFalsy();
+    const body = JSON.parse((res.content[0] as { text: string }).text) as {
+      state: string;
+      comments: {
+        counts: { open: number; resolved: number };
+        threads: Array<{ id: string; anchor: unknown; content: string }>;
+      };
+    };
+    expect(body.state).toBe("open");
+    const thread = body.comments.threads.find(
+      (t) => t.id === posted.messageId
+    )!;
+    expect(thread.anchor).toEqual(
+      entityPin({ ...pin, frameId: "frame-faq" })
+    );
+    // Another person's words reach an agent fenced, never as instructions.
+    expect(thread.content).not.toBe("FAQ accordion clips");
+    expect(thread.content).toContain("FAQ accordion clips");
+
+    const both = await readHandlers.synap_get_thread_context!({
+      toolName: "synap_get_thread_context",
+      args: { threadId: posted.channelId, object: { type: "entity", id: ENTITY } },
+      userId: VIEWER,
+      apiKeyScopes: ["mcp.read"],
+    } as never);
+    expect(both.isError).toBe(true);
+    const badState = await readHandlers.synap_get_thread_context!({
+      toolName: "synap_get_thread_context",
+      args: { object: { type: "entity", id: ENTITY }, state: "closed" },
+      userId: VIEWER,
+      apiKeyScopes: ["mcp.read"],
+    } as never);
+    expect(badState.isError).toBe(true);
   });
 });

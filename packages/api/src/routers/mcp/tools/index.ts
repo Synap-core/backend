@@ -1162,11 +1162,26 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel. Or, instead of threadId, `object` (+ `state`): that entity's or document's comment threads, each with its anchor (a pin's `locator`: design frame/block or story, viewport, point, contentVersion), replies and resolvedAt. Resolving is the person's: reply in the thread (synap_post_message comment.replyTo) with what you did.",
         inputSchema: {
           type: "object",
           properties: {
             threadId: { type: "string", description: "Channel/thread UUID" },
+            object: {
+              type: "object",
+              description:
+                "Instead of threadId: {type: 'entity' | 'document', id} — read its comment threads.",
+              properties: {
+                type: { type: "string", enum: ["entity", "document"] },
+                id: { type: "string" },
+              },
+              required: ["type", "id"],
+            },
+            state: {
+              type: "string",
+              enum: ["open", "resolved"],
+              description: "With object: open threads (default) or resolved ones.",
+            },
             limit: {
               type: "number",
               description:
@@ -1177,7 +1192,7 @@ export const tools = {
               description: "Older messages: the last reply's `nextCursor`.",
             },
           },
-          required: ["threadId"],
+          required: [],
         },
       },
       {

@@ -502,6 +502,15 @@ export const readHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // An OBJECT's comment threads instead of a thread (plan 48854969 §10.1):
+    // the same listing as tRPC `comments.list` / Hub `GET /comments`, so an
+    // agent reads a pin's place (`anchor.locator`) and whether it is resolved.
+    if (args.object !== undefined) return objectComments(ctx);
+    if (typeof args.threadId !== "string") {
+      return toolError(
+        `Tool '${toolName}' needs threadId (a thread) or object (an object's comment threads).`
+      );
+    }
     // `limit` used to reach nothing — every call returned 50 messages.
     // Clamped, not refused: an over-large ask still gets the cap.
     const cursor =
@@ -1495,3 +1504,82 @@ export const readHandlers: McpHandlerMap = {
     return ok(result);
   },
 };
+
+/**
+ * `synap_get_thread_context` with `object` (and `state`): the object's comment
+ * threads through the ONE comments listing (`listObjectComments`: the object's
+ * read floor, then its room's visibility). Words a person other than the
+ * caller, or any agent, wrote are fenced (`untrusted`) and clipped like a
+ * room's messages; the anchor (a pin's `locator`) is the pod's own data.
+ */
+async function objectComments(ctx: McpToolContext): Promise<CallToolResult> {
+  const { toolName, args, userId } = ctx;
+  if (args.threadId !== undefined) {
+    return toolError(
+      `Tool '${toolName}': pass either threadId (a thread) or object (an object's comment threads), not both.`
+    );
+  }
+  const object = args.object as { type?: unknown; id?: unknown } | null;
+  const type = object?.type;
+  const id = object?.id;
+  if (
+    (type !== "entity" && type !== "document") ||
+    typeof id !== "string" ||
+    !isUuid(id)
+  ) {
+    return toolError(
+      `Tool '${toolName}': object is {type: 'entity' | 'document', id: <uuid>}.`
+    );
+  }
+  const state = args.state ?? "open";
+  if (state !== "open" && state !== "resolved") {
+    return toolError(
+      `Tool '${toolName}': state is 'open' (default) or 'resolved'.`
+    );
+  }
+  const { listObjectComments } =
+    await import("../../../services/comments/comments.js");
+  const listing = await listObjectComments({
+    userId,
+    object: { type, id },
+    state,
+  });
+  const fence = <
+    T extends { content: string; userId: string; authorType: string;
+      agentUserId: string | null },
+  >(
+    m: T
+  ) => {
+    const long = m.content.length > THREAD_MESSAGE_MAX_CHARS;
+    const content = long
+      ? `${m.content.slice(0, THREAD_MESSAGE_MAX_CHARS - 1)}…`
+      : m.content;
+    const mine =
+      m.authorType === "human" && m.userId === userId && !m.agentUserId;
+    return {
+      ...m,
+      content: mine
+        ? content
+        : untrusted(content, `a comment (${m.authorType} author)`),
+      ...(long ? { truncated: true, contentChars: m.content.length } : {}),
+    };
+  };
+  return ok(
+    fitReply(
+      {
+        object: { type, id },
+        state,
+        comments: {
+          ...listing,
+          threads: listing.threads.map((t) => ({
+            ...fence(t),
+            replies: t.replies.map(fence),
+          })),
+        },
+      },
+      {
+        how: "This reply was fitted under the reply cap: each list in `omitted` kept its first items, each string in `clipped` its start.",
+      }
+    )
+  );
+}

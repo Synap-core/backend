@@ -42,6 +42,7 @@ export { registerSkillsCrudRoutes } from "./skills-crud.js";
 export { registerRulesRoutes } from "./rules.js";
 export { registerBriefsRoutes } from "./briefs.js";
 export { registerDesignsRoutes } from "./designs.js";
+export { registerCommentsRoutes } from "./comments.js";
 export { registerChatRoutes } from "./chat.js";
 export { registerLibraryRoutes } from "./library.js";
 export { registerToolsRoutes } from "./tools.js";
