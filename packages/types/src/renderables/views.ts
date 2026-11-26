@@ -13,7 +13,7 @@ import type { ViewCapabilityDef } from "./types.js";
 const sheetView: ViewCapabilityDef = {
   key: "sheet",
   aiHint:
-    "Operational grid for editing many rows fast \u2014 the creation door that replaces Table.",
+    "Operational grid for editing many rows fast \u2014 the power surface (Table is the default record view).",
   name: "Sheet",
   description: "High-density, live entity grid for operating on connected data",
   icon: "Sheet",
@@ -572,8 +572,9 @@ export const IMPLEMENTED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
 ).map((d) => d.key);
 
 /**
- * The one catalogue for user-created views. It deliberately excludes the
- * legacy Table creator (Sheet is the operational successor), Branch Tree,
+ * The one catalogue for user-created views. table is the default record view
+ * and sheet is the power surface; shingle views are creatable by the user.
+ * It deliberately excludes Branch Tree,
  * which only has meaning inside a conversation, and the workspace Zoom map,
  * retired as a new view once the project map shipped (founder-approved
  * 2026-10-04: the zoom map now lives on the project page). Existing saved
@@ -583,7 +584,6 @@ export const IMPLEMENTED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
 export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
   (definition) =>
     definition.implemented &&
-    definition.key !== "table" &&
     definition.key !== "branch_tree" &&
     definition.key !== "zoom_map" &&
     definition.key !== "pipeline"
