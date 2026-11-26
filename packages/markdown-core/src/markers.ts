@@ -37,6 +37,17 @@ export const REFERENCE_KINDS = [
 ] as const;
 export type ReferenceKind = (typeof REFERENCE_KINDS)[number];
 
+/**
+ * Marker words read as another reference kind. A cell is written
+ * `[[cell:<cellKey>|label]]` (founder, 23 Nov 2026: the word is Cell); the
+ * older `[[widget:…]]` still reads. Both parse to the SAME reference, whose
+ * `kind` stays `"widget"` for one release because the chip and embed renderers
+ * in synap-app, browser and relay branch on it.
+ */
+export const MARKER_KIND_ALIASES: Readonly<Record<string, ReferenceKind>> = {
+  cell: "widget",
+};
+
 type IdRef<K extends ReferenceKind> = { kind: K; id: string; label: string };
 
 /** Reference patterns (always safe, render as clickable elements). */
@@ -161,11 +172,15 @@ function buildPattern(
   idOrKey: string,
   label: string
 ): PatternEvent | null {
-  // Reference kinds all share the `{ kind, <ref>, label }` shape. `widget` is
-  // the lone shape exception: it carries `cellKey` instead of `id`.
+  // Reference kinds all share the `{ kind, <ref>, label }` shape. `widget` (a
+  // cell, written `[[cell:…]]`) is the lone shape exception: it carries
+  // `cellKey` instead of `id`.
   // An EMPTY label means "unlabeled": the renderer resolves the object's name
   // (the kind's noun until then). It never falls back to the id — a raw uuid
   // in a sentence is machinery, not a name.
+  if (Object.hasOwn(MARKER_KIND_ALIASES, kind)) {
+    return buildPattern(MARKER_KIND_ALIASES[kind]!, idOrKey, label);
+  }
   if (isOneOf(REFERENCE_KINDS, kind)) {
     return kind === "widget"
       ? { kind: "widget", cellKey: idOrKey, label }

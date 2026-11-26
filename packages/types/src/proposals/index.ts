@@ -694,7 +694,12 @@ export interface ProposalReviewGraph {
       containerRef?: string;
       /** A pipeline: the kind whose declared lifecycle its columns are. */
       lifecycleOf?: string;
-      /** A bento: the widget keys it places, in block order. */
+      /** A bento: the cell keys it places, in block order. */
+      cells?: string[];
+      /**
+       * @deprecated The old name of `cells` (same value), kept one release
+       * for readers that still read it (founder, 23 Nov 2026: Cell).
+       */
       widgets?: string[];
     }
   >;

@@ -2,13 +2,13 @@
  * Hub Protocol - Views Router
  *
  * Governance:
- *   - listViews:   auto-approved (read)
+ *   - listViews:   auto-approved (read), the VISIBLE floor (viewReadableWhere)
  *   - createView:  auto-approved (view.create in DEFAULT_AUTO_APPROVE)
  *   - updateView:  generates proposal (requires user review)
  *   - deleteView:  NOT exposed — agents cannot delete views
  */
 
-import { grantReadPredicate } from "../../access/grant-read.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../../trpc.js";
@@ -19,7 +19,7 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import { getDb, and, eq } from "@synap/database";
+import { getDb, and, desc, eq } from "@synap/database";
 import { views } from "@synap/database/schema";
 import {
   bentoBlockArrangeErrors,
@@ -90,7 +90,7 @@ async function assertViewConfigPlaceable(
     if (errors.length > 0) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `Bento update rejected unknown or under-specified widgets (keys come from synap_list_widgets):\n- ${errors.join("\n- ")}`,
+        message: `Bento update rejected unknown or under-specified cells (keys come from synap_list_cells):\n- ${errors.join("\n- ")}`,
       });
     }
   }
@@ -98,7 +98,12 @@ async function assertViewConfigPlaceable(
 
 export const hubViewsRouter = router({
   /**
-   * List views in a workspace
+   * List the views the caller can SEE (Surfaces P1): the same floor as the
+   * operator `views.list` (`viewReadableWhere`: a workspace view by
+   * membership, a pod-personal view by its owner, a view exposed to one of
+   * the caller's projects), not only the views they created — an owner-only
+   * list hid a co-worker's board, so "list before you create" could not hold.
+   * `workspaceId` and `projectId` narrow.
    * Requires: hub-protocol.read scope
    */
   listViews: scopedProcedure(["hub-protocol.read"])
@@ -106,24 +111,23 @@ export const hubViewsRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid().nullable().optional(),
+        projectId: z.string().uuid().optional(),
         profileId: z.string().uuid().optional(),
         type: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
-      const db = await getDb();
-
-      const rows = await db.query.views.findMany({
+      // The access layer applies the visible floor (the `views` rule,
+      // `viewReadableWhere`) and the calling key's grant (`view` subject,
+      // narrow-only); the filters below only narrow inside it.
+      const rows = await scopedDb(
+        AccessContext.from(ctx as Parameters<typeof AccessContext.from>[0])
+      ).findMany<Record<string, unknown>>(views, {
         where: and(
-          // Scope to the caller's own views — mirrors the operator views.list
-          // (eq userId). Without it the optional filters degrade to a null-where
-          // returning every view on the pod.
-          eq(views.userId, ctx.userId as string),
-          // W1 — the calling key's grant (`view` subject), narrow-only.
-          grantReadPredicate(views),
           input.workspaceId
             ? eq(views.workspaceId, input.workspaceId)
             : undefined,
+          input.projectId ? eq(views.projectId, input.projectId) : undefined,
           input.type ? eq(views.type, input.type) : undefined,
           input.profileId
             ? // views store scopeProfileIds as JSONB array — simple text match
@@ -131,7 +135,7 @@ export const hubViewsRouter = router({
               undefined
             : undefined
         ),
-        orderBy: (views, { desc }) => [desc(views.updatedAt)],
+        orderBy: [desc(views.updatedAt)],
       });
 
       // If profileId requested, filter by scopeProfileIds
@@ -448,7 +452,7 @@ export const hubViewsRouter = router({
       if (invalid.length > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Bento arrange rejected unknown or under-specified widgets:\n- ${invalid.join("\n- ")}`,
+          message: `Bento arrange rejected unknown or under-specified cells:\n- ${invalid.join("\n- ")}`,
         });
       }
 

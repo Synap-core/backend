@@ -16,8 +16,9 @@
  * layout (cookie / header — not state), and gets the search and drawer
  * triggers as props. The viewer's role arrives the same
  * way and is provided to the nav, palette and Home through
- * `ConsoleRoleProvider`; the admin's "All tools" choice through
- * `AllToolsProvider`.
+ * `ConsoleRoleProvider`, inside `MemberPreviewProvider` (an admin's
+ * "Preview member menu" shrinks it to member on the client only, under a
+ * banner); the admin's "All tools" choice through `AllToolsProvider`.
  *
  * The ⌘K listener is attached at this level so it works regardless of
  * which page the user is on. We listen at `window` rather than a deeper
@@ -38,7 +39,7 @@ import { DeviceLinkRequests } from "../../_lib/presence/device-link/DeviceLinkRe
 import { AllToolsProvider } from "./all-tools";
 import { SearchModal } from "./search-modal";
 import { NavDrawer, SideNav } from "./side-nav";
-import { ConsoleRoleProvider } from "./side-nav-role";
+import { MemberPreviewBanner, MemberPreviewProvider } from "./member-preview";
 import { TopNav } from "./top-nav";
 
 /**
@@ -88,7 +89,7 @@ export function AdminShell({
   }, []);
 
   return (
-    <ConsoleRoleProvider role={role}>
+    <MemberPreviewProvider realRole={role}>
       <AllToolsProvider email={operatorEmail}>
         <OperatorEmailContext.Provider value={operatorEmail}>
           <div className="flex h-dvh min-h-0 flex-col">
@@ -101,6 +102,7 @@ export function AdminShell({
             <div className="flex min-h-0 flex-1">
               <SideNav />
               <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                <MemberPreviewBanner />
                 <DeviceLinkRequests placement="banner" />
                 {children}
               </main>
@@ -120,6 +122,6 @@ export function AdminShell({
           </div>
         </OperatorEmailContext.Provider>
       </AllToolsProvider>
-    </ConsoleRoleProvider>
+    </MemberPreviewProvider>
   );
 }
