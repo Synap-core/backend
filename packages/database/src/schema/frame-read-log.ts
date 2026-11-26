@@ -13,6 +13,8 @@
  * Read by the Inspect lane (P7) to show what a page or a cell read. An append
  * log: no foreign key (a row outlives the surface and the person it names,
  * like an audit line), written only by `services/surfaces/frame-read.ts`.
+ * Kept FRAME_READ_LOG_RETENTION_DAYS: the daily `frame-read-log-retention`
+ * job deletes older rows, and the inspect door reads no further back.
  */
 
 import {
@@ -55,5 +57,8 @@ export const frameReadLog = pgTable(
     userIdx: index("frame_read_log_user_idx").on(table.userId, table.at),
   })
 );
+
+/** How long a frame read line is kept (the inspect door's longest window). */
+export const FRAME_READ_LOG_RETENTION_DAYS = 30;
 
 export type FrameReadLogRow = typeof frameReadLog.$inferSelect;

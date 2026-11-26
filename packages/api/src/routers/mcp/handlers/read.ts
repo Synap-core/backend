@@ -809,6 +809,96 @@ export const readHandlers: McpHandlerMap = {
       throw err;
     }
   },
+  /**
+   * THE surface inspect — the twin of tRPC `surfaces.inspect` and Hub REST
+   * `GET /surfaces/inspect`: all three call `inspectSurface`. A check that
+   * could not run is `unavailable` with its reason, never an empty pass.
+   * The title and the found text are what an author wrote: fenced.
+   */
+  synap_inspect_surface: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { INSPECT_SURFACE_KINDS, inspectSurface } =
+      await import("../../../services/surfaces/inspect.js");
+    const kind = typeof args.kind === "string" ? args.kind : "";
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    const id = str(args.id);
+    const typeKey = str(args.typeKey);
+    const requested = str(args.workspaceId);
+    if (!(INSPECT_SURFACE_KINDS as readonly string[]).includes(kind)) {
+      return toolError(
+        `Tool '${toolName}': pass kind, one of ${INSPECT_SURFACE_KINDS.join(", ")}.`
+      );
+    }
+    if (!id && !(kind === "cell" && typeKey)) {
+      return toolError(
+        `Tool '${toolName}': pass the surface's id (or, for a cell type, its typeKey).`
+      );
+    }
+    for (const [field, value] of [
+      ["id", id],
+      ["workspaceId", requested],
+    ] as const) {
+      if (value) {
+        const badId = fullUuidError(toolName, field, value);
+        if (badId) return badId;
+      }
+    }
+    try {
+      const inspection = await inspectSurface(
+        { userId, access: AccessContext.agent({ userId, agentUserId }) },
+        {
+          surface: {
+            kind: kind as (typeof INSPECT_SURFACE_KINDS)[number],
+            id,
+            typeKey,
+          },
+          // A key confined to one space reads that space only.
+          workspaceId: ctx.confinedWorkspaceId ?? requested ?? null,
+          days: typeof args.days === "number" ? args.days : undefined,
+        }
+      );
+      const fence = "text from the surface (anyone who made it may have written it)";
+      const tokens =
+        inspection.tokens.status === "ok"
+          ? {
+              ...inspection.tokens,
+              findings: inspection.tokens.findings.map((f) => ({
+                ...f,
+                found: untrusted(f.found, fence),
+              })),
+            }
+          : inspection.tokens;
+      const a11y =
+        inspection.a11y.status === "ok"
+          ? {
+              ...inspection.a11y,
+              findings: inspection.a11y.findings.map((f) => ({
+                ...f,
+                element: untrusted(f.element, fence),
+              })),
+            }
+          : inspection.a11y;
+      return ok({
+        ...inspection,
+        surface: {
+          ...inspection.surface,
+          title: untrusted(inspection.surface.title, fence),
+        },
+        tokens,
+        a11y,
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "NOT_FOUND" || code === "BAD_REQUEST" || code === "FORBIDDEN") {
+        return toolError(`Tool '${toolName}': ${(err as Error).message}`);
+      }
+      throw err;
+    }
+  },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
