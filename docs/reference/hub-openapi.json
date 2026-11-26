@@ -4225,7 +4225,7 @@
           "widgets": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/BentoWidget" },
-            "description": "Replacement widget arrangement for a bento view."
+            "description": "Replacement cell arrangement for a bento view."
           },
           "agentUserId": { "type": "string" },
           "reasoning": { "type": "string" },
@@ -28937,8 +28937,8 @@
     "/views/{viewId}/arrange": {
       "post": {
         "tags": ["Views"],
-        "summary": "Reorder/arrange widgets in a bento view",
-        "description": "Replaces the widget arrangement for a bento-type view. Widget IDs must reference existing cell instances in the view.",
+        "summary": "Reorder/arrange cells in a bento view",
+        "description": "Replaces the cell arrangement for a bento-type view. Cell IDs must reference existing cell instances in the view.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
