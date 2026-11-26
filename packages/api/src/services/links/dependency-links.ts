@@ -1125,7 +1125,7 @@ function withArmOption<T extends { metadata: unknown }>(
  * each replacement it reaches to `seen` (cycle-safe). THE one walk — the
  * one-node and the many-node readers both call it, so they cannot drift.
  */
-async function followReplacements(
+export async function followReplacements(
   start: readonly DependencyNodeRef[],
   seen: Set<string>
 ): Promise<DependencyEdge[]> {
