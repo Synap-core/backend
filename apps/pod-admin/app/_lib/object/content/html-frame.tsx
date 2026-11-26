@@ -552,7 +552,9 @@ export function HtmlPageSection({
         // The stored page IS the document it is anchored to: its reads go to
         // the frame read door as that page.
         surface={
-          anchor?.kind === "document" ? { kind: "document", id: anchor.id } : null
+          anchor?.kind === "document"
+            ? { kind: "document", id: anchor.id }
+            : null
         }
       />
       {footer?.(view)}

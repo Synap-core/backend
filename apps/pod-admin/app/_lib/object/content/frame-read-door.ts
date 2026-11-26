@@ -24,8 +24,7 @@ import type { BridgeClient } from "./html-bridge-reads";
 
 /** The surface a frame draws, as the door names it. */
 export type FrameSurface =
-  | { kind: "cell"; typeKey: string }
-  | { kind: "document"; id: string };
+  { kind: "cell"; typeKey: string } | { kind: "document"; id: string };
 
 export type FrameRead = (
   op: CellBridgeReadOp,
@@ -64,5 +63,6 @@ export function frameReadFor(
       throw new Error(CELL_FRAME_NO_READS);
     };
   }
-  return (op, params) => readThroughFrameDoor(client, surface, op, params, lens);
+  return (op, params) =>
+    readThroughFrameDoor(client, surface, op, params, lens);
 }
