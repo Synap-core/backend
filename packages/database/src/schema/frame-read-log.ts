@@ -3,9 +3,10 @@
  * read door for (`surfaces.frameRead`, Hub `POST /frame/read`), answered or
  * refused. Migration 0456.
  *
- * What it records: which surface asked (`surface_kind` cell | document, and
- * its key: the cell's type key or the document's id), the op, a sha256 of the
- * params the door forwarded (never the values: a param can be an id the
+ * What it records: which surface asked (`surface_kind` cell | document |
+ * draft, and its key: the cell's type key, the document's id, or the host's
+ * draft id; `draft` marks a PREVIEW, a person's own unsaved draft), the op,
+ * a sha256 of the params the door forwarded (never the values: a param can be an id the
  * viewer may not want kept in clear), whether the surface DECLARES its reads
  * (`declared`) and whether the read was ALLOWED. A refused read is logged
  * before the refusal is answered; an allowed one before it runs.
@@ -32,9 +33,11 @@ export const frameReadLog = pgTable(
     userId: text("user_id").notNull(),
     /** The space the host stamped (its lens), null for a personal page. */
     workspaceId: uuid("workspace_id"),
-    /** `cell` | `document`. */
-    surfaceKind: text("surface_kind").notNull().$type<"cell" | "document">(),
-    /** The cell type key, or the document id. */
+    /** `cell` | `document` | `draft` (a preview of a person's own draft). */
+    surfaceKind: text("surface_kind")
+      .notNull()
+      .$type<"cell" | "document" | "draft">(),
+    /** The cell type key, the document id, or the draft id. */
     surfaceKey: text("surface_key").notNull(),
     op: text("op").notNull(),
     /** sha256 (hex) of the forwarded params, canonical JSON (sorted keys). */

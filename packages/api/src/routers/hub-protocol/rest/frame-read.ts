@@ -1,7 +1,8 @@
 /**
  * Hub Protocol REST — THE frame read door (Surfaces P6a).
  *
- * POST /frame/read  { surface: {kind:"cell", typeKey} | {kind:"document", id},
+ * POST /frame/read  { surface: {kind:"cell", typeKey} | {kind:"document", id}
+ *                              | {kind:"draft", draftId},
  *                     op, params?, workspaceId? }
  *
  * A host that reads the pod over Hub REST (the desktop, relay, a generated
@@ -12,8 +13,9 @@
  *   200 the read's answer, exactly what the op's procedure returns
  *   400 an op outside `CELL_BRIDGE_READ_OPS` (`FRAME_READ_UNKNOWN_OP`), a
  *       malformed body, or a refusal of the read itself (a missing param)
- *   403 the surface does not declare this read (`FRAME_READ_UNDECLARED`), or
- *       the caller cannot read the space it names
+ *   403 the surface does not declare this read (`FRAME_READ_UNDECLARED`),
+ *       the draft is another person's (`FRAME_DRAFT_NOT_YOURS`), or the
+ *       caller cannot read the space it names
  *   404 the cell type or html page is not found for this caller
  *   5xx a failed read, never an empty answer
  *
@@ -45,6 +47,8 @@ const FrameReadBodySchema = z.object({
   surface: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("cell"), typeKey: z.string().min(1).max(200) }),
     z.object({ kind: z.literal("document"), id: z.string().uuid() }),
+    // A person's own unsaved draft (a preview): reads with their access.
+    z.object({ kind: z.literal("draft"), draftId: z.string().uuid() }),
   ]),
   op: z.string().min(1).max(64),
   params: z.record(z.string(), z.unknown()).optional(),
@@ -64,8 +68,8 @@ export function registerFrameReadRoutes(app: HubHono): void {
     tags: ["Surfaces"],
     summary: "A framed surface's read, checked against what it declares",
     description:
-      'The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:"cell", typeKey}` or `{kind:"document", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). ' +
-      "The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. The read runs as the caller, floored to what they may see. Every call is logged. " +
+      'The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:"cell", typeKey}`, `{kind:"document", id}` for an html page, or `{kind:"draft", draftId}` for the caller\'s own unsaved draft) and its lens (`workspaceId`, used for a cell or a draft; a page reads in its own space). ' +
+      "The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. A draft declares nothing: it is answered with the caller's access and logged as a draft (a preview); another person's draft is refused (403, `code: FRAME_DRAFT_NOT_YOURS`). The read runs as the caller, floored to what they may see. Every call is logged. " +
       `Surface kinds: ${FRAME_SURFACE_KINDS.join(", ")}.`,
     request: { body: FrameReadBodySchema },
     responses: {

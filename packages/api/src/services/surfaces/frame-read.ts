@@ -6,7 +6,8 @@
  * A host (the web ViewFrame, the desktop's frames, pod admin's HTML and
  * module frames, relay, the renderer bundle) forwards each
  * `window.synap.query(op, params)` of a frame here, naming the surface the
- * frame draws: `{kind: "cell", typeKey}` or `{kind: "document", id}`.
+ * frame draws: `{kind: "cell", typeKey}`, `{kind: "document", id}`, or
+ * `{kind: "draft", draftId}` for a person's own unsaved draft (a preview).
  *
  *   1. The op must be in the ceiling (`CELL_BRIDGE_READ_OPS`), its params are
  *      narrowed to the op's own list (`pickBridgeParams`).
@@ -22,12 +23,22 @@
  *      refused; a log that cannot be written fails the read.
  *   5. The read runs with the viewer's own context (`runFrameReadOp`): the
  *      pod floors it to what this viewer may see. The lens is the door's: an
- *      html page reads in its own space; a cell in the space the host named,
- *      which the viewer must be able to read.
+ *      html page reads in its own space; a cell or a draft in the space the
+ *      host named, which the viewer must be able to read.
+ *
+ * PREVIEWS (founder, 2026-11-26, proposal 356c4d9d). A person's OWN unsaved
+ * draft (the desktop's Cell Studio) is `{kind: "draft", draftId}`: nothing of
+ * it is stored, so it declares nothing and reads live with that person's
+ * access, logged `surface_kind = "draft"` (the preview mark) and
+ * `declared = false`. The draft id is the host's (one per draft); the first
+ * person whose read the door answered for it owns it, and anyone else naming
+ * it is refused (403 `FRAME_DRAFT_NOT_YOURS`, logged refused). A marketplace
+ * preview of code from outside the pod never comes here: its host answers
+ * from a sample dataset. A frame with no surface reads nothing (its host).
  */
 
 import { createHash } from "node:crypto";
-import { db, and, eq, isNull, or } from "@synap/database";
+import { db, and, eq, isNull, ne, or } from "@synap/database";
 import { frameReadLog, widgetDefinitions } from "@synap/database/schema";
 import {
   FRAME_READ_UNDECLARED,
@@ -45,9 +56,14 @@ import { runFrameReadOp } from "./frame-read-ops.js";
 
 /** The surface a frame draws, as its host names it. */
 export type FrameSurface =
-  { kind: "cell"; typeKey: string } | { kind: "document"; id: string };
+  | { kind: "cell"; typeKey: string }
+  | { kind: "document"; id: string }
+  | { kind: "draft"; draftId: string };
 
-export const FRAME_SURFACE_KINDS = ["cell", "document"] as const;
+export const FRAME_SURFACE_KINDS = ["cell", "document", "draft"] as const;
+
+/** Another person's draft: refused, whatever it asks. */
+export const FRAME_DRAFT_NOT_YOURS = "FRAME_DRAFT_NOT_YOURS" as const;
 
 /** A refusal of the door, with the HTTP status Hub REST answers. */
 export class FrameReadError extends Error {
@@ -55,6 +71,7 @@ export class FrameReadError extends Error {
     readonly status: 400 | 403 | 404,
     readonly code:
       | typeof FRAME_READ_UNDECLARED
+      | typeof FRAME_DRAFT_NOT_YOURS
       | "FRAME_READ_UNKNOWN_OP"
       | "FRAME_SURFACE_NOT_FOUND"
       | "FRAME_SPACE_FORBIDDEN",
@@ -145,6 +162,31 @@ async function loadPageSurface(
   };
 }
 
+/**
+ * A person's own unsaved draft (a preview): nothing stored, so it declares
+ * nothing and reads in the host's lens. It is `mine: false` when the door
+ * already answered another person's read for this draft id.
+ */
+async function loadDraftSurface(
+  userId: string,
+  draftId: string,
+  workspaceId: string | null
+): Promise<LoadedSurface & { mine: boolean }> {
+  const [other] = await db
+    .select({ userId: frameReadLog.userId })
+    .from(frameReadLog)
+    .where(
+      and(
+        eq(frameReadLog.surfaceKind, "draft"),
+        eq(frameReadLog.surfaceKey, draftId),
+        eq(frameReadLog.allowed, true),
+        ne(frameReadLog.userId, userId)
+      )
+    )
+    .limit(1);
+  return { key: draftId, workspaceId, declared: null, mine: !other };
+}
+
 /** sha256 of the forwarded params, canonical (sorted keys). */
 export function frameParamsHash(params: Record<string, unknown>): string {
   return createHash("sha256").update(stableStringify(params)).digest("hex");
@@ -179,7 +221,11 @@ export async function frameRead(
   const params = pickBridgeParams(op, input.params ?? {});
 
   let surface: LoadedSurface | null;
-  if (input.surface.kind === "cell") {
+  let notYours = false;
+  if (input.surface.kind === "document") {
+    surface = await loadPageSurface(userId, input.surface.id);
+  } else {
+    // A cell or a draft reads in the host's lens, which the viewer must read.
     const lens = input.workspaceId ?? null;
     if (lens && !(await canRead(userPrincipal(userId), { workspace: lens }))) {
       throw new FrameReadError(
@@ -188,9 +234,17 @@ export async function frameRead(
         "You cannot read this space."
       );
     }
-    surface = await loadCellSurface(input.surface.typeKey, lens);
-  } else {
-    surface = await loadPageSurface(userId, input.surface.id);
+    if (input.surface.kind === "cell") {
+      surface = await loadCellSurface(input.surface.typeKey, lens);
+    } else {
+      const draft = await loadDraftSurface(
+        userId,
+        input.surface.draftId,
+        lens
+      );
+      notYours = !draft.mine;
+      surface = draft;
+    }
   }
   if (!surface) {
     throw new FrameReadError(
@@ -202,7 +256,9 @@ export async function frameRead(
 
   const declared = surface.declared !== null;
   const allowed =
-    surface.declared === null || isReadDeclared(surface.declared, op, params);
+    !notYours &&
+    (surface.declared === null ||
+      isReadDeclared(surface.declared, op, params));
 
   // Logged before anything is answered: a refused read is a fact too.
   await db.insert(frameReadLog).values({
@@ -216,6 +272,13 @@ export async function frameRead(
     declared,
   });
 
+  if (notYours) {
+    throw new FrameReadError(
+      403,
+      FRAME_DRAFT_NOT_YOURS,
+      "This draft is another person's, so the pod refuses its reads."
+    );
+  }
   if (!allowed) {
     throw new FrameReadError(
       403,
