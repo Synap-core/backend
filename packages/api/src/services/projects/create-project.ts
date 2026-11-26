@@ -14,9 +14,10 @@
  * Order, and why it is load-bearing:
  *   1. subject visibility — BEFORE anything is written; failing inside the
  *      bind would leave a project inserted and a caller told it failed;
- *   2. agent guardrails (exact-name reuse, evidence gravity, near-duplicate
- *      refusal) — BEFORE governance, so an agent is told to reuse instead of
- *      filing a duplicate proposal. Humans skip them;
+ *   2. agent guardrails (exact-name reuse, near-duplicate check, evidence
+ *      gravity) — BEFORE governance, so an agent is told to reuse instead of
+ *      filing a duplicate proposal; too little evidence is marked on the
+ *      proposal and forces review, never refused. Humans skip them;
  *   3. governance (`checkPermissionOrPropose`) with the FULL payload;
  *   4. insert → subject bind → audit → side effects. A repo-level dedup
  *      (exact-name reuse inside `ProjectRepository.create`) emits nothing.
@@ -30,7 +31,10 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import type { DuplicateCheck } from "@synap-core/types/proposals";
+import type {
+  DuplicateCheck,
+  PlanProjectEvidence,
+} from "@synap-core/types/proposals";
 import { findDuplicateCandidates } from "../duplicates/find-duplicate-candidates.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { isProjectColorSlot, isProjectIcon } from "@synap-core/types/projects";
@@ -45,6 +49,7 @@ import {
   ProjectRepository,
   assessEvidenceGravity,
   buildProjectProvenance,
+  readPodNumberSetting,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -242,6 +247,7 @@ export async function createProjectGoverned(
 
   // 2. Agent guardrails (P1) + the one duplicate door (B2).
   let duplicateCheck: DuplicateCheck | undefined;
+  let evidence: PlanProjectEvidence | undefined;
   if (isAgent) {
     const answer = await findDuplicateCandidates(db, {
       subject: "project",
@@ -264,17 +270,26 @@ export async function createProjectGoverned(
       .filter((c) => c.ref === "record")
       .map((c) => ({ id: c.id, name: c.title ?? "", score: 1 }));
 
-    // Gravity: a project is a commitment. Require ≥5 caller-visible entities.
-    const evidence = input.evidenceEntityIds ?? [];
-    const visibleCount = await countVisibleEntities(db, userId, evidence);
+    // Gravity: a project is a commitment. Below the pod's evidence count it
+    // is MARKED for the reviewer and filed for review, never refused (the
+    // same verdict a plan's `create_project` step carries).
+    const provided = input.evidenceEntityIds ?? [];
+    const visibleCount = await countVisibleEntities(db, userId, provided);
+    const minimum = await readPodNumberSetting(
+      db,
+      "governance.project_evidence_min"
+    );
     const gravity = assessEvidenceGravity({
-      providedCount: evidence.length,
+      providedCount: provided.length,
       visibleCount,
       near,
+      minimum,
     });
-    if (!gravity.ok) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: gravity.message });
-    }
+    evidence = {
+      counted: visibleCount,
+      minimum,
+      belowAgentFloor: !gravity.ok,
+    };
 
     // A near name (or the same project still waiting for review) no longer
     // refuses (B2a): the create is FILED for review, with "looks like X".
@@ -293,6 +308,7 @@ export async function createProjectGoverned(
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.source ? { source: input.source } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+    ...(evidence?.belowAgentFloor ? { forcePropose: true } : {}),
     ...(duplicateCheck
       ? {
           duplicateCheck,
@@ -321,6 +337,7 @@ export async function createProjectGoverned(
       ...(isAgent && input.evidenceEntityIds
         ? { evidenceEntityIds: input.evidenceEntityIds }
         : {}),
+      ...(evidence ? { evidence } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {

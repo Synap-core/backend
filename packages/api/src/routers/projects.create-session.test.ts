@@ -22,6 +22,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     getDb: async () => ({}),
     assessEvidenceGravity: () => ({ ok: true }),
+    readPodNumberSetting: async () => 5,
   };
 });
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));

@@ -66,13 +66,20 @@ const ROUTER = readSrc("routers/proposals.ts");
 const APPLY_APPROVAL = readSrc("routers/proposals/apply-approval.ts");
 const EXECUTORS = readExecutorsSource(API_SRC);
 
-/** `batchApprove`'s body (up to the next procedure). */
+/** `batchApprove`'s body (up to the next procedure) and its per-item door. */
 const BATCH_APPROVE_BLOCK = (() => {
   const start = ROUTER.indexOf("batchApprove: protectedProcedure");
   const end = ROUTER.indexOf("batchReject: protectedProcedure", start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
-  return ROUTER.slice(start, end);
+  const item = ROUTER.indexOf("type ApproveManyItem = {");
+  expect(item, "the per-item door vanished — scan is blind").toBeGreaterThan(
+    -1
+  );
+  return (
+    ROUTER.slice(start, end) +
+    ROUTER.slice(item, ROUTER.indexOf("export const proposalsRouter", item))
+  );
 })();
 
 /** `approve`'s body (up to the next procedure). */
@@ -640,7 +647,8 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
 // ───────────────────────────────────────────────────────────────────────────
 describe("(f) return shape is unchanged", () => {
   it("still returns { results: [{ proposalId, success, error? }] }", () => {
-    expect(BATCH_APPROVE_BLOCK).toContain("const results: Array<{");
+    expect(BATCH_APPROVE_BLOCK).toContain("const results: ApproveManyItem[]");
+    expect(BATCH_APPROVE_BLOCK).toContain("type ApproveManyItem = {");
     expect(BATCH_APPROVE_BLOCK).toContain("proposalId: string;");
     expect(BATCH_APPROVE_BLOCK).toContain("success: boolean;");
     expect(BATCH_APPROVE_BLOCK).toContain("error?: string;");
@@ -657,7 +665,7 @@ describe("(f) return shape is unchanged", () => {
     // multi-line object. The contract is unchanged — `proposalId` and
     // `success: true` are still both on that push — which is what is pinned.
     expect(BATCH_APPROVE_BLOCK).toMatch(
-      /results\.push\(\{\s*proposalId,\s*success: true,/
+      /return \{\s*proposalId,\s*success: true,/
     );
     expect(BATCH_APPROVE_BLOCK).toContain(
       'relationsFailed?: ProposalExecutorResult["relationsFailed"];'

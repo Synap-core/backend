@@ -22,7 +22,7 @@ const logger = createLogger({ module: "stamp-landed" });
 
 type LandedResult = Pick<
   ProposalExecutorResult,
-  "primaryId" | "primaryKind" | "effect"
+  "primaryId" | "primaryKind" | "primaryRole" | "effect"
 >;
 
 /** The refs only the executor's result names. Pure. */
@@ -37,13 +37,13 @@ export function landedOfResult(
   const out: ProposalLandedRef[] = [];
   const role = landedRoleOf(row);
   if (!role) return out;
-  const { primaryId, primaryKind, effect } = result;
+  const { primaryId, primaryKind, primaryRole, effect } = result;
   if (primaryId && primaryKind !== null) {
     pushLanded(
       out,
       primaryKind ?? landedKindOf(row.targetType),
       primaryId,
-      role
+      primaryRole ?? role
     );
   }
   if (effect?.applied === "verified") {

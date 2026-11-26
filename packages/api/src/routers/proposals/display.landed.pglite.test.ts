@@ -38,6 +38,8 @@ const DRAFT_RULE = randomUUID();
 const LIVE_RULE = randomUUID();
 const HIDDEN_RULE = randomUUID();
 const BOARD = randomUUID();
+const CELL = randomUUID();
+const HIDDEN_CELL = randomUUID();
 const LEAD = randomUUID();
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
@@ -62,6 +64,12 @@ beforeAll(async () => {
   await q(
     `insert into views (id, workspace_id, user_id, type, category, name) values ($1,$2,$3,'kanban','structured','Leads board')`,
     [BOARD, WS_SEEN, VIEWER]
+  );
+  await q(
+    `insert into widget_definitions (id, type_key, workspace_id, name, renderer_type, renderer_source) values
+       ($1,'generated:win-rate',$3,'Win rate','iframe','<div></div>'),
+       ($2,'generated:secret',$4,'Secret cell','iframe','<div></div>')`,
+    [CELL, HIDDEN_CELL, WS_SEEN, WS_HIDDEN]
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title, properties) values ($1,$2,$3,'lead','Acme','{}'::jsonb)`,
@@ -163,5 +171,24 @@ describe("landed — what an approval made, as doors with their next step", () =
         landed: [{ kind: "automation", id: DRAFT_RULE, role: "created" }],
       })
     ).toBeUndefined();
+  });
+
+  const cellDoor = { id: CELL, kind: "cell", name: "Win rate", next: null };
+
+  it("a defined cell is a door that needs nothing; one the viewer cannot read is left out", async () => {
+    expect(
+      await landedOf("approved", {
+        landed: [
+          { kind: "cell", id: CELL, role: "created" },
+          { kind: "cell", id: HIDDEN_CELL, role: "created" },
+        ],
+      })
+    ).toEqual([{ ...cellDoor, role: "created" }]);
+  });
+
+  it("a plan's cells land from what its apply recorded", async () => {
+    expect(
+      await landedOf("approved", { materialized: { cellIds: [CELL] } })
+    ).toEqual([{ ...cellDoor, role: "created" }]);
   });
 });

@@ -14,7 +14,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { nonWidenableFloorFor } from "@synap/governance-policy";
+import { isRootSwitchRule } from "@synap-core/types/governance-rules";
 import {
   db,
   and,
@@ -24,6 +24,9 @@ import {
   governanceCeilings,
   createGuideline,
   revokeGuideline,
+  nonWidenableFloorAtPod,
+  writePodNumberSetting,
+  type PodNumberSettingKey,
   type GovernanceCeilingAxis,
   type ConfigScopeKind,
 } from "@synap/database";
@@ -62,6 +65,8 @@ export interface SettingsUpdateProposalData {
   capabilityId?: string | null;
   text?: string;
   posture?: "auto" | "propose";
+  /** A pod number the governance reads (`POD_NUMBER_SETTINGS`), versioned. */
+  podSetting?: { key: PodNumberSettingKey; value: number };
   // revoke: the id of the row to soft-delete.
   targetId?: string;
   // DISPLAY-ONLY evidence, written by `recommend-raise-proposal-cap.ts` and read
@@ -197,13 +202,27 @@ export async function applyGovConfigChange(
       const targetKind = spec.targetKind ?? "action";
       const targetPattern = spec.targetPattern ?? "*";
       const verdict = spec.verdict ?? "propose";
+      // A Settings switch owns its pod row: never a second one through here.
+      if (
+        isRootSwitchRule({
+          principalKind: spec.principalKind ?? "any",
+          scopeKind: spec.scopeKind ?? "pod",
+          targetKind,
+          targetPattern,
+        })
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `ROOT_SWITCH: "${targetPattern}" is a Settings switch; switch it in Settings › Approvals.`,
+        });
+      }
       // A rule that can never fire is refused, not stored — the SAME refusal
       // `governanceRules.create` (B3) gives. The unified door is now the ONE every recommender
       // files through, so the check has to live HERE: an exact action key behind
       // a non-widenable floor resolves ABOVE the rule store (rung 2.8), so an
       // `auto` row there is a success receipt for a grant that does nothing.
       if (verdict === "auto" && targetKind === "action") {
-        const floor = nonWidenableFloorFor(targetPattern);
+        const floor = await nonWidenableFloorAtPod(db, targetPattern);
         if (floor) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -245,6 +264,22 @@ export async function applyGovConfigChange(
       const revoked = await revokeGuideline({ db, id: spec.targetId });
       ids = revoked ? [revoked.id] : [];
       rows = revoked ? 1 : 0;
+    } else if (spec.podSetting) {
+      try {
+        const written = await writePodNumberSetting(db, {
+          key: spec.podSetting.key,
+          value: spec.podSetting.value,
+          createdBy,
+          source: sourceProposalId ? `proposal:${sourceProposalId}` : "user",
+        });
+        ids = [written.id];
+        rows = 1;
+      } catch (err) {
+        if (err instanceof RangeError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
     } else {
       const created = await createGuideline({
         db,

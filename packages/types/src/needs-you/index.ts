@@ -592,11 +592,19 @@ export interface NeedsYouAccessRequest {
    * `capability`: one of the person's OWN tool connections broke (every
    * connection of that tool needs a sign-in again, `secrets.connection_state
    * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
+   * `automation` / `playbook`: something a recent approval of the person's
+   * landed whose next step is theirs alone (turn it on, enable what it uses).
    */
-  subject: "issuer" | "application" | "api_key" | "capability";
-  /** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
+  subject:
+    | "issuer"
+    | "application"
+    | "api_key"
+    | "capability"
+    | "automation"
+    | "playbook";
+  /** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name; the landed object's name). */
   name: string;
-  /** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
+  /** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection or a landed object. */
   from: string;
 }
 

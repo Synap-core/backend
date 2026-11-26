@@ -68,6 +68,7 @@ import {
   PAGE_ONLY_REVISION_REASON_CODE,
   PAGE_ONLY_SENTENCE,
   PROPOSAL_BATCH_MAX,
+  sessionApprovalOrder,
   PROPOSAL_REJECTION_REASONS,
   pageOnlyReasonActs,
   proposalPageOnlyReason,
@@ -620,6 +621,245 @@ export async function withdrawOwnProposal(
   emitProposalReviewed(proposalId, proposal.workspaceId, "withdrawn", userId);
 
   return { success: true };
+}
+
+/**
+ * Per-item outcome of a many-proposal approval. `errorCode` is the tRPC error CODE the failure
+ * actually carried — the same machine token single `approve` refuses
+ * with, so a client can tell "this changed since you reviewed it"
+ * (`CONFLICT` ⇒ reload and re-decide) from "the pod refused for another
+ * reason" WITHOUT matching prose. Before it existed, relay's grouped
+ * approve had to regex the message, and rewording the guard would have
+ * silently disabled the branch.
+ *
+ * The code is never hand-assigned per branch. EVERY refusal below throws
+ * a real `TRPCError` and the ONE catch at the bottom of the loop reads
+ * `.code` off it — so the code and the sentence are authored in the same
+ * place and cannot drift into two tables.
+ */
+type ApproveManyItem = {
+  proposalId: string;
+  success: boolean;
+  /**
+   * `approveSession` only: `applied`, `queued` (a large plan handed to the
+   * background job, as single approve does), `failed`, or `not_attempted`
+   * (an earlier step did not apply, or is still being applied).
+   */
+  outcome?: "applied" | "queued" | "failed" | "not_attempted";
+  /** The approval was handed to the background job (`applyProposalApproval`). */
+  queued?: true;
+  error?: string;
+  errorCode?: TRPCError["code"];
+  /** Edges of an approved graph that did not land — see ProposalExecutorResult. */
+  relationsFailed?: ProposalExecutorResult["relationsFailed"];
+  /** Parts the executor declined to apply, each a reviewer sentence — see ProposalExecutorResult. */
+  refusals?: ProposalExecutorResult["refusals"];
+  /**
+   * `ENTITY_WEAK_DEDUP`: set only when this item's CONFLICT is the weak
+   * same-name gate. A revision-guard CONFLICT has no reasonCode —
+   * clients must not treat every CONFLICT as "changed after you opened
+   * this". `REVIEW_ON_ITS_PAGE` (`BAD_REQUEST`): only the proposal's own
+   * page may approve it (`proposalPageOnlyReason`); it stays pending.
+   */
+  reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
+  candidates?: Array<{ id: string; title: string | null; type: string }>;
+  opRef?: string;
+  identity?: ProposalExecutorResult["identity"];
+  identities?: ProposalExecutorResult["identities"];
+};
+
+/**
+ * One item of a many-proposal approval (`batchApprove`, `approveSession`): the
+ * SAME door and checks a single `approve` runs, settled per item — a refusal
+ * is that item's result, never the whole call's.
+ */
+async function approveOneOfMany(args: {
+  ctx: Parameters<typeof applyProposalApproval>[0]["ctx"];
+  userId: string;
+  proposalId: string;
+  expectedRevision: number | undefined;
+  resolution: z.infer<typeof identityResolutionByRefInput>[string] | undefined;
+  presence: z.infer<typeof presenceProofSchema> | null | undefined;
+  comment: string | undefined;
+  door: string;
+  /**
+   * The session page shows each item that acts on its own whole and binds
+   * its approval to the revision it rendered: there, such an item may pass.
+   */
+  actingOnItsPage?: boolean;
+  /** Hand a large plan to the background job, as single approve does. */
+  background?: boolean;
+}): Promise<ApproveManyItem> {
+  const { ctx, userId, proposalId } = args;
+  try {
+    // Approval is the human step: an agent caller (agent key or the IS
+    // internal key) fails each item FORBIDDEN, before the item is read.
+    refuseAgentProposalApprover(ctx);
+    const proposal = await db.query.proposals.findFirst({
+      where: eq(proposals.id, proposalId),
+    });
+    // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+    if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+
+    if (!proposal) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+    }
+
+    // Diff-scoped approval, before ANY state transition — the same
+    // ordering single `approve` uses (assert, then act), so a stale row is
+    // refused rather than half-applied. Per-item: one stale proposal fails
+    // its own entry and the rest of the batch proceeds, which matches this
+    // door's established shape (record the failure, continue the batch).
+    //
+    // The guard's own `TRPCError` (code `CONFLICT`) propagates to the
+    // loop's catch UNCAUGHT here on purpose: it already carries both the
+    // sentence and the code, and re-wrapping it locally is exactly how a
+    // second, drifting code table gets born.
+    const expectedRevision = args.expectedRevision;
+    if (expectedRevision !== undefined) {
+      assertReviewedRevision(expectedRevision, proposal.revisionHistory);
+    } else {
+      // Revised by someone else: only against the revision seen (F1).
+      assertRevisedProposalBound({
+        status: proposal.status,
+        revisionHistory: proposal.revisionHistory,
+        approverUserId: userId,
+      });
+    }
+
+    // PENDING or APPROVAL_FAILED are the retryable states (both surface in
+    // the actionable queue). A previously-failed approval can be retried in
+    // a batch just like a single Retry; every terminal state is skipped.
+    //
+    // `PRECONDITION_FAILED`, deliberately NOT `CONFLICT`: this row is in
+    // a terminal state, which is a settled fact the client should absorb
+    // — not the diff-scoped review conflict, which means the human has
+    // not seen the current version and must re-read before deciding.
+    // Collapsing the two would make "already approved" demand a reload it
+    // does not need, and would blunt the one signal the revision binding
+    // exists to send. `CONFLICT` here is the revision guard OR a weak
+    // same-name create (`reasonCode: "ENTITY_WEAK_DEDUP"` on the item).
+    // Clients must branch on reasonCode, not on CONFLICT alone.
+    if (!isProposalUndecided(proposal.status)) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `Already ${proposal.status}`,
+      });
+    }
+
+    // Ownership check — SAME computation as single `approve`; a refusal is
+    // this item's result.
+    const { allowed: canApprove, reason: batchReason } =
+      await computeCanReviewApproval({
+        proposal,
+        userId,
+        roster: rosterReadFor(ctx),
+        purpose: "approve",
+        actingAgentUserId: ctx.agentUserId,
+      });
+    if (!canApprove) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          batchReason === "session-only"
+            ? reviewRefusalMessage(batchReason, "approve")
+            : "Not authorized",
+      });
+    }
+
+    // Page-only (`@synap-core/types` page-only.ts, the rule every
+    // surface reads): every reason is refused here, per item, before
+    // anything is applied, and left pending. One exception: a twin
+    // whose verb the caller sends (`resolutions`) was chosen, so it
+    // may pass.
+    const resolution = args.resolution;
+    const pageOnly = proposalPageOnlyReason(proposal);
+    // On the session page an item that acts on its own is shown whole and
+    // bound to the revision the page rendered: there it may pass.
+    const shownWholeOnItsPage =
+      args.actingOnItsPage === true &&
+      pageOnlyReasonActs(pageOnly) &&
+      expectedRevision !== undefined;
+    if (
+      pageOnly !== null &&
+      !(pageOnly === "identity_choice" && resolution) &&
+      !shownWholeOnItsPage
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: PAGE_ONLY_SENTENCE[pageOnly],
+        cause: { reasonCode: PAGE_ONLY_REASON_CODE },
+      });
+    }
+
+    // ONE door — the SAME `applyProposalApproval` single approve runs.
+    //
+    // One item at a time, by the caller: executors do real writes (entity
+    // creates that dedup against each other, project membership stamps,
+    // workspace provisioning), so items settle in the caller's order, the
+    // order N single approves would produce. A throw is caught below and
+    // reported as this item's result (the shared dispatch already flipped it
+    // to APPROVAL_FAILED, as single approve does); whether the next item is
+    // attempted is the caller's call. Idempotency is layered: the status
+    // guard above skips terminal rows, and each executor keeps its own
+    // already-APPROVED short-circuit.
+    const result = await applyProposalApproval({
+      proposal,
+      userId,
+      input: {
+        proposalId,
+        ...(args.comment !== undefined ? { comment: args.comment } : {}),
+        ...(resolution ? { identityResolution: resolution } : {}),
+      },
+      ctx,
+      ...(args.background ? { background: true } : {}),
+      presence: args.presence ?? null,
+      door: args.door,
+    });
+    if (result.success) {
+      return {
+        proposalId,
+        success: true,
+        ...(result.queued ? { queued: true as const } : {}),
+        ...(result.relationsFailed?.length
+          ? { relationsFailed: result.relationsFailed }
+          : {}),
+        // What the executor declined to apply — dropping it made a partial
+        // application read as a clean one on the batch door.
+        ...(result.refusals?.length ? { refusals: result.refusals } : {}),
+        ...(result.identity ? { identity: result.identity } : {}),
+        ...(result.identities?.length ? { identities: result.identities } : {}),
+      };
+    } else {
+      // The shared door returned a falsy `success` WITHOUT throwing, so
+      // there is no `TRPCError` to read a code off. This is the one
+      // explicitly-chosen fallback — the same one the catch below uses —
+      // and it carries no invented sentence: the door reported no reason,
+      // and manufacturing one would be a claim about what happened that
+      // nothing verified.
+      return {
+        proposalId,
+        success: false,
+        errorCode: "INTERNAL_SERVER_ERROR",
+      };
+    }
+  } catch (error) {
+    // THE single derivation site. Every refusal above throws a real
+    // `TRPCError`, so its own `.code` is what lands on the wire — no
+    // branch→code lookup table exists to drift from the messages.
+    // A non-TRPCError throw (a bug, a driver error) has no code of its
+    // own: it falls back to INTERNAL_SERVER_ERROR, the honest reading of
+    // "this was not a governance refusal".
+    return {
+      proposalId,
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+      errorCode:
+        error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
+      ...weakDedupFailureFields(error),
+      ...pageOnlyFailureFields(error),
+    };
+  }
 }
 
 export const proposalsRouter = router({
@@ -3895,221 +4135,122 @@ export const proposalsRouter = router({
       // An agent caller is refused PER ITEM (first statement of the loop), so
       // the batch reports each refusal in its results.
       const userId = requireUserId(ctx.userId);
-      /**
-       * Per-item outcome. `errorCode` is the tRPC error CODE the failure
-       * actually carried — the same machine token single `approve` refuses
-       * with, so a client can tell "this changed since you reviewed it"
-       * (`CONFLICT` ⇒ reload and re-decide) from "the pod refused for another
-       * reason" WITHOUT matching prose. Before it existed, relay's grouped
-       * approve had to regex the message, and rewording the guard would have
-       * silently disabled the branch.
-       *
-       * The code is never hand-assigned per branch. EVERY refusal below throws
-       * a real `TRPCError` and the ONE catch at the bottom of the loop reads
-       * `.code` off it — so the code and the sentence are authored in the same
-       * place and cannot drift into two tables.
-       */
-      const results: Array<{
-        proposalId: string;
-        success: boolean;
-        error?: string;
-        errorCode?: TRPCError["code"];
-        /** Edges of an approved graph that did not land — see ProposalExecutorResult. */
-        relationsFailed?: ProposalExecutorResult["relationsFailed"];
-        /** Parts the executor declined to apply, each a reviewer sentence — see ProposalExecutorResult. */
-        refusals?: ProposalExecutorResult["refusals"];
-        /**
-         * `ENTITY_WEAK_DEDUP`: set only when this item's CONFLICT is the weak
-         * same-name gate. A revision-guard CONFLICT has no reasonCode —
-         * clients must not treat every CONFLICT as "changed after you opened
-         * this". `REVIEW_ON_ITS_PAGE` (`BAD_REQUEST`): only the proposal's own
-         * page may approve it (`proposalPageOnlyReason`); it stays pending.
-         */
-        reasonCode?:
-          "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
-        candidates?: Array<{ id: string; title: string | null; type: string }>;
-        opRef?: string;
-        identity?: ProposalExecutorResult["identity"];
-        identities?: ProposalExecutorResult["identities"];
-      }> = [];
-
+      const results: ApproveManyItem[] = [];
       for (const proposalId of input.proposalIds) {
-        try {
-          // Approval is the human step: an agent caller (agent key or the IS
-          // internal key) fails each item FORBIDDEN, before the item is read.
-          refuseAgentProposalApprover(ctx);
-          const proposal = await db.query.proposals.findFirst({
-            where: eq(proposals.id, proposalId),
-          });
-          // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
-          if (proposal) assertNotForeignLibraryProposal(proposal, userId);
-
-          if (!proposal) {
-            throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
-          }
-
-          // Diff-scoped approval, before ANY state transition — the same
-          // ordering single `approve` uses (assert, then act), so a stale row is
-          // refused rather than half-applied. Per-item: one stale proposal fails
-          // its own entry and the rest of the batch proceeds, which matches this
-          // door's established shape (record the failure, continue the batch).
-          //
-          // The guard's own `TRPCError` (code `CONFLICT`) propagates to the
-          // loop's catch UNCAUGHT here on purpose: it already carries both the
-          // sentence and the code, and re-wrapping it locally is exactly how a
-          // second, drifting code table gets born.
-          const expectedRevision = input.expectedRevisions?.[proposalId];
-          if (expectedRevision !== undefined) {
-            assertReviewedRevision(expectedRevision, proposal.revisionHistory);
-          } else {
-            // Revised by someone else: only against the revision seen (F1).
-            assertRevisedProposalBound({
-              status: proposal.status,
-              revisionHistory: proposal.revisionHistory,
-              approverUserId: userId,
-            });
-          }
-
-          // PENDING or APPROVAL_FAILED are the retryable states (both surface in
-          // the actionable queue). A previously-failed approval can be retried in
-          // a batch just like a single Retry; every terminal state is skipped.
-          //
-          // `PRECONDITION_FAILED`, deliberately NOT `CONFLICT`: this row is in
-          // a terminal state, which is a settled fact the client should absorb
-          // — not the diff-scoped review conflict, which means the human has
-          // not seen the current version and must re-read before deciding.
-          // Collapsing the two would make "already approved" demand a reload it
-          // does not need, and would blunt the one signal the revision binding
-          // exists to send. `CONFLICT` here is the revision guard OR a weak
-          // same-name create (`reasonCode: "ENTITY_WEAK_DEDUP"` on the item).
-          // Clients must branch on reasonCode, not on CONFLICT alone.
-          if (!isProposalUndecided(proposal.status)) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `Already ${proposal.status}`,
-            });
-          }
-
-          // Ownership check — SAME computation as single `approve`; this door's
-          // failure behavior (record the item + continue the batch) is unchanged.
-          const { allowed: canApprove, reason: batchReason } =
-            await computeCanReviewApproval({
-              proposal,
-              userId,
-              roster: rosterReadFor(ctx),
-              // batchApprove — same door as single approve, same floor.
-              purpose: "approve",
-              actingAgentUserId: ctx.agentUserId,
-            });
-          if (!canApprove) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message:
-                batchReason === "session-only"
-                  ? reviewRefusalMessage(batchReason, "approve")
-                  : "Not authorized",
-            });
-          }
-
-          // Page-only (`@synap-core/types` page-only.ts, the rule every
-          // surface reads): every reason is refused here, per item, before
-          // anything is applied, and left pending. One exception: a twin
-          // whose verb the caller sends (`resolutions`) was chosen, so it
-          // may pass.
-          const resolution = input.resolutions?.[proposalId];
-          const pageOnly = proposalPageOnlyReason(proposal);
-          if (
-            pageOnly !== null &&
-            !(pageOnly === "identity_choice" && resolution)
-          ) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: PAGE_ONLY_SENTENCE[pageOnly],
-              cause: { reasonCode: PAGE_ONLY_REASON_CODE },
-            });
-          }
-
-          // ONE door — the SAME `applyProposalApproval` single approve runs.
-          // This block used to inline only the generic `.validated`-emit tail
-          // and never resolved an executor, so "Approve all" flipped the row
-          // to APPROVED and silently did NOTHING for every proposal type the
-          // materializer has no case for, and ran the wrong (generic) path for
-          // the ones it does.
-          //
-          // SEQUENTIAL and per-item best-effort, deliberately: executors do
-          // real writes (entity creates that dedup against each other, project
-          // membership stamps, workspace provisioning), so items must settle in
-          // the order the user selected them — the same order N single approves
-          // would produce. Concurrency would buy nothing at max 50 items and
-          // would make dedup/ordering races nondeterministic. A throw is caught
-          // below: that item is reported failed (and was already flipped to
-          // APPROVAL_FAILED + rejectionReason by the shared dispatch, exactly as
-          // single approve does) while every remaining item is still attempted.
-          // Idempotency is layered: the status guard above skips terminal rows,
-          // and each executor keeps its own already-APPROVED short-circuit.
-          const result = await applyProposalApproval({
-            proposal,
-            userId,
-            input: {
-              proposalId,
-              ...(input.comment !== undefined
-                ? { comment: input.comment }
-                : {}),
-              ...(resolution ? { identityResolution: resolution } : {}),
-            },
+        results.push(
+          await approveOneOfMany({
             ctx,
-            presence: input.presenceByProposal?.[proposalId] ?? null,
-            door: "trpc.proposals.batchApprove",
-          });
-          if (result.success) {
-            results.push({
-              proposalId,
-              success: true,
-              ...(result.relationsFailed?.length
-                ? { relationsFailed: result.relationsFailed }
-                : {}),
-              // What the executor declined to apply — dropping it made a partial
-              // application read as a clean one on the batch door.
-              ...(result.refusals?.length ? { refusals: result.refusals } : {}),
-              ...(result.identity ? { identity: result.identity } : {}),
-              ...(result.identities?.length
-                ? { identities: result.identities }
-                : {}),
-            });
-          } else {
-            // The shared door returned a falsy `success` WITHOUT throwing, so
-            // there is no `TRPCError` to read a code off. This is the one
-            // explicitly-chosen fallback — the same one the catch below uses —
-            // and it carries no invented sentence: the door reported no reason,
-            // and manufacturing one would be a claim about what happened that
-            // nothing verified. (This arm previously reported `success:false`
-            // with NO error and NO code at all, which read to a client as an
-            // unexplained failure.)
-            results.push({
-              proposalId,
-              success: false,
-              errorCode: "INTERNAL_SERVER_ERROR",
-            });
-          }
-        } catch (error) {
-          // THE single derivation site. Every refusal above throws a real
-          // `TRPCError`, so its own `.code` is what lands on the wire — no
-          // branch→code lookup table exists to drift from the messages.
-          // A non-TRPCError throw (a bug, a driver error) has no code of its
-          // own: it falls back to INTERNAL_SERVER_ERROR, the honest reading of
-          // "this was not a governance refusal".
-          results.push({
+            userId,
             proposalId,
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-            errorCode:
-              error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
-            ...weakDedupFailureFields(error),
-            ...pageOnlyFailureFields(error),
-          });
-        }
+            expectedRevision: input.expectedRevisions?.[proposalId],
+            resolution: input.resolutions?.[proposalId],
+            presence: input.presenceByProposal?.[proposalId],
+            comment: input.comment,
+            door: "trpc.proposals.batchApprove",
+          })
+        );
       }
 
+      return { results };
+    }),
+
+  /**
+   * Approve a whole session's proposals from its page, in the order what they
+   * make depends on each other (`sessionApprovalOrder`: a space before its
+   * kinds, a kind before its lifecycle, a playbook before the automation that
+   * runs it). Only the proposals the page rendered are approved, each bound
+   * to the revision it rendered (`expectedRevisions`). An item that acts on
+   * its own may pass here — the session page shows it whole — never from a
+   * list or an inbox. Each item goes through the same door and checks as
+   * `batchApprove`; a large plan is handed to the background job, as single
+   * approve does.
+   *
+   * It stops at the first step that does not apply: a later step may need
+   * it, so every step after it is `not_attempted`. A plan handed to the
+   * background job stops it the same way, until that plan has applied. An id
+   * the session does not hold is refused and nothing is attempted.
+   */
+  approveSession: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        /** `proposalId → revisionHistory.length` the session page rendered. */
+        expectedRevisions: z
+          .record(z.string().uuid(), z.number().int().nonnegative())
+          .refine(
+            (m) =>
+              Object.keys(m).length > 0 &&
+              Object.keys(m).length <= PROPOSAL_BATCH_MAX,
+            { message: `1 to ${PROPOSAL_BATCH_MAX} proposals` }
+          ),
+        comment: z.string().optional(),
+        presenceByProposal: z
+          .record(z.string(), presenceProofSchema)
+          .optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve");
+      const userId = requireUserId(ctx.userId);
+      refuseAgentProposalApprover(ctx);
+      const ids = Object.keys(input.expectedRevisions);
+      const read = await db.query.proposals.findMany({
+        columns: {
+          id: true,
+          sessionId: true,
+          proposalType: true,
+          targetType: true,
+          data: true,
+          createdAt: true,
+        },
+        where: inArray(proposals.id, ids),
+      });
+      const wanted = new Set(ids);
+      const rows = read.filter(
+        (r) => wanted.has(r.id) && r.sessionId === input.sessionId
+      );
+      const held = new Set(rows.map((r) => r.id));
+      const results: ApproveManyItem[] = ids
+        .filter((id) => !held.has(id))
+        .map((proposalId) => ({
+          proposalId,
+          success: false,
+          outcome: "failed" as const,
+          error: "Not a proposal of this session",
+          errorCode: "NOT_FOUND" as const,
+        }));
+      let stopped = results.length > 0;
+      for (const row of sessionApprovalOrder(rows)) {
+        if (stopped) {
+          results.push({
+            proposalId: row.id,
+            success: false,
+            outcome: "not_attempted",
+            error: "An earlier step did not apply",
+            errorCode: "PRECONDITION_FAILED",
+          });
+          continue;
+        }
+        const item = await approveOneOfMany({
+          ctx,
+          userId,
+          proposalId: row.id,
+          expectedRevision: input.expectedRevisions[row.id],
+          resolution: undefined,
+          presence: input.presenceByProposal?.[row.id],
+          comment: input.comment,
+          door: "trpc.proposals.approveSession",
+          actingOnItsPage: true,
+          background: true,
+        });
+        const outcome = !item.success
+          ? "failed"
+          : item.queued
+            ? "queued"
+            : "applied";
+        results.push({ ...item, outcome });
+        stopped = outcome !== "applied";
+      }
       return { results };
     }),
 

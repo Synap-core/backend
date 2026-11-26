@@ -37,6 +37,7 @@ const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
 const DECIDES: Record<string, "approve" | "reject"> = {
   approve: "approve",
   batchApprove: "approve",
+  approveSession: "approve",
   revert: "approve", // executes writes with the reviewer's authority
   reject: "reject",
   batchReject: "reject",
@@ -62,6 +63,13 @@ const NOT_A_DECISION: Record<string, string> = {
   later: "the caller sets a request aside for themselves; nothing is decided",
   clearLater: "the caller takes back their own Later",
 };
+
+/** The per-item door the many-proposal approvals run (`approveOneOfMany`). */
+function perItemDoor(source: string): string {
+  const at = source.indexOf("async function approveOneOfMany(");
+  expect(at, "the per-item door vanished — scan is blind").toBeGreaterThan(-1);
+  return source.slice(at, source.indexOf("export const proposalsRouter", at));
+}
 
 function procedureSegments(source: string): Map<string, string> {
   const re = /^ {2}(\w+): \w*[pP]rocedure\b/gm;
@@ -267,10 +275,17 @@ describe("D — every decision is fenced by the proposal's OWN place (D3, PR #29
     ).toMatch(AT);
   });
 
-  it.each(["approve", "batchApprove"])(
+  it.each(["approve", "batchApprove", "approveSession"])(
     "%s reaches applyProposalApproval",
     (n) => {
-      expect(segments.get(n)).toMatch(/\bapplyProposalApproval\(\{/);
+      // The many-proposal doors run the shared per-item door.
+      const body =
+        n === "approve"
+          ? segments.get(n)
+          : `${segments.get(n)}${perItemDoor(read("routers/proposals.ts"))}`;
+      if (n !== "approve")
+        expect(segments.get(n)).toMatch(/\bapproveOneOfMany\(\{/);
+      expect(body).toMatch(/\bapplyProposalApproval\(\{/);
     }
   );
 

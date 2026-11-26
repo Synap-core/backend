@@ -52,7 +52,10 @@ import {
   type AgentPostureName,
 } from "@synap/governance-policy/postures";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
-import { readReversibleDefault } from "./reversible-default.js";
+import {
+  readFloorsYield,
+  readReversibleDefault,
+} from "./reversible-default.js";
 import {
   AGENT_WRITE_MODE_LINE,
   effectiveAgentWriteMode,
@@ -2246,6 +2249,10 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
     ruleSubject: input.ruleSubject,
   });
 
+  // (c.55) Rungs 2.08 / 2.09's I/O half: is this write's floor family
+  // switched on (its pod class row)? Read only for a write in a family.
+  const floorsYield = await readFloorsYield(db, `${subjectType}.${action}`);
+
   // (c.6) Rung 2.55's I/O half — resolve the acting channel's instruction-
   // provenance ORIGIN TRUST. Pure query; the engine consumes the resolved
   // "trusted" | "untrusted" | undefined. No channelId → no channel read → no-op.
@@ -2293,6 +2300,7 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
     possibleDuplicate: input.possibleDuplicate,
     lifecycleMove: input.lifecycleMove,
     podAdminSchemaChange: input.podAdminSchemaChange,
+    floorsYield,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,
     governanceRuleNamesWrite: ruleMatch?.namesWrite,

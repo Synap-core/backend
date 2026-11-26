@@ -2576,7 +2576,8 @@ export const automationsRouter = router({
         }
       }
 
-      // No person reviewed this write: an agent's automation is born `draft`.
+      // No person reviewed this write: an agent's automation is born `draft`
+      // unless its activation would apply without a person (`statusAtCreate`).
       const inserted = await insertAutomationAfterGovernance(
         database,
         input,
