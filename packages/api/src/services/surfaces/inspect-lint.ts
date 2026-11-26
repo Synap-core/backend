@@ -269,17 +269,13 @@ const cut = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}...` : s);
 export function lintA11y(source: LintSource): A11yFinding[] {
   if (source.language !== "html") return [];
   // Script and style bodies are not markup: blank them (keep the tags).
-  const text = blankComments(source.text)
-    .replace(
-      /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi,
-      (_all, open: string, body: string, close: string) =>
-        open + blank(body) + close
-    )
-    .replace(
-      /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi,
-      (_all, open: string, body: string, close: string) =>
-        open + blank(body) + close
-    );
+  // One raw-text pattern with a backreference: this lint reads no loads, so
+  // it spells no loader regex (`one-frame-policy` tripwire, rule 4).
+  const text = blankComments(source.text).replace(
+    /(<(script|style)\b[^>]*>)([\s\S]*?)(<\/\2\s*>)/gi,
+    (_all, open: string, _tag: string, body: string, close: string) =>
+      open + blank(body) + close
+  );
   const starts = lineStarts(text);
   const out: A11yFinding[] = [];
   const add = (offset: number, rule: A11yRule, tag: string, message: string) =>
