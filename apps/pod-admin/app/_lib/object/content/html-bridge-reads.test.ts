@@ -105,6 +105,7 @@ describe("the page bridge — through the console's own client", () => {
       },
       documents: { get: proc("documents.get", { content: "# hi" }) },
       flow: { of: proc("flow.of", { profileSlug: "deal", states: [] }) },
+      relations: { get: proc("relations.get", { relations: [] }) },
     };
     return { client: client as unknown as BridgeClient, calls };
   }

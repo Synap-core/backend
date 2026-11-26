@@ -309,6 +309,15 @@ const homeWire = z.object({
   /** Producing spaces first (most live things first), then libraries by name. */
   spaces: z.array(spaceIntentWire),
   /**
+   * What a key bounded by a grant does not read (`services/lifecycle/homes.ts`
+   * `HomeWithheld`): `otherSpaces` (only the spaces and kinds its grant reads
+   * are listed), `needsYou` (every needs-you number is null), `beingWorked`
+   * (null on every kind), `homeLastSeenAt`. Absent = the whole home.
+   */
+  withheld: z
+    .array(z.enum(["otherSpaces", "needsYou", "beingWorked", "homeLastSeenAt"]))
+    .optional(),
+  /**
    * When this person last had Home on screen, on ANY device (ISO; null =
    * never stamped): the brief's "while you were away" window. Stamped by
    * `preferences.markHomeSeen` when Home leaves the screen.

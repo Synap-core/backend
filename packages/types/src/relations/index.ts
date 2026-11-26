@@ -37,3 +37,9 @@ export interface RelationWithEntities {
     type: string;
   };
 }
+
+/**
+ * Direction schema for relation queries
+ * Re-exported from the API router for use in cell bridge reads.
+ */
+export type Direction = "source" | "target" | "both";

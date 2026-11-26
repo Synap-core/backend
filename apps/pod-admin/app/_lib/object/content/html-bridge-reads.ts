@@ -24,6 +24,7 @@ import {
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "@synap-core/types/cell-bridge";
+import type { Direction } from "@synap-core/types/relations";
 import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import type { trpc } from "../../../../lib/trpc";
 
@@ -133,6 +134,22 @@ export async function readForPage(
           window: days ? { days } : undefined,
           firstN: int(p.firstN, 0, 50),
           properties: bool(p.properties),
+          workspaceId: ws,
+        })
+      );
+    }
+    case "graph.of": {
+      // An entity's graph neighbours — semantic relations + structural property
+      // links (the same data `relations.getConnections` returns, without
+      // channels/sessions). Params: id (entity uuid), direction (source|target|both),
+      // type (relation type filter), limit, offset. The host stamps its workspace lens.
+      const direction = str(p.direction) as Direction | undefined;
+      return client.relations.get.query(
+        defined({
+          entityId: required(op, "an id", str(p.id)),
+          type: str(p.type),
+          direction: direction ?? "both",
+          limit: int(p.limit, 1, 200) ?? 50,
           workspaceId: ws,
         })
       );

@@ -128,7 +128,7 @@ curl -fsSL https://github.com/synap-core/backend/releases/download/channel-stabl
 
 It installs Docker if needed. To try a pod on your own machine instead, run
 `./synap install --domain localhost` from a clone of the repository, which
-builds from source. Both paths, and the first-admin step, are in
+uses prebuilt packages. Both paths, and the first-admin step, are in
 [`deploy/README.md`](../deploy/README.md).
 
 Your pod is a real PostgreSQL database. Export it with `pg_dump` whenever you

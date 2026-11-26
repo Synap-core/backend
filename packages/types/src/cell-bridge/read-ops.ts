@@ -78,6 +78,11 @@ export const CELL_BRIDGE_READ_OPS = {
   "profiles.get": ["identifier", "fill"],
   "propertyDefs.list": ["profileId"],
   "lifecycle.get": ["profileSlug"],
+  // An entity's graph neighbours — semantic relations + structural property links
+  // (the same data `relations.getConnections` returns, without channels/sessions).
+  // Params: id (entity uuid), direction (source|target|both), type (relation type filter),
+  // limit, offset. The host stamps its workspace lens.
+  "graph.of": ["id", "direction", "type", "limit", "offset"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;

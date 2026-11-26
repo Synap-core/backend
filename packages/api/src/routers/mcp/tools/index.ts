@@ -322,6 +322,31 @@ function buildAutomationDataContractJsonSchema(): Record<string, unknown> {
   }) as Record<string, unknown>;
   delete derived.$schema;
 
+  // Ensure all array fields have explicit items for MCP serialization.
+  // Recursive: nested arrays inside objects must also carry explicit items.
+  const ensureArrayItems = (obj: unknown): void => {
+    if (!obj || typeof obj !== "object") return;
+    const v = obj as Record<string, unknown>;
+    if (v.type === "array" && !v.items) {
+      v.items = { type: "string" };
+    }
+    if (v.type === "array" && v.items && typeof v.items === "object") {
+      ensureArrayItems(v.items);
+    }
+    if (v.properties) {
+      for (const pv of Object.values(v.properties as Record<string, unknown>)) {
+        ensureArrayItems(pv);
+      }
+    }
+    if (v.items) ensureArrayItems(v.items);
+    if (v.anyOf) {
+      for (const pv of Object.values(v.anyOf as Record<string, unknown>)) {
+        ensureArrayItems(pv);
+      }
+    }
+  };
+  ensureArrayItems(derived);
+
   const properties = derived.properties as Record<
     string,
     Record<string, unknown>
@@ -3637,6 +3662,38 @@ export const tools = {
             },
           },
           required: ["profileSlug"],
+        },
+      },
+      {
+        name: "synap_get_home",
+        annotations: {
+          title: "Get Home or Moving now",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            view: {
+              type: "string",
+              enum: ["home", "moving"],
+              description: "home (default) or moving.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project's spaces and things.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "moving only, optional: only this space.",
+            },
+            limit: {
+              type: "number",
+              description: "moving only: things (default 30, max 100).",
+            },
+          },
         },
       },
       {

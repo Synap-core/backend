@@ -63,7 +63,7 @@ const engineRefSchema = z.strictObject({
   computer: computerRef.optional(),
 });
 const synapAiRefSchema = z.strictObject({
-  synapAi: z.strictObject({ persona: slug("persona") }),
+  synapAi: z.strictObject({ persona: slug("persona").optional() }),
 });
 
 /** One choice for a STEP (`"self"` allowed: the run's own agent). */

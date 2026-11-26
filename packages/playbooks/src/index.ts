@@ -1344,7 +1344,7 @@ export const PLAYBOOK_USES_MAX_DEPTH = 3;
 export type PlaybookRunnerRef =
   | "self"
   | "synap_ai"
-  | { synapAi: { persona: string } }
+  | { synapAi: { persona?: string } }
   | { agentId: string; preset?: string }
   | { role: string; computer?: string }
   | { engine: string; computer?: string };

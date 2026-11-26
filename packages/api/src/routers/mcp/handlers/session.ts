@@ -508,14 +508,35 @@ export const sessionHandlers: McpHandlerMap = {
       result.status === "awaiting_tap" ||
       result.status === "withdrawn"
     ) {
+      // When the decision was filed as a proposal (pending review), transform
+      // the "failed" status to indicate it was filed for review, not that it
+      // "did not land" — a proposal filing IS success, just pending approval.
+      let decision: any = undefined;
+      if (result.status === "relayed" && "decision" in result) {
+        decision = (result as any).decision;
+        if (
+          decision?.status === "failed" &&
+          typeof decision.reason === "string" &&
+          decision.reason.includes("proposal")
+        ) {
+          decision = {
+            status: "filed_for_review",
+            message:
+              "Decision was filed as a proposal pending review. The answer is recorded; the decision awaits approval.",
+          };
+        }
+      }
       return ok({
         ...result,
+        ...(decision ? { decision } : {}),
         next:
-          result.status === "awaiting_tap"
-            ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
-            : result.status === "relayed"
-              ? "Recorded as the person's answer, marked relayed by you. Go on with it."
-              : "Withdrawn. The slot, if any, is yours again.",
+          decision?.status === "filed_for_review"
+            ? "Recorded as the person's answer, marked relayed by you. Decision was filed for review as a proposal — it is pending approval. Go on with the answer; the decision will take effect once approved."
+            : result.status === "awaiting_tap"
+              ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
+              : result.status === "relayed"
+                ? "Recorded as the person's answer, marked relayed by you. Go on with it."
+                : "Withdrawn. The slot, if any, is yours again.",
       });
     }
     return ok({

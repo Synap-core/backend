@@ -392,6 +392,7 @@ describe("the read allowlist", () => {
         "profiles.get",
         "propertyDefs.list",
         "lifecycle.get",
+        "graph.of",
       ].sort()
     );
   });

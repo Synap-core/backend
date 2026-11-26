@@ -713,7 +713,7 @@ const statCard: WidgetCapabilityDef = {
       key: "chartType",
       label: "Chart",
       type: "variant",
-      defaultValue: "none",
+      defaultValue: "sparkline",
       description:
         "For donut/bar: pick a 'Group by' field first. For sparkline/area: picks from time trend.",
       options: [
@@ -755,7 +755,6 @@ const statCard: WidgetCapabilityDef = {
       key: "timePeriod",
       label: "Time period",
       type: "select",
-      defaultValue: "week",
       description: "Granularity for trend charts",
       options: [
         { value: "day", label: "Daily" },
