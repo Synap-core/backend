@@ -72,10 +72,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import {
-  buildWorkGraph,
-  WORK_GRAPH_APP_NODE_FIELDS,
-} from "./work-graph.js";
+import { buildWorkGraph, WORK_GRAPH_APP_NODE_FIELDS } from "./work-graph.js";
 import { focusSessionsRouter } from "../../routers/focus-sessions.js";
 
 const BASIC =
@@ -134,7 +131,9 @@ async function session(
         o.heavy ? [{ key: "pr", label: "Pull request", kind: "code" }] : []
       ),
       JSON.stringify(
-        o.heavy ? [{ key: "c1", statement: "It works", check: { kind: "human" } }] : []
+        o.heavy
+          ? [{ key: "c1", statement: "It works", check: { kind: "human" } }]
+          : []
       ),
       JSON.stringify(o.heavy ? [{ key: "build", name: "Build" }] : []),
       closed,
@@ -152,7 +151,10 @@ const graph = (kind?: "all" | "run") =>
     roster: false,
   });
 
-const ids = (nodes: Array<{ id: string; inWindow: boolean }>, inWindow: boolean) =>
+const ids = (
+  nodes: Array<{ id: string; inWindow: boolean }>,
+  inWindow: boolean
+) =>
   new Set(nodes.filter((n) => n.inWindow === inWindow).map((n) => n.id));
 
 beforeAll(async () => {
@@ -165,7 +167,8 @@ beforeAll(async () => {
   );
   for (const t of tables) {
     const cfg = getTableConfig(t);
-    if (cfg.schema) await h.client!.exec(`create schema if not exists "${cfg.schema}";`);
+    if (cfg.schema)
+      await h.client!.exec(`create schema if not exists "${cfg.schema}";`);
     await h.client!.exec(ddlFor(t));
   }
   await session(S.workOpen, "active", {
@@ -306,7 +309,10 @@ describe("focusSessions.graph (tRPC) — the apps' node", () => {
       expect(open).toHaveProperty(key);
     expect(open.goal).toBe("the goal");
     // The heavy row fields stay on the pod — and the full node HAD them.
-    const fullOpen = fullOf.get(S.workOpen)! as unknown as Record<string, unknown>;
+    const fullOpen = fullOf.get(S.workOpen)! as unknown as Record<
+      string,
+      unknown
+    >;
     for (const key of ["expectedOutputs", "metadata", "stages", "criteria"]) {
       expect(fullOpen[key]).toBeTruthy();
       expect(open).not.toHaveProperty(key);
