@@ -141,7 +141,7 @@ describe("diagnoseDocument", () => {
       "bad_props",
     ]);
     expect(out[0]!.fix).toContain(
-      'synap_list_widgets({ surface: "document" })'
+      'synap_list_cells({ placement: "document" })'
     );
     expect(out[1]!.message).toMatch(/not embeddable in a document/);
     expect(out[2]!.message).toMatch(/props\.profileSlug/);

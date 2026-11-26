@@ -129,7 +129,7 @@ describe("POST /views/:viewId/arrange identity binding", () => {
     arrangeBento.mockRejectedValue(
       Object.assign(
         new Error(
-          'Bento arrange rejected unknown or under-specified widgets:\n- Unknown widget "entity-metric"'
+          'Bento arrange rejected unknown or under-specified cells:\n- Unknown cell "entity-metric"'
         ),
         { code: "BAD_REQUEST" }
       )

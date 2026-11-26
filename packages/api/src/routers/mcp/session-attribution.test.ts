@@ -76,6 +76,7 @@ describe("MCP session attribution — read-only deny-list", () => {
     "synap_list_automations",
     "synap_list_playbooks",
     "synap_list_views",
+    "synap_list_cells",
     "synap_list_widgets",
     // Was MISSING from the hand-kept set: declared readOnlyHint, "never files
     // anything", yet a governance read earned the false "this write was not

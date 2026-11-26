@@ -1,60 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEPRECATED_IN_HOSTS,
+  deprecatedInHost,
+  isDeprecatedInHost,
+} from "../hosts/index.js";
+import {
   DEPRECATED_SURFACES,
   deprecatedSurfacesFor,
   isDeprecatedSurface,
 } from "./index.js";
 
-describe("DEPRECATED_SURFACES", () => {
-  it("is non-vacuous and every entry is fully shaped", () => {
-    // 8 since relay `pipeline` was deleted (2026-10-14).
+// The host-app registry moved to `@synap-core/types/hosts` (founder, 23 Nov
+// 2026: "surface" means UI anchored to an object). Its old names, still
+// imported by browser and relay, answer exactly as the new ones.
+describe("the old surfaces names are aliases of the hosts registry", () => {
+  it("is the same registry", () => {
+    expect(DEPRECATED_SURFACES).toBe(DEPRECATED_IN_HOSTS);
     expect(DEPRECATED_SURFACES.length).toBeGreaterThanOrEqual(8);
-    for (const s of DEPRECATED_SURFACES) {
-      expect(s.id.length).toBeGreaterThan(0);
-      expect(["browser", "relay"]).toContain(s.surface);
-      expect(s.since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(s.reason.length).toBeGreaterThan(10);
-      expect(s.replacedBy.length).toBeGreaterThan(0);
-      expect(s.decisionDoc.length).toBeGreaterThan(0);
-    }
   });
 
-  it("has no duplicate (surface, id) pair", () => {
-    const seen = new Set<string>();
-    for (const s of DEPRECATED_SURFACES) {
-      const key = `${s.surface}:${s.id}`;
-      expect(seen.has(key)).toBe(false);
-      seen.add(key);
-    }
-  });
-
-  it("contains the specific browser ids the V1 plan marks DEPRECATE, plus 2A's import and files", () => {
-    const browserIds = deprecatedSurfacesFor("browser").map((s) => s.id);
-    expect(browserIds.sort()).toEqual(
-      // `import` / `files`: founder 2A (2026-10-19) — the capture Library is
-      // Library › Kept, the Files app is Library › Documents.
-      ["activity", "files", "governance", "import", "work-map"].sort()
+  it("answers as the new functions", () => {
+    expect(deprecatedSurfacesFor("relay")).toEqual(deprecatedInHost("relay"));
+    expect(deprecatedSurfacesFor("browser").length).toBeGreaterThan(0);
+    expect(isDeprecatedSurface("browser", "governance")).toBe(
+      isDeprecatedInHost("browser", "governance")
     );
-  });
-
-  it("contains the specific relay ids the V1 plan marks DEPRECATE", () => {
-    const relayIds = deprecatedSurfacesFor("relay").map((s) => s.id);
-    expect(relayIds.sort()).toEqual(
-      // `work`: the Goals tab, a redirect to `/goals` (16 Nov 2026).
-      ["feed", "gallery", "idea-studio", "rules", "work"].sort()
-    );
-  });
-
-  it("isDeprecatedSurface is true only for registered (surface, id) pairs", () => {
     expect(isDeprecatedSurface("browser", "governance")).toBe(true);
-    expect(isDeprecatedSurface("relay", "rules")).toBe(true);
-    // negative control: a real, non-deprecated id must read false
     expect(isDeprecatedSurface("browser", "sessions")).toBe(false);
-    expect(isDeprecatedSurface("relay", "home")).toBe(false);
-    // The relay Goals tab (id `work`) is retired; the browser's Work is not.
-    expect(isDeprecatedSurface("relay", "work")).toBe(true);
-    expect(isDeprecatedSurface("browser", "work")).toBe(false);
-    // wrong surface for a real id must also read false (no cross-surface leak)
-    expect(isDeprecatedSurface("relay", "governance")).toBe(false);
   });
 });
