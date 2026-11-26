@@ -27,6 +27,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       from: () => ({
         where: () => ({
           limit: () => ({ for: async () => (h.row ? [h.row] : []) }),
+          orderBy: () => ({
+            limit: () => ({ for: async () => (h.row ? [h.row] : []) }),
+          }),
         }),
       }),
     }),
@@ -44,7 +47,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       // The pre-lock read `validateRevisedOperations` performs.
       select: () => ({
         from: () => ({
-          where: () => ({ limit: async () => (h.row ? [h.row] : []) }),
+          where: () => ({
+            limit: async () => (h.row ? [h.row] : []),
+            orderBy: () => ({ limit: async () => (h.row ? [h.row] : []) }),
+          }),
         }),
       }),
       query: { relationDefs: { findMany: async () => [] } },

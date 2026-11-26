@@ -33,6 +33,9 @@ import {
 import type { RoutingMemory } from "../services/routing-memory.js";
 import type { EntitySchemaValidator } from "../services/import/structuring.js";
 import { importItemMetadataBlock, type ImportItem } from "./import-items.js";
+
+import { inferTypeFromFolder } from "../import/import-items.js";
+import { inferTypeFromFolder } from "../import/import-items.js";
 import {
   mergeStructureRunMeta,
   type StructureRunMeta,
@@ -457,9 +460,15 @@ export async function deepStructureImportItems(
         const item = items[i];
         if (!item.body || !item.body.trim()) return;
         const context = importItemMetadataBlock(item);
+        // Pre-set typeHint based on folder for AI to use
+        const folderTypeHint = inferTypeFromFolder(item.path);
+        const itemWithTypeHint = folderTypeHint
+          ? { ...item, typeHint: folderTypeHint }
+          : item;
+
         const call = () =>
           client.structure({
-            text: item.body,
+            text: itemWithTypeHint.body,
             ...(context ? { context } : {}),
             ...(opts.instructions ? { instructions: opts.instructions } : {}),
             hints: {
