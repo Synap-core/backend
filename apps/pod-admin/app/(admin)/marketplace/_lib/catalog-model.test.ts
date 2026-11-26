@@ -15,7 +15,7 @@ describe("catalogKindLabel", () => {
   it("names each catalog kind from the registry, tool-family kinds apart", () => {
     expect(catalogKindLabel("workspace")).toBe("Space");
     expect(catalogKindLabel("automation")).toBe("Automation");
-    expect(catalogKindLabel("cell")).toBe("Card");
+    expect(catalogKindLabel("cell")).toBe("Cell");
     expect(catalogKindLabel("capability")).toBe("Capability");
     expect(catalogKindLabel("skill")).toBe("Skill");
   });

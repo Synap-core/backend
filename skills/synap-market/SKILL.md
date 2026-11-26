@@ -36,7 +36,7 @@ the pod backend. The marketplace is that **package layer**, and the catalog
 | ------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | **workspace**             | a whole domain (profiles + views + bento + its caps/automations)                               | ✅ `createWorkspaceFromDefinitionIdempotent`                                     |
 | **capability**            | a credentialed tool pack (+ embedded skills/playbooks)                                         | ✅ `createCapabilityFromDefinition`                                              |
-| **cell**                  | a renderer — the code that draws an entity/widget                                              | ✅ `installCellFromDefinition` (needs a cache row)                               |
+| **cell**                  | a renderer — the code that draws an entity/cell                                                | ✅ `installCellFromDefinition` (needs a cache row)                               |
 | **view**                  | a saved view/layout                                                                            | ✅ `viewsRouter.create` (needs a `workspaceId`)                                  |
 | **skill**                 | agent know-how                                                                                 | ✅ `skillsRouter.create` (pod-wide if no ws)                                     |
 | **workflow / automation** | a WHEN→ACTION flow                                                                             | ✅ `automationsRouter.create` into acting ws                                     |
@@ -443,7 +443,7 @@ synap market publish [file] [--public|--private] [--from-workspace <id>] [--json
 
 ### Standalone non-workspace kinds (`--kind`)
 
-A lone **cell** (a renderer — the code that draws an entity/widget) or **view** can
+A lone **cell** (a renderer — the code that draws an entity/cell) or **view** can
 be authored + published on its own, same door:
 
 ```bash

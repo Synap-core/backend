@@ -294,6 +294,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "action apiKeys.setGrants",
         "action apiKeys.setMachineDefaults",
         "action apps.setWriteMode",
+        // W3b: a pod app's access on its page (`apps.updateAccess`).
+        "action apps.updateAccess",
         "action governanceRules.create",
         "action governanceRules.setActionMode",
         "action governanceRules.setOwnOrganiseDefault",

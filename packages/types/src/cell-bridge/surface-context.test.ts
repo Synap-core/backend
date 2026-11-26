@@ -135,7 +135,7 @@ describe("window.synap.context(): a page asks the host where it is", () => {
     expect(got).not.toHaveProperty("token");
   });
 
-  it("a module frame asks through SynapWidget.context(), answered by the module host", async () => {
+  it("a module frame asks through window.synap.context(); SynapWidget is the same object (its old name)", async () => {
     const win = wire(SYNAP_WIDGET_SDK, (frameWindow) =>
       createCellFrameHost({
         frameWindow,
@@ -145,8 +145,9 @@ describe("window.synap.context(): a page asks the host where it is", () => {
         context: () => CONTEXT,
       })
     );
-    const widget = win.SynapWidget as { context: () => Promise<unknown> };
-    await expect(widget.context()).resolves.toEqual(CONTEXT);
+    const synap = win.synap as { context: () => Promise<unknown> };
+    await expect(synap.context()).resolves.toEqual(CONTEXT);
+    expect(win.SynapWidget).toBe(win.synap);
   });
 
   it("the message parses on both hosts' parsers; a context ask without an id is not ours", () => {

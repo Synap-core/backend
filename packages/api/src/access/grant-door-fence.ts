@@ -168,6 +168,24 @@ export function processReadableByGrant(
  * declaration.
  */
 const BOARD_SCENE = READS("view", "document", "entity");
+/**
+ * The surface find (`surfacesForObject`): Hub `GET /surfaces` and MCP
+ * `synap_find_surfaces` share it. Most stores go through `scopedDb` (views,
+ * documents, artifacts, cell instances, relations, Sites, the anchor), but the
+ * renderer ladder and a space's settings (start page, a kind's bento) are read
+ * outside the seams, so a fenced key passes only when it reads every subject
+ * unnarrowed.
+ */
+const SURFACES_FIND = READS(
+  "view",
+  "document",
+  "entity",
+  "renderer",
+  "artifact",
+  "cell",
+  "relation",
+  "share"
+);
 
 /**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
@@ -525,7 +543,7 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // services/agent-access-ask.ts): an ask of the agent whose key calls,
   // filed for the person the key acts for (else 404) — no row a grant bounds.
   route("/agents/access-requests/:id"),
-  /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
+  /^\/views\/?$/, // hub views.listViews: viewReadableWhere + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's
   // `skills/` folder (`getSkillPackages`): no pod row at all. The CLI's
@@ -1313,6 +1331,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // as drawn), so `entity` is declared too. A pinned key is refused. Same as
   // MCP `synap_read_board` (BOARD_SCENE).
   [route("/whiteboards/:id/scene"), BOARD_SCENE],
+  // The surface find, the twin of MCP `synap_find_surfaces` (SURFACES_FIND).
+  [/^\/surfaces\/?$/, SURFACES_FIND],
 ];
 
 /**
@@ -1454,6 +1474,10 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_project: SEAMED,
   synap_list_projects: SEAMED,
   synap_list_views: SEAMED,
+  // The surface find (`surfacesForObject`, shared with `GET /surfaces`): an
+  // aggregate over several stores, some read outside the seams (workspace
+  // settings, the renderer ladder), so it declares what it reads.
+  synap_find_surfaces: SURFACES_FIND,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
   // Same doors as `GET /lifecycle/home` and `/lifecycle/moving` (HOMES).
@@ -1509,6 +1533,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
   synap_list_workers: READS("track", "playbook", "automation", "proposal"),
+  synap_list_cells: READS("widget", "view"),
+  // The old name of synap_list_cells (`tool-aliases.ts`): the same read.
   synap_list_widgets: READS("widget", "view"),
   synap_template_health: READS("tool", "playbook", "automation", "view"),
   synap_governance: READS("proposal", "agent", "tool"),

@@ -243,6 +243,28 @@ export function requestSegments(req: GrantRequest): string[] {
  * pattern naming that verb.
  */
 export function patternMatches(pattern: string, req: GrantRequest): boolean {
+  if (matchesKey(pattern, req)) return true;
+  const alias =
+    req.action === "read" &&
+    Object.hasOwn(GRANT_READ_SUBJECT_ALIASES, req.subject)
+      ? GRANT_READ_SUBJECT_ALIASES[req.subject]!
+      : null;
+  return alias !== null && matchesKey(pattern, { ...req, subject: alias });
+}
+
+/**
+ * A subject whose READ another subject's read also grants. The word is Cell
+ * for users and agents (founder, 23 Nov 2026), so `cell.read` reads the cell
+ * TYPES (`widget`, the `widget_definitions` catalog) beside the placed cells
+ * (`cell`): an app asking for `cell.read` sees the catalog its cells come
+ * from. `widget.read` keeps working as it did. Read only: no write, gate verb
+ * or delete widens through it.
+ */
+export const GRANT_READ_SUBJECT_ALIASES: Readonly<Record<string, string>> = {
+  widget: "cell",
+};
+
+function matchesKey(pattern: string, req: GrantRequest): boolean {
   const p = parsePermission(pattern);
   if (p.length === 1 && p[0] === "*") return true;
   const r = requestSegments(req);

@@ -1181,7 +1181,7 @@ const SUPPLEMENTARY_TABLES: Record<
           id: row.id as string,
           typeKey: (row.typeKey as string) ?? "synced-widget",
           workspaceId: (row.workspaceId as string) ?? null,
-          name: (row.name as string) ?? "Synced Widget",
+          name: (row.name as string) ?? "Synced Cell",
           description: (row.description as string) ?? null,
           icon: (row.icon as string) ?? null,
           category: (row.category as string) ?? null,

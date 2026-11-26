@@ -15,8 +15,18 @@
  */
 
 import type { AgentMarkTone } from "@synap-core/types/agents";
-import type { UnitTone } from "@synap-core/types/units";
-import { getEnumTone, type EnumTone } from "@synap-core/types/property-render";
+import {
+  statusMark,
+  type StatusMachine,
+  type StatusMark,
+  type StatusMarkFacts,
+  type UnitTone,
+} from "@synap-core/types/units";
+import {
+  getEnumTone,
+  unitToneEnum,
+  type EnumTone,
+} from "@synap-core/types/property-render";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { HealthStatus } from "../home/_lib/needs-you";
 import type { StatusKind } from "./status-pill";
@@ -48,6 +58,33 @@ export function statusPillFor(
     kind: statusKindForTone(getEnumTone(raw)),
     label: resolveStatusLabel(raw),
   };
+}
+
+/**
+ * A machine status's mark (`statusMark`) as a pill. A run that has not ended
+ * wears whose turn it is (`mark.turn`): its tone is the unit table's, read
+ * through `unitTonePill`; every other mark's tone is the lifecycle table's.
+ */
+export function statusMarkPill(mark: StatusMark): {
+  kind: StatusKind;
+  label: string;
+} {
+  return {
+    kind: mark.turn
+      ? unitTonePill(mark.tone)
+      : statusKindForTone(unitToneEnum(mark.tone)),
+    label: mark.label,
+  };
+}
+
+/** Pill props for a status of a declared machine (`statusMark`), or null. */
+export function machinePill(
+  machine: StatusMachine,
+  status: string | null | undefined,
+  facts?: StatusMarkFacts
+): { kind: StatusKind; label: string } | null {
+  const mark = statusMark(machine, status, facts);
+  return mark ? statusMarkPill(mark) : null;
 }
 
 export const AGENT_MARK_STATUS: Record<AgentMarkTone, StatusKind> = {

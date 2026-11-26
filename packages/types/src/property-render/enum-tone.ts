@@ -45,7 +45,12 @@ const ENUM_UNIT_TONE = {
 } as const satisfies Record<EnumTone, UnitTone>;
 
 export function getEnumTone(value: string): EnumTone {
-  return UNIT_TONE_ENUM[resolveStatusTone(value)];
+  return unitToneEnum(resolveStatusTone(value));
+}
+
+/** The enum bucket a unit tone paints in (a `statusMark` tone, say). */
+export function unitToneEnum(tone: UnitTone): EnumTone {
+  return UNIT_TONE_ENUM[tone];
 }
 
 /**

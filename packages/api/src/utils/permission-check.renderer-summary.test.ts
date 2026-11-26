@@ -101,13 +101,13 @@ describe("buildProposalSummary — the generic path is unchanged", () => {
   // Three of the 38 machine-token pairs from the triage. They are NOT renderer
   // proposals and must keep composing through `buildObjectActionTitle`.
   it.each([
-    // "Card", not "Cell" — the vocabulary's product word for a cell. Pinned
+    // "Cell" — the vocabulary's word for a cell (founder, 23 Nov 2026). Pinned
     // here so the renderer branch above cannot quietly change it.
     [
       "cell",
       "define",
       { name: "Task detail card" },
-      'Define Card "Task detail card"',
+      'Define Cell "Task detail card"',
     ],
     ["workspace", "adopt", { workspaceId: "ws_1" }, "Adopt Space"],
   ])("%s · %s", (subjectType, action, data, expected) => {

@@ -245,8 +245,10 @@ describe("content is drawn, never injected", () => {
   it("mounts the module frame only through rendered-object, at the listed sites", () => {
     // `ModuleFrame` is mounted in ONE file (`rendered-object.tsx`: the cell's
     // source + the bundle's host modules), and that file's components are
-    // used only by a cell embed, a cell's page, a view's page and an
-    // entity's detail. A new site would run a cell where no test looks.
+    // used only by a cell embed, a cell's page, a view's page, an entity's
+    // detail and Home's "Made for you" card (its first record only, capped
+    // by `MAX_FRAMED_ENTITY_CARDS`: `member-home.test.tsx`). A new site
+    // would run a cell where no test looks.
     const content = ["app", "_lib", "object", "content"];
     const moduleDoor = join(...content, "module-frame.tsx");
     const renderedDoor = join(...content, "rendered-object.tsx");
@@ -269,6 +271,7 @@ describe("content is drawn, never injected", () => {
         join("app", "open", "_views", "cell-view.tsx"),
         join("app", "open", "_views", "view-view.tsx"),
         join("app", "open", "_views", "entity-view.tsx"),
+        join("app", "(admin)", "home", "_lib", "member-cards.tsx"),
       ].sort()
     );
     // Non-vacuity: the door mounts the frame by its name.

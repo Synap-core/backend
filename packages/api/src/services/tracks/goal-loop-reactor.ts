@@ -8,9 +8,10 @@
  *   · `track.update` — the goal's status moved (`applyTrackStatus`) or a
  *     person switched its loop on (`applyTrackDirection`).
  *
- * The reactor only routes: the goal id → `runGoalLoop`, which re-reads every
- * fact itself (a replayed event can never make a goal propose twice past its
- * one-pending rule). The hourly re-check is the reaper's tick
+ * The reactor only routes: the goal id → `runGoalLoop`, then the pathway
+ * re-plan beside it (`runPathwayReplan`, P9: a step of a pathway that ended
+ * without delivering), each re-reading every fact itself (a replayed event
+ * can never make either propose twice past its one-pending rule). The hourly re-check is the reaper's tick
  * (`sweepGoalLoops`), not this file.
  *
  * NEVER SILENTLY SWALLOWS: `emitSideEffects` isolates a failing reactor; a
@@ -25,6 +26,7 @@ import {
   FOCUS_SESSION_SUBJECT_TYPE,
 } from "../focus-sessions/close-event.js";
 import { runGoalLoop } from "./goal-loop.js";
+import { runPathwayReplan } from "./pathway-replan.js";
 
 const logger = createLogger({ module: "goal-loop-reactor" });
 
@@ -64,6 +66,14 @@ export const goalLoopReactor: Reactor = {
       }
     } catch (error) {
       logger.error({ error, goalId }, "goal loop failed on an event");
+    }
+    // The pathway re-plan, beside it (P9): its own failure is its own.
+    if (!goalId) return;
+    try {
+      // It logs its own filing (its audit line), whoever called it.
+      await runPathwayReplan(goalId);
+    } catch (error) {
+      logger.error({ error, goalId }, "pathway re-plan failed on an event");
     }
   },
 };
