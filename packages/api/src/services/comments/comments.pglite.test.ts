@@ -1024,11 +1024,13 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
 
     // A key that cannot read the object comments on nothing.
     const before = await messageCount();
-    const noRead = await runWithGrant(grantPod(["entity.note.read", "channel.read"]), () =>
-      post(hubApp(EDITOR), "/comments", {
-        anchor: storyPin,
-        content: "cannot read it",
-      })
+    const noRead = await runWithGrant(
+      grantPod(["entity.note.read", "channel.read"]),
+      () =>
+        post(hubApp(EDITOR), "/comments", {
+          anchor: storyPin,
+          content: "cannot read it",
+        })
     );
     expect([403, 404]).toContain(noRead.status);
     expect(await messageCount()).toBe(before);

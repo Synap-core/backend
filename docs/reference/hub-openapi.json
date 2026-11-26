@@ -54804,7 +54804,7 @@
       "post": {
         "tags": ["Comments"],
         "summary": "Comment on an object, or reply in a comment thread",
-        "description": "A comment is a message in the object's one conversation. `anchor` opens a thread: `{kind:'entity', entityId, field?, locator?}` or `{kind:'document', documentId, quote?, blockRef?, offset?, revision?}`; `locator` pins it on a design (`{surface:'design', frameId, blockId?}`) or a story (`{surface:'story', storyId}`) with `viewport` (desktop / tablet / phone), `point` `{x, y}` (fractions 0 to 1), `contentVersion` and an optional `screenshot` (a pod file id). `parentId` replies in a thread instead (exactly one of the two). Needs read access to the object and, for a scoped key, the update right on it (`entity.<kind>.update` or `document.update` in its space). 400 names every bad anchor field.",
+        "description": "A comment is a message in the object's one conversation. `anchor` opens a thread: `{kind:'entity', entityId, field?, locator?}` or `{kind:'document', documentId, quote?, blockRef?, offset?, revision?}`; `locator` pins it on a design (`{surface:'design', frameId, blockId?}`) or a story (`{surface:'story', storyId}`) with `viewport` (desktop / tablet / phone), `point` `{x, y}` (fractions 0 to 1), `contentVersion` and an optional `screenshot` (a pod file id). `parentId` replies in a thread instead (exactly one of the two). Needs read access to the object; a scoped key, its grant's read right on it (`entity.<kind>.read` or `document.read` in its space). 400 names every bad anchor field.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -54935,7 +54935,7 @@
       "post": {
         "tags": ["Comments"],
         "summary": "Resolve or re-open a comment thread",
-        "description": "Sets the thread's resolved state (any message of the thread names it). The thread's author or an editor of the object, a person: an agent's key is refused (it replies in the thread; the person resolves). A scoped key needs the update right on the object. Idempotent: `changed` is false when the thread already had that state.",
+        "description": "Sets the thread's resolved state (any message of the thread names it). The thread's author or an editor of the object, a person: an agent's key is refused (it replies in the thread; the person resolves). A key acting for a person is capped by its grant's read right on the object. Idempotent: `changed` is false when the thread already had that state.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
