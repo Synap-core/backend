@@ -18887,7 +18887,6 @@
                                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                               }
                                             },
-                                            "required": ["persona"],
                                             "additionalProperties": false
                                           }
                                         },
@@ -18973,7 +18972,6 @@
                                                       "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                                     }
                                                   },
-                                                  "required": ["persona"],
                                                   "additionalProperties": false
                                                 }
                                               },
@@ -20419,7 +20417,6 @@
                                           "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                         }
                                       },
-                                      "required": ["persona"],
                                       "additionalProperties": false
                                     }
                                   },
@@ -20501,7 +20498,6 @@
                                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                               }
                                             },
-                                            "required": ["persona"],
                                             "additionalProperties": false
                                           }
                                         },
@@ -24290,7 +24286,6 @@
                                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                               }
                                             },
-                                            "required": ["persona"],
                                             "additionalProperties": false
                                           }
                                         },
@@ -24376,7 +24371,6 @@
                                                       "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                                     }
                                                   },
-                                                  "required": ["persona"],
                                                   "additionalProperties": false
                                                 }
                                               },
@@ -25829,7 +25823,6 @@
                                           "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                         }
                                       },
-                                      "required": ["persona"],
                                       "additionalProperties": false
                                     }
                                   },
@@ -25911,7 +25904,6 @@
                                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                               }
                                             },
-                                            "required": ["persona"],
                                             "additionalProperties": false
                                           }
                                         },
@@ -31975,7 +31967,6 @@
                                       "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                     }
                                   },
-                                  "required": ["persona"],
                                   "additionalProperties": false
                                 }
                               },
@@ -32055,7 +32046,6 @@
                                             "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                           }
                                         },
-                                        "required": ["persona"],
                                         "additionalProperties": false
                                       }
                                     },
@@ -33195,7 +33185,6 @@
                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                               }
                             },
-                            "required": ["persona"],
                             "additionalProperties": false
                           }
                         },
@@ -33274,7 +33263,6 @@
                                       "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                     }
                                   },
-                                  "required": ["persona"],
                                   "additionalProperties": false
                                 }
                               },
@@ -34171,7 +34159,6 @@
                                 "pattern": "^[a-z0-9][a-z0-9._-]*$"
                               }
                             },
-                            "required": ["persona"],
                             "additionalProperties": false
                           }
                         },
@@ -34250,7 +34237,6 @@
                                       "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                     }
                                   },
-                                  "required": ["persona"],
                                   "additionalProperties": false
                                 }
                               },
@@ -34338,7 +34324,6 @@
                                   "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                 }
                               },
-                              "required": ["persona"],
                               "additionalProperties": false
                             }
                           },
@@ -34418,7 +34403,6 @@
                                         "pattern": "^[a-z0-9][a-z0-9._-]*$"
                                       }
                                     },
-                                    "required": ["persona"],
                                     "additionalProperties": false
                                   }
                                 },
