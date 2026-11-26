@@ -1,5 +1,5 @@
 /**
- * `surfaces.forObject` (Surfaces P1) on PGlite, through the REAL tRPC
+ * `surfaces.forObject` on PGlite, through the REAL tRPC
  * procedure, the real access floors (`scopedDb` rules for views, documents,
  * artifacts, relations, cell instances, Sites; `userVisibleWhere` for spaces)
  * and the real renderer ladder (`readBoundRenderer` over `renderer_bindings`).
@@ -259,6 +259,12 @@ describe("surfaces.forObject", () => {
     await expect(
       forObject({ kind: "workspace", id: W2 })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("a malformed id is BAD_REQUEST (a 400), never a failed read", async () => {
+    await expect(
+      forObject({ kind: "entity", id: "not-a-uuid" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("hub listViews (synap_list_views, GET /views): the VISIBLE floor, narrowed by project", async () => {

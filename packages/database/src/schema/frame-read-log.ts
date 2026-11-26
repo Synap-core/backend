@@ -11,7 +11,7 @@
  * (`declared`) and whether the read was ALLOWED. A refused read is logged
  * before the refusal is answered; an allowed one before it runs.
  *
- * Read by the Inspect lane (P7) to show what a page or a cell read. An append
+ * Read by the surface inspect to show what a page or a cell read. An append
  * log: no foreign key (a row outlives the surface and the person it names,
  * like an audit line), written only by `services/surfaces/frame-read.ts`.
  * Kept FRAME_READ_LOG_RETENTION_DAYS: the daily `frame-read-log-retention`
@@ -58,6 +58,8 @@ export const frameReadLog = pgTable(
       table.at
     ),
     userIdx: index("frame_read_log_user_idx").on(table.userId, table.at),
+    /** The retention deletes by age alone (migration 0458). */
+    atIdx: index("frame_read_log_at_idx").on(table.at),
   })
 );
 

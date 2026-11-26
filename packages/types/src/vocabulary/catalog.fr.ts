@@ -177,6 +177,14 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.test_run.other": "Séries de tests",
   "kind.orchestrator.one": "Orchestrateur",
   "kind.orchestrator.other": "Orchestrateurs",
+  "kind.html.one": "Artefact HTML",
+  "kind.html.other": "Artefacts HTML",
+  "kind.bento.one": "Bento",
+  "kind.bento.other": "Bentos",
+  "kind.whiteboard.one": "Tableau blanc",
+  "kind.whiteboard.other": "Tableaux blancs",
+  "kind.site.one": "Site",
+  "kind.site.other": "Sites",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -889,4 +897,8 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     review: { gender: "f", elides: false },
     test_run: { gender: "f", elides: false },
     orchestrator: { gender: "m", elides: true },
+    html: { gender: "m", elides: true },
+    bento: { gender: "m", elides: false },
+    whiteboard: { gender: "m", elides: false },
+    site: { gender: "m", elides: false },
   };

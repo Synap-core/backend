@@ -6244,7 +6244,7 @@
           "name": "spec",
           "type": "object",
           "required": false,
-          "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+          "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), reads (html: what its frame reads, as synap_create_document takes it), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's)."
         },
         {
           "name": "slot",
@@ -6302,7 +6302,7 @@
           "title": { "type": "string", "description": "Its name." },
           "spec": {
             "type": "object",
-            "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+            "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), reads (html: what its frame reads, as synap_create_document takes it), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's)."
           },
           "slot": {
             "type": "string",
@@ -11280,7 +11280,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a Space opens on: a cell (cellKey, from synap_list_widgets for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
+      "description": "Set what a Space opens on: a cell (cellKey, from synap_list_cells for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
       "parameters": [
         {
           "name": "workspaceId",

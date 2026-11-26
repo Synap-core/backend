@@ -3590,6 +3590,9 @@ CREATE INDEX IF NOT EXISTS "frame_read_log_surface_idx"
   ON "frame_read_log" ("surface_kind", "surface_key", "at");
 CREATE INDEX IF NOT EXISTS "frame_read_log_user_idx"
   ON "frame_read_log" ("user_id", "at");
+-- 0458: the retention deletes by age alone.
+CREATE INDEX IF NOT EXISTS "frame_read_log_at_idx"
+  ON "frame_read_log" ("at");
 
 CREATE INDEX IF NOT EXISTS "widget_def_workspace_id_idx"
   ON "widget_definitions" ("workspace_id");

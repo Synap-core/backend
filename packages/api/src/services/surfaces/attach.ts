@@ -1,7 +1,7 @@
 /**
  * ATTACHED surfaces — the ONE write door and the ONE reader of
- * `<anchor> --attaches--> view | document | cell_instance` (Surfaces wave P3,
- * plan 187bbb25 §0 "Where attached lives", founder decision 23 Nov 2026).
+ * `<anchor> --attaches--> view | document | cell_instance` (founder
+ * decision 23 Nov 2026).
  *
  * An object (entity · profile · workspace · project · track · playbook ·
  * session) carries 0..n extra surfaces beside its kind's look (`renders`,
@@ -47,6 +47,7 @@ import {
   ANCHOR_KINDS,
   ATTACHABLE_SURFACE_TYPES,
   ATTACHMENT_LABEL_MAX,
+  isOpenableAnchorKind,
   type AnchorKind,
   type AttachmentMeta,
   type AttachSurfaceResult,
@@ -271,16 +272,6 @@ export async function validateSurfaceLink(
 
 // ── The link URL ──────────────────────────────────────────────────────────
 
-/** Anchor kinds the pod's typed `/open/<kind>/<id>` route serves. */
-const OPENABLE_ANCHOR_KINDS: ReadonlySet<AnchorKind> = new Set([
-  "entity",
-  "workspace",
-  "project",
-  "track",
-  "playbook",
-  "session",
-]);
-
 /**
  * Where an attached surface opens: the object's page on that surface,
  * `/open/<kind>/<id>?surface=<surfaceId>`. A kind (profile) the typed route
@@ -290,7 +281,7 @@ export function attachedSurfaceOpenUrl(
   anchor: SurfaceAnchor,
   surfaceId: string
 ): string {
-  return OPENABLE_ANCHOR_KINDS.has(anchor.kind)
+  return isOpenableAnchorKind(anchor.kind)
     ? openLink(anchor.id, { kind: anchor.kind, surface: surfaceId })
     : openLink(surfaceId);
 }

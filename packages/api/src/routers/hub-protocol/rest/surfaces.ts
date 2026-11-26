@@ -1,10 +1,9 @@
 /**
- * Hub Protocol REST — the surface find (Surfaces wave P1) and the surface
- * writes (P3).
+ * Hub Protocol REST — the surface find and the surface writes.
  *
  * GET /surfaces?kind=<anchor kind>&id=<anchor id>[&workspaceId=]
  * GET /surfaces/inspect?kind=cell|document|view&id=|typeKey=[&workspaceId=&days=]
- *                             what one framed surface does (`inspectSurface`, P7)
+ *                             what one framed surface does (`inspectSurface`)
  * POST /surfaces              make a surface FOR an object (`surface/create`)
  * POST /surfaces/attach       put an existing surface on it (`surface/attach`)
  * DELETE /surfaces/attach     take it off (`surface/detach`)
@@ -31,6 +30,7 @@ import type { Context } from "hono";
 import {
   ANCHOR_KINDS,
   ATTACHABLE_SURFACE_TYPES,
+  ATTACHMENT_LABEL_MAX,
   CREATABLE_SURFACE_BODIES,
   SURFACE_BODIES,
   SURFACE_RELATIONS,
@@ -151,11 +151,13 @@ const CreateSurfaceBodySchema = z.object({
       url: z.string().url().optional(),
       cellKey: z.string().max(200).optional(),
       props: z.record(z.string(), z.unknown()).optional(),
+      // html only: what its frame reads (`readDeclaredFrameIo` checks it).
+      reads: z.array(z.unknown()).nullable().optional(),
       workspaceId: z.string().uuid().optional(),
     })
     .optional(),
   slot: z.string().max(40).optional(),
-  label: z.string().max(200).optional(),
+  label: z.string().max(ATTACHMENT_LABEL_MAX).optional(),
   ...WriteCommon,
 });
 
@@ -163,7 +165,7 @@ const AttachSurfaceBodySchema = z.object({
   anchor: WriteAnchorSchema,
   surface: SurfaceRefSchema,
   slot: z.string().max(40).optional(),
-  label: z.string().max(200).optional(),
+  label: z.string().max(ATTACHMENT_LABEL_MAX).optional(),
   position: z.number().int().min(0).optional(),
   ...WriteCommon,
 });
@@ -367,14 +369,16 @@ export function registerSurfacesRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
+    const agentUserId = c.get("agentUserId") as string | undefined;
     try {
       const inspection = await inspectSurface(
         {
           userId,
-          access: AccessContext.agent({
-            userId,
-            agentUserId: c.get("agentUserId") as string | undefined,
-          }),
+          access: AccessContext.agent({ userId, agentUserId }),
+          agentUserId,
+          // A bound key inspects a surface of its own space only.
+          keyWorkspaceId:
+            (c.get("keyWorkspaceId") as string | null | undefined) ?? null,
         },
         {
           surface: { kind, id, typeKey },

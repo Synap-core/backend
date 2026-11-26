@@ -1,5 +1,5 @@
 /**
- * The SURFACE model (Surfaces wave, plan 187bbb25 §0, decision of 23 Nov 2026):
+ * The SURFACE model (founder decision of 23 Nov 2026):
  * a Surface is UI anchored to an object. ONE find door answers "which surfaces
  * does this object already carry?" on every door (tRPC `surfaces.forObject`,
  * MCP `synap_find_surfaces`, Hub REST `GET /api/hub/surfaces`, hub-rest-client
@@ -54,7 +54,7 @@ export type SurfaceBody = (typeof SURFACE_BODIES)[number];
 /**
  * How the surface hangs on its anchor:
  * - `renders`: a kind's default look in one slot (renderer bindings);
- * - `attached`: an extra surface put on one object (links `attaches`, P3);
+ * - `attached`: an extra surface put on one object (links `attaches`);
  * - `body`: an entity's one document;
  * - `pinned`: a view pinned to a project or scoped to a kind;
  * - `home`: a space's start page or home board, a kind's bento, a scoped board;
@@ -85,7 +85,11 @@ export interface SurfaceRow {
   cellKey?: string;
   /** For a renders row: the renderer slot (list, detail, card, dashboard). */
   slot?: string;
-  /** Today the existing `/open/<id>` link of the body. */
+  /**
+   * Where it opens: an attached surface on its object's page
+   * (`/open/<kind>/<id>?surface=<id>`, `OPENABLE_ANCHOR_KINDS`), any other
+   * row the `/open/…` link of its own body.
+   */
   openUrl: string;
   /** True when the surface cannot be edited through it (an HTML artifact). */
   readOnly: boolean;
@@ -99,7 +103,7 @@ export interface SurfacesForObject {
   unavailable: { source: string; error: string }[];
 }
 
-// ── The write contract: create, attach, detach (Surfaces P3) ────────────────
+// ── The write contract: create, attach, detach ──────────────────────────────
 //
 // An ATTACHED surface is a `links` edge `<anchor> --attaches--> <surface>`
 // (founder decision 23 Nov 2026). ONE door writes it on every client: tRPC
@@ -159,7 +163,9 @@ export type CreatableSurfaceBody = (typeof CREATABLE_SURFACE_BODIES)[number];
  * - bento: `config` (`{ blocks }`);
  * - whiteboard: nothing (an empty board);
  * - document: `content` (markdown) or `url` (a reference);
- * - html: `content` (the page; read-only bridge, at most 2 MB);
+ * - html: `content` (the page; read-only bridge, at most 2 MB) and `reads`
+ *   (what its frame reads, the declaration `synap_create_document` takes,
+ *   stored as `metadata.reads` and enforced by the frame read door);
  * - cell: `cellKey` (a cell type key) and `props`.
  * `workspaceId` is the space the body is stored in; default: the anchor's.
  */
@@ -170,6 +176,8 @@ export interface SurfaceSpec {
   url?: string;
   cellKey?: string;
   props?: Record<string, unknown>;
+  /** html only: the declared reads, as sent (checked at the door). */
+  reads?: unknown;
   workspaceId?: string;
 }
 

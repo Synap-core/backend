@@ -1044,6 +1044,14 @@ const OBJECT_NOUN_ROWS = {
   // each until the person's yes. A session by kind, but the person names it
   // by its role ("Start an orchestrator"); `orchestrated_by` is its edge.
   orchestrator: "Orchestrator",
+  // The surface bodies the registry has no kind for (`SurfaceBody`,
+  // `@synap-core/types/surfaces`): an object's Surfaces list names each by
+  // its body (`surfaceBodyLabel`). A `view` row of type bento or whiteboard,
+  // a `document` of type html, a published Site.
+  html: "HTML artifact",
+  bento: "Bento",
+  whiteboard: "Whiteboard",
+  site: "Site",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1086,6 +1094,10 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   review: "Reviews",
   test_run: "Test runs",
   orchestrator: "Orchestrators",
+  html: "HTML artifacts",
+  bento: "Bentos",
+  whiteboard: "Whiteboards",
+  site: "Sites",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in

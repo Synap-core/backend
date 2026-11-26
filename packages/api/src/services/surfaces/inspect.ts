@@ -1,5 +1,5 @@
 /**
- * THE surface inspect (Surfaces P7): what a framed surface does, read before
+ * THE surface inspect: what a framed surface does, read before
  * it is handed over. tRPC `surfaces.inspect`, Hub `GET /surfaces/inspect` and
  * MCP `synap_inspect_surface` all call `inspectSurface`.
  *
@@ -23,13 +23,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, isNull, or, inArray } from "@synap/database";
+import { db, and, eq, or, inArray } from "@synap/database";
 import {
   cellInstances,
   documents,
   frameReadLog,
   views,
-  widgetDefinitions,
   FRAME_READ_LOG_RETENTION_DAYS,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
@@ -40,11 +39,20 @@ import {
   storedDeclaredReads,
   type CellBridgeDeclaredReads,
 } from "@synap-core/types/cell-bridge";
+import { blockCellKey, readLegacyBlock } from "@synap-core/types/blocks";
+import { permits } from "@synap/governance-policy/grants";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
-import { canRead, userPrincipal } from "../../access/door.js";
+import type { Principal } from "../../access/door.js";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
-import { isFramePage } from "./frame-read.js";
+import {
+  callerPrincipal,
+  callerReadsLens,
+  isFramePage,
+  keyBindingReaches,
+  resolveCellType,
+  type ResolvedCellType,
+} from "./frame-read.js";
 import {
   lintA11y,
   lintTokens,
@@ -67,6 +75,14 @@ export interface InspectSurfaceInput {
 export interface InspectContext {
   userId: string;
   access: AccessContext;
+  /** The acting agent, when an agent calls. */
+  agentUserId?: string | null;
+  /**
+   * The space the calling key is bound to (null/absent: no key, or a
+   * pod-wide one). A surface of another space is refused (403), and the read
+   * log is read in that space only, whatever the person may read.
+   */
+  keyWorkspaceId?: string | null;
 }
 
 export type Section<T> =
@@ -133,14 +149,7 @@ const errorText = (err: unknown) =>
 // ── What is inspected ──────────────────────────────────────────────────────
 
 /** A cell type as the catalog stores it. */
-interface CellType {
-  typeKey: string;
-  workspaceId: string | null;
-  rendererType: string;
-  rendererSource: string | null;
-  source: string | null;
-  reads: unknown;
-}
+type CellType = ResolvedCellType;
 
 /** A page: an html document, or an html-embed cell's source. */
 interface Page {
@@ -159,37 +168,6 @@ interface Target {
   page: Page | null;
   /** The space the read log is read in (a view's, a cell lens); null = every space the caller reads. */
   logSpace: string | null;
-}
-
-async function loadCellType(
-  typeKey: string,
-  workspaceId: string | null
-): Promise<CellType | null> {
-  // The most specific active row: the space's own over the pod-wide one
-  // (the frame read door's own resolution).
-  const rows = await db
-    .select({
-      typeKey: widgetDefinitions.typeKey,
-      workspaceId: widgetDefinitions.workspaceId,
-      rendererType: widgetDefinitions.rendererType,
-      rendererSource: widgetDefinitions.rendererSource,
-      source: widgetDefinitions.source,
-      reads: widgetDefinitions.reads,
-    })
-    .from(widgetDefinitions)
-    .where(
-      and(
-        eq(widgetDefinitions.typeKey, typeKey),
-        eq(widgetDefinitions.isActive, true),
-        workspaceId
-          ? or(
-              eq(widgetDefinitions.workspaceId, workspaceId),
-              isNull(widgetDefinitions.workspaceId)
-            )
-          : isNull(widgetDefinitions.workspaceId)
-      )
-    );
-  return rows.find((r) => r.workspaceId === workspaceId) ?? rows[0] ?? null;
 }
 
 async function loadPage(
@@ -243,16 +221,25 @@ export function viewCellKeys(config: unknown): string[] {
   const blocks = (config as { blocks?: unknown } | null)?.blocks;
   if (!Array.isArray(blocks)) return [];
   const keys = new Set<string>();
-  for (const b of blocks as Array<Record<string, unknown>>) {
-    const key =
-      b?.kind === "cell"
-        ? b.cellKey
-        : b?.kind === "widget"
-          ? b.widgetType
-          : undefined;
-    if (typeof key === "string" && key) keys.add(key);
+  for (const raw of blocks) {
+    // The one block reader (`@synap-core/types/blocks`): a `cell` block, a
+    // legacy `widget` tile, a whiteboard shape's props.
+    const block = readLegacyBlock(raw);
+    const key = block ? blockCellKey(block) : undefined;
+    if (key) keys.add(key);
   }
   return [...keys];
+}
+
+/** A surface in another space than the calling key's: refused. */
+function assertKeyReaches(principal: Principal, workspaceId: string | null) {
+  if (!keyBindingReaches(principal, workspaceId)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This surface is in another space than the one this key is bound to.",
+    });
+  }
 }
 
 async function resolveTarget(
@@ -260,10 +247,12 @@ async function resolveTarget(
   input: InspectSurfaceInput
 ): Promise<Target> {
   const { kind, id, typeKey } = input.surface;
+  const principal = callerPrincipal(ctx);
   if (kind === "document") {
     if (!id) throw badRequest("Pass the document's id.");
     const page = await loadPage(ctx.access, id);
     if (!page) throw notFound("Page");
+    assertKeyReaches(principal, page.workspaceId);
     return {
       surface: {
         kind,
@@ -290,11 +279,12 @@ async function resolveTarget(
       columns: { id: true, name: true, config: true, workspaceId: true },
     });
     if (!view) throw notFound("View");
+    assertKeyReaches(principal, view.workspaceId);
     const keys = viewCellKeys(view.config);
     const cells = await Promise.all(
       keys.map(async (key) => ({
         key,
-        type: await loadCellType(key, view.workspaceId),
+        type: await resolveCellType(key, view.workspaceId),
       }))
     );
     return {
@@ -331,14 +321,16 @@ async function resolveTarget(
       },
     });
     if (!instance) throw notFound("Cell");
+    assertKeyReaches(principal, instance.workspaceId);
     // An html-embed draws its source document as a page: that is what runs.
     const page = instance.sourceDocumentId
       ? await loadPage(ctx.access, instance.sourceDocumentId)
       : null;
     if (instance.sourceDocumentId && !page) throw notFound("Cell's page");
+    if (page) assertKeyReaches(principal, page.workspaceId);
     const type = page
       ? null
-      : await loadCellType(instance.cellType, instance.workspaceId);
+      : await resolveCellType(instance.cellType, instance.workspaceId);
     return {
       surface: {
         kind,
@@ -354,16 +346,14 @@ async function resolveTarget(
   }
   if (!typeKey) throw badRequest("Pass the cell's typeKey or its id.");
   const lens = input.workspaceId ?? null;
-  if (
-    lens &&
-    !(await canRead(userPrincipal(ctx.userId), { workspace: lens }))
-  ) {
+  // The caller reads the lens: the key's binding and grant, not only the person.
+  if (!(await callerReadsLens(principal, lens))) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "You cannot read this space.",
     });
   }
-  const type = await loadCellType(typeKey, lens);
+  const type = await resolveCellType(typeKey, lens);
   if (!type) throw notFound("Cell type");
   return {
     surface: {
@@ -394,7 +384,8 @@ async function readLog(
   key: string,
   logSpace: string | null,
   since: Date,
-  readable: string[]
+  readable: string[],
+  boundSpace: string | null
 ) {
   const floor: SQL | undefined =
     readable.length > 0
@@ -417,6 +408,8 @@ async function readLog(
         eq(frameReadLog.surfaceKey, key),
         gte(frameReadLog.at, since),
         logSpace ? eq(frameReadLog.workspaceId, logSpace) : undefined,
+        // A bound key reads its own space's rows only, its person's included.
+        boundSpace ? eq(frameReadLog.workspaceId, boundSpace) : undefined,
         floor
       )
     )
@@ -501,7 +494,18 @@ async function readsSection(
     };
   }
   try {
-    const readable = await getUserWorkspaceIds(ctx.userId);
+    const principal = callerPrincipal(ctx);
+    const boundSpace = principal.key?.workspaceId ?? null;
+    const readable = (await getUserWorkspaceIds(ctx.userId)).filter(
+      (workspaceId) =>
+        keyBindingReaches(principal, workspaceId) &&
+        // Under a grant, a space's log is read where the grant reads its
+        // events (the access door's rule for reading a space).
+        (!principal.grant ||
+          principal.grant.scopes.some((scope) =>
+            permits(scope, { subject: "event", action: "read", workspaceId })
+          ))
+    );
     const surfaces: SurfaceReads[] = [];
     for (const s of logged) {
       const rows = await readLog(
@@ -511,7 +515,8 @@ async function readsSection(
         // A page reads in its own space; a cell in the host's lens.
         s.surfaceKind === "document" ? null : target.logSpace,
         since,
-        readable
+        readable,
+        boundSpace
       );
       surfaces.push({ ...s, ...compareReads(s.declared, rows) });
     }

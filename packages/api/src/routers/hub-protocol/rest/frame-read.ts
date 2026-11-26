@@ -1,5 +1,5 @@
 /**
- * Hub Protocol REST — THE frame read door (Surfaces P6a).
+ * Hub Protocol REST — THE frame read door.
  *
  * POST /frame/read  { surface: {kind:"cell", typeKey} | {kind:"document", id}
  *                              | {kind:"draft", draftId},
@@ -14,8 +14,9 @@
  *   400 an op outside `CELL_BRIDGE_READ_OPS` (`FRAME_READ_UNKNOWN_OP`), a
  *       malformed body, or a refusal of the read itself (a missing param)
  *   403 the surface does not declare this read (`FRAME_READ_UNDECLARED`),
- *       the draft is another person's (`FRAME_DRAFT_NOT_YOURS`), or the
- *       caller cannot read the space it names
+ *       the draft is another person's (`FRAME_DRAFT_NOT_YOURS`), the caller
+ *       cannot read the space it names, or the page is in another space than
+ *       the one the caller's key is bound to (`FRAME_SPACE_FORBIDDEN`)
  *   404 the cell type or html page is not found for this caller
  *   5xx a failed read, never an empty answer
  *
@@ -31,7 +32,6 @@ import {
   FrameReadError,
 } from "../../../services/surfaces/frame-read.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import type { Context } from "../../../types/context.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -115,6 +115,11 @@ export function registerFrameReadRoutes(app: HubHono): void {
     if (!confined.ok) return c.json({ error: confined.error }, 403);
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    // The key's own binding rides on the context: a page reads in ITS space,
+    // so the door must refuse one outside the key's (not only the lens).
+    const keyType = (c.get("keyType") as string | undefined) ?? null;
+    const keyWorkspaceId =
+      (c.get("keyWorkspaceId") as string | null | undefined) ?? null;
     try {
       const ctx = await createHubProtocolCallerContext(
         userId,
@@ -122,9 +127,11 @@ export function registerFrameReadRoutes(app: HubHono): void {
         confined.workspaceId ?? null,
         null,
         null,
-        (c.get("agentUserId") as string | undefined) ?? null
+        (c.get("agentUserId") as string | undefined) ?? null,
+        keyType,
+        keyWorkspaceId
       );
-      const answer = await frameRead(ctx as Context, {
+      const answer = await frameRead({ ...ctx, keyType, keyWorkspaceId }, {
         surface: parsed.data.surface,
         op: parsed.data.op,
         params: parsed.data.params,

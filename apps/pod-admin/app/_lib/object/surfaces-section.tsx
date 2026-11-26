@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * "Surfaces": the screens one object carries (Surfaces P3) — the views,
+ * "Surfaces": the screens one object carries: the views,
  * bentos, boards, documents, HTML artifacts and cells attached to it, pinned
  * to it or made by it — read from `surfaces.forObject`, the one find door.
  * Each is a DOOR: an attached surface opens this page on it
  * (`?surface=<id>`), any other its own page. Never drawn here: a surface's
  * body comes from its own page (the renderer bundle or the view's page).
  *
- * OMIT when there is nothing; a store that could not be read is said, never
- * read as "nothing" (`unavailable`); a failed read keeps its retry.
+ * OMIT when there is nothing; a store that could not be read is said with
+ * its retry (the shared error row), never read as "nothing" (`unavailable`);
+ * a failed read keeps its retry.
  */
 
 import { useState } from "react";
@@ -23,12 +24,13 @@ import { trpc } from "../../../lib/trpc";
 import { ResourceRowError } from "../../(admin)/components/resource-row";
 import { SectionCard } from "../../(admin)/components/section-card";
 import { openT } from "../../open/copy";
-import { kindIcon, kindLabel } from "./kind-icon";
+import { kindIcon } from "./kind-icon";
 import { objectPage } from "./content/markdown-model";
 import { SURFACES_CAP, surfaceListRows } from "./surfaces-model";
 
+// Focus: the one recipe (an outline in `--synap-focus-ring`, HeroUI `focus`).
 const DOOR =
-  "inline-flex min-w-0 items-center gap-1.5 rounded-sm text-[13px] [overflow-wrap:anywhere] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  "inline-flex min-w-0 items-center gap-1.5 rounded-sm text-[13px] [overflow-wrap:anywhere] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
 
 export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
   const t = openT();
@@ -83,7 +85,7 @@ export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
             >
               <Icon
                 aria-hidden
-                className="h-4 w-4 shrink-0 text-foreground/50"
+                className="h-4 w-4 shrink-0 text-default-500"
               />
               {row.href ? (
                 <Link href={row.href} className={DOOR}>
@@ -103,8 +105,8 @@ export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
                   {name}
                 </span>
               )}
-              <span className="shrink-0 text-[12px] text-foreground/50">
-                {kindLabel(row.kind)}
+              <span className="shrink-0 text-[12px] text-default-500">
+                {row.label}
               </span>
             </li>
           );
@@ -123,9 +125,10 @@ export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
         </Button>
       )}
       {partial && (
-        <p className="mt-1.5 text-[12px] text-foreground/55">
-          {t("surfaces.partial")}
-        </p>
+        <ResourceRowError
+          message={t("surfaces.partial")}
+          onRetry={() => void query.refetch()}
+        />
       )}
     </SectionCard>
   );
