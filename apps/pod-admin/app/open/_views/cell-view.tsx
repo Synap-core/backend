@@ -119,6 +119,7 @@ export function CellView({ id: key }: { id: string }) {
           html={page.html}
           workspaceId={page.workspaceId}
           title={title}
+          surface={{ kind: "cell", typeKey: key }}
           refusedAction={openInApp}
         />
       ) : null}
