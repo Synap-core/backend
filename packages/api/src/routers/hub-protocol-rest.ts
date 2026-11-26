@@ -84,6 +84,7 @@ import {
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
   registerDesignsRoutes,
+  registerCommentsRoutes,
   registerChatRoutes,
   registerLibraryRoutes,
   registerToolsRoutes,
@@ -126,6 +127,7 @@ import {
   registerBrandRoutes,
   registerSurfaceContextRoutes,
   registerSurfacesRoutes,
+  registerFrameReadRoutes,
   registerAgentSkillsRoutes,
   registerRulesRoutes,
   registerUiRoutes,
@@ -424,7 +426,9 @@ registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidanc
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
 registerSurfaceContextRoutes(app); // GET /surfaces/context — a frame's anchor, space, project, goal and brand (frame contract v3)
 registerSurfacesRoutes(app); // GET /surfaces — every surface one object carries (surfaces.forObject)
+registerFrameReadRoutes(app); // POST /frame/read — the one frame read door: declared reads enforced, run as the viewer, logged (P6a)
 registerDesignsRoutes(app); // GET /designs/catalog, GET /designs/kit, POST /designs/apply (static, first), GET /designs/:id — the design door for apps
+registerCommentsRoutes(app); // POST /comments, GET /comments, POST /comments/:messageId/resolved — comments on an object, for apps (the comments service)
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list), PATCH /rules/:id (edit, LAST)
 registerUiRoutes(app); // /ui/focus

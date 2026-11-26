@@ -871,6 +871,10 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // The user word for a track stage is "Step"; both spellings reach one kind.
   step: "stage",
   track_stage: "stage",
+  // A placed cell's row (`cell_instances`), the surface end of an `attaches`
+  // link (Surfaces P3): the same kind as a cell.
+  cell_instance: "cell",
+  cell_instances: "cell",
   // The package layer's tag for a bundle (`workspace` package tagged `suite`).
   suite: "pack",
   suites: "pack",

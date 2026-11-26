@@ -1211,6 +1211,10 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
   // so keys minted with the AI preset before the door existed keep working
   // (`synap capture --global`).
   knowledgeKey: "document",
+  // An attached surface (Surfaces P3) is a View, Document or Cell put on an
+  // object: a key that may create or edit views may ASK to make or attach one
+  // (the AI preset's `view.create` / `view.update`). The door governs it.
+  surface: "view",
 };
 
 /**
@@ -1254,6 +1258,10 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // ASK to install or retire one. The doors govern it (both floored, 2.09).
   "cell/install": "define",
   "cell/retire": "define",
+  // Putting a surface on an object, or taking it off, edits what that object
+  // shows (`surface` folds onto `view`, above).
+  "surface/attach": "update",
+  "surface/detach": "update",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -2518,6 +2526,10 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "skill/create": "disruptive", // egress
   "skill/delete": "disruptive", // destroy
   "skill/update": "disruptive", // egress
+  // An attached surface (Surfaces P3): UI everyone who opens the object sees.
+  "surface/attach": "disruptive", // struct: a screen added to an object's page
+  "surface/create": "disruptive", // struct: a new body, attached to an object
+  "surface/detach": "disruptive", // struct: a screen taken off an object's page
   "tool/create": "disruptive", // egress
   "tool/delete": "disruptive", // destroy
   "tool/provisionWebhook": "disruptive", // scope: mints or rotates the secret inbound URL
@@ -2893,6 +2905,13 @@ export const GATE_WRITE_DOORS = {
   "skill/create": "gate",
   "skill/delete": "gate",
   "skill/update": "gate",
+  // `surfaces.create | attach | detach` (tRPC), `synap_create_surface`,
+  // `synap_attach_surface`, Hub `POST /surfaces`, `POST|DELETE
+  // /surfaces/attach` — one service, `services/surfaces/attach.ts`. Approved
+  // by `routers/proposals/executors/surface.ts`.
+  "surface/attach": "gate",
+  "surface/create": "gate",
+  "surface/detach": "gate",
   "tool/create": "gate",
   "tool/delete": "gate",
   "tool/provisionWebhook": "gate",

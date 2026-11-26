@@ -31,4 +31,14 @@ describe("portable open locator", () => {
     // An empty params object must not mint a trailing "?".
     expect(openAppUrl("entity", "abc-1", {})).toBe("synap://open/entity/abc-1");
   });
+
+  it("opens an object on one attached surface: /open/<kind>/<id>?surface=<id>", () => {
+    expect(
+      openUrl("https://pod.example.com/", "e-1", {
+        kind: "entity",
+        surface: "v 1",
+      })
+    ).toBe("https://pod.example.com/open/entity/e-1?surface=v%201");
+    expect(openPath("e-1", { kind: "entity" })).toBe("/open/entity/e-1");
+  });
 });

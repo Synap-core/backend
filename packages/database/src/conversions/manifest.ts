@@ -41,7 +41,8 @@ export type ConversionOp =
   | DropStaleLifecycleListsOp
   | FoldBookingDealIntoLeadOp
   | RekindByStatusOp
-  | RetireProjectTwinsOp;
+  | RetireProjectTwinsOp
+  | FoldAnchorsIntoAttachmentsOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -739,6 +740,47 @@ export interface DropStaleLifecycleListsOp extends BaseOp {
  */
 export interface RetireProjectTwinsOp extends BaseOp {
   op: "retireProjectTwins";
+}
+
+/**
+ * The stores that anchored UI to ONE object before the `attaches` link
+ * (Surfaces wave P3, founder decision 23 Nov 2026: "a per-entity look becomes
+ * an attached surface"). Each is copied onto `links <anchor> --attaches-->
+ * <surface>`, the one store of the `attached` relation:
+ *   - `entity-renderer`  `entities.system_data.renderer` (a `{kind:'cell'}`
+ *                        override, `entities.setEntityRenderer`) → a new
+ *                        `cell_instances` row in the entity's space, attached
+ *                        in slot `detail`;
+ *   - `renderer-binding` a per-OBJECT `renderer_bindings` row of a playbook
+ *                        (`subject_id` set, not revoked) → a cell (a new
+ *                        instance in the playbook's space) or the bound view,
+ *                        attached in slot `detail`;
+ *   - `entity-bento`     `entities.system_data.bentoViewId` → that view;
+ *   - `cell-relation`    `relations` `cell --references--> entity`
+ *                        (`cellInstances.link`) → that cell instance.
+ */
+export const ATTACHMENT_FOLD_SOURCES = [
+  "entity-renderer",
+  "renderer-binding",
+  "entity-bento",
+  "cell-relation",
+] as const;
+export type AttachmentFoldSource = (typeof ATTACHMENT_FOLD_SOURCES)[number];
+
+/**
+ * Copy one legacy anchor store onto `attaches` links (see
+ * {@link ATTACHMENT_FOLD_SOURCES}). ADDITIVE and idempotent: the legacy value
+ * stays where it is (clients that still read it keep drawing it until they
+ * read `attached`), the edge is written on its unique index, and an anchor
+ * that already carries an attachment from this source is skipped. A source
+ * row that cannot become an attachment is left as it is and COUNTED, never
+ * dropped: an override on an entity with no space (a cell lives in a space),
+ * a per-object binding of a VIEW (a view is not an anchor kind), a pointer to
+ * a view or cell that no longer exists.
+ */
+export interface FoldAnchorsIntoAttachmentsOp extends BaseOp {
+  op: "foldAnchorsIntoAttachments";
+  source: AttachmentFoldSource;
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -2421,6 +2463,29 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "retireProjectTwins",
       opKey: "pt1.projects.retire-project-twins",
     },
+    // ─── Attached surfaces (Surfaces P3, founder decision 23 Nov 2026) ───────
+    // Every legacy per-object UI anchor becomes an `attaches` link; the legacy
+    // value stays readable (see FoldAnchorsIntoAttachmentsOp).
+    {
+      op: "foldAnchorsIntoAttachments",
+      opKey: "p3.surfaces.entity-renderer",
+      source: "entity-renderer",
+    },
+    {
+      op: "foldAnchorsIntoAttachments",
+      opKey: "p3.surfaces.renderer-binding",
+      source: "renderer-binding",
+    },
+    {
+      op: "foldAnchorsIntoAttachments",
+      opKey: "p3.surfaces.entity-bento",
+      source: "entity-bento",
+    },
+    {
+      op: "foldAnchorsIntoAttachments",
+      opKey: "p3.surfaces.cell-relation",
+      source: "cell-relation",
+    },
   ],
 };
 
@@ -2451,6 +2516,7 @@ export const CONVERSION_OP_TYPES = [
   "foldBookingDealIntoLead",
   "rekindByStatus",
   "retireProjectTwins",
+  "foldAnchorsIntoAttachments",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2745,6 +2811,15 @@ export function validateManifest(manifest: ConversionManifest): void {
         break; // no parameters: every declared lifecycle
       case "retireProjectTwins":
         break; // no parameters: the one twin predicate
+      case "foldAnchorsIntoAttachments":
+        if (
+          !(ATTACHMENT_FOLD_SOURCES as readonly string[]).includes(op.source)
+        ) {
+          throw new Error(
+            `Conversion manifest: foldAnchorsIntoAttachments '${op.opKey}' has invalid source '${op.source}' (supported: ${ATTACHMENT_FOLD_SOURCES.join(", ")})`
+          );
+        }
+        break;
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.toSlug, "toSlug");

@@ -715,3 +715,59 @@ describe("packageUpdateOpenTarget — template updates' links", () => {
     );
   });
 });
+
+describe("dispatchOpen — ?surface= (an object opened on one attached surface, Surfaces P3)", () => {
+  const SURFACE = "11111111-2222-4333-8444-555555555555";
+
+  it("keeps the surface on the 302 to pod-admin", () => {
+    expect(
+      dispatchOpen({
+        type: "entity",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        surface: SURFACE,
+      })
+    ).toEqual({
+      action: "redirect",
+      url: `${ADMIN}/open/entity/${ID}?surface=${SURFACE}`,
+    });
+  });
+
+  it("keeps it on the bounce to the app (a phone link)", () => {
+    expect(
+      dispatchOpen({
+        type: "project",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+        surface: SURFACE,
+      })
+    ).toEqual({
+      action: "bounce",
+      deep: `synap://open/project/${ID}?surface=${SURFACE}`,
+    });
+  });
+
+  it("drops a surface that is not one uuid, and one on an untyped link", () => {
+    expect(
+      dispatchOpen({
+        type: "entity",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        surface: `${SURFACE}&evil=1`,
+      })
+    ).toEqual({ action: "redirect", url: `${ADMIN}/open/entity/${ID}` });
+    expect(
+      dispatchOpen({
+        type: undefined,
+        id: ID,
+        userAgent: DISCORDBOT,
+        adminBase: ADMIN,
+        surface: SURFACE,
+      })
+    ).toEqual({ action: "bounce", deep: `synap://open/${ID}` });
+  });
+});

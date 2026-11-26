@@ -657,7 +657,8 @@ async function inspectCell(
     .select({ n: count() })
     .from(views)
     .where(
-      drizzleSql`jsonb_path_exists(coalesce(${views.config}, '{}'::jsonb), '$.blocks[*] ? (@.widgetType == $key)', jsonb_build_object('key', ${row.typeKey}::text))`
+      // A cell tile in either spelling: legacy `widgetType`, the one Block's `cellKey`.
+      drizzleSql`jsonb_path_exists(coalesce(${views.config}, '{}'::jsonb), '$.blocks[*] ? (@.widgetType == $key || @.cellKey == $key)', jsonb_build_object('key', ${row.typeKey}::text))`
     );
   if ((placed?.n ?? 0) > 0) {
     return skip(target, "in_use", "a dashboard places the cell");

@@ -125,6 +125,7 @@ import {
   mergeWorkspacePrimarySurface,
   resolveWorkspacePrimarySurface,
 } from "./workspace-primary-surface.js";
+import { readLegacyBlock } from "@synap-core/types/blocks";
 
 const logger = createLogger({ module: "reconcile-workspace-from-definition" });
 
@@ -1321,8 +1322,14 @@ export async function reconcileWorkspaceFromDefinition(
         })
         .filter(Boolean) as Array<Record<string, unknown>>;
 
-      const blockSig = (b: Record<string, unknown>): string =>
-        `${b.widgetType}:${JSON.stringify(b.config ?? {})}`;
+      // A cell tile's signature in either spelling (legacy `widgetType` +
+      // `config`, the one Block's `cellKey` + `props`): the same tile matches.
+      const blockSig = (b: Record<string, unknown>): string => {
+        const block = readLegacyBlock(b);
+        return block?.kind === "cell"
+          ? `${block.cellKey ?? block.instanceId}:${JSON.stringify(block.props ?? {})}`
+          : `${String(b.widgetType ?? b.cellKey)}:${JSON.stringify(b.config ?? b.props ?? {})}`;
+      };
       const posBottom = (b: Record<string, unknown>): number => {
         const pos = b.pos as { y?: number; h?: number } | undefined;
         return (pos?.y ?? 0) + (pos?.h ?? 0);
@@ -1378,7 +1385,9 @@ export async function reconcileWorkspaceFromDefinition(
             .map((b) => b.viewId as string)
         );
         const baseWidgetSigs = new Set(
-          baseBlocks.filter((b) => b.kind === "widget").map(blockSig)
+          baseBlocks
+            .filter((b) => readLegacyBlock(b)?.kind === "cell")
+            .map(blockSig)
         );
         const dedupedWidgets = overlayWidgetBlocks.filter(
           (b) => !baseWidgetSigs.has(blockSig(b))

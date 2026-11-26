@@ -155,7 +155,11 @@ describe("defineCell — externalHosts", () => {
       ...BASE,
       externalHosts: ["https://api.vendor.com"],
     });
-    expect(updatedSet?.trustLevel).toBeUndefined();
+    // Not the egress demotion. Since Surfaces P6a a non-install write always
+    // carries the SQL that demotes only an `installed` row (its content is no
+    // longer what a person installed); a `trusted` or `generated` row keeps
+    // its level. That CASE runs for real in cells.install-retire-gate.pglite.
+    expect(updatedSet?.trustLevel).not.toBe("generated");
   });
 
   it("demotes on the WORKSPACE-SCOPED branch too (onConflictDoUpdate)", async () => {
@@ -179,7 +183,7 @@ describe("defineCell — externalHosts", () => {
       ...BASE,
       externalHosts: [" https://api.vendor.com ", "https://api.vendor.com", ""],
     });
-    expect(updatedSet?.trustLevel).toBeUndefined();
+    expect(updatedSet?.trustLevel).not.toBe("generated");
     expect(updatedSet?.externalHosts).toEqual(["https://api.vendor.com"]);
   });
 });
