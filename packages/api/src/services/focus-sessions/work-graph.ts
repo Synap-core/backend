@@ -34,6 +34,11 @@
  * is not drawn. Lineage is followed child → parent only (an off-window child
  * of a window parent is not fetched: lineage is read by the child's id).
  *
+ * With no `kind` named, the window leaves out CLOSED automation runs
+ * (`closedAutomationRunWhere`): open, failed and cancelled runs stay, and a
+ * run at the far end of an edge is still fetched (far ends are any kind).
+ * A `kind` named explicitly, `all` included, keeps them.
+ *
  * ── HONEST TRUNCATION ───────────────────────────────────────────────────────
  * At most `WORK_GRAPH_CEILING` window sessions, open ones first (the order
  * `list({ order: "open_first" })` uses), and at most as many far ends. When
@@ -350,6 +355,95 @@ export type WorkGraphNode = Awaited<
 /** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
 export type WorkGraphPlaybookMatch = "session" | "goal";
 
+/**
+ * THE APP NODE — what the apps' tRPC door (`focusSessions.graph`) sends per
+ * node. A full node is the whole list row (~6.5 KB measured on the founder's
+ * pod, 26 Nov 2026: `expectedOutputs` 1.5 KB, `metadata` 0.9 KB, `stages`
+ * 0.5 KB, `criteria` 0.4 KB), and the apps draw the map from a handful of its
+ * fields (`@synap-core/headless/work-graph` `WorkGraphNodeInput`, the browser
+ * work map, the session packet's siblings). The read still builds the full
+ * node (its next move, holder and PR facts need those fields); only the
+ * tRPC wire is narrowed. Hub REST forwards the full node (a pod app reads
+ * `stages`, `expectedOutputs`, `criteria` and `metadata` from it); MCP has
+ * its own lean projection.
+ *
+ * Every node field is CLASSIFIED below, kept or left off, so a new field
+ * stops the build until someone decides which (`_appNodeClassified`).
+ */
+export const WORK_GRAPH_APP_NODE_FIELDS = [
+  "id",
+  "title",
+  // The name's fallback (`resolveSessionTitle`).
+  "goal",
+  "status",
+  "kind",
+  "workspaceId",
+  "projectId",
+  "trackId",
+  "trackStage",
+  "playbookId",
+  "currentStage",
+  "parentSessionId",
+  "subjectEntityId",
+  "progress",
+  "startedAt",
+  "updatedAt",
+  "closedAt",
+  "nextMove",
+  "unitFacts",
+  "live",
+  "holder",
+  "viewerRole",
+  "inWindow",
+  "playbookMatch",
+  "skipped",
+] as const satisfies ReadonlyArray<keyof WorkGraphNode>;
+
+/** Read by the graph itself, never by an app from a node: left off the tRPC wire. */
+const WORK_GRAPH_APP_NODE_LEFT_OFF = [
+  "expectedOutputs",
+  "metadata",
+  "stages",
+  "criteria",
+  "stageHistory",
+  "verificationReport",
+  "verdict",
+  "participants",
+  "triage",
+  "origin",
+  "userId",
+  "correlationId",
+  "templateId",
+  "channelId",
+  "agentIds",
+  "oneLivePerSubject",
+  "createdAt",
+] as const satisfies ReadonlyArray<keyof WorkGraphNode>;
+type _AppNodeClassified =
+  Exclude<
+    keyof WorkGraphNode,
+    | (typeof WORK_GRAPH_APP_NODE_FIELDS)[number]
+    | (typeof WORK_GRAPH_APP_NODE_LEFT_OFF)[number]
+  > extends never
+    ? true
+    : never;
+const _appNodeClassified: _AppNodeClassified = true;
+void _appNodeClassified;
+
+export type WorkGraphAppNode = Pick<
+  WorkGraphNode,
+  (typeof WORK_GRAPH_APP_NODE_FIELDS)[number]
+>;
+
+/** One node as the apps' tRPC door sends it: the kept fields, an absent one stays absent. */
+export function toWorkGraphAppNode(node: WorkGraphNode): WorkGraphAppNode {
+  const out: Record<string, unknown> = {};
+  for (const key of WORK_GRAPH_APP_NODE_FIELDS) {
+    if (key in node) out[key] = node[key];
+  }
+  return out as WorkGraphAppNode;
+}
+
 export interface WorkGraph {
   nodes: WorkGraphNode[];
   edges: WorkGraphEdge[];
@@ -374,8 +468,14 @@ export interface BuildWorkGraphInput {
   scope: ResolvedScope;
   /** Settled work from this many hours back. Clamped to 1…`WORK_GRAPH_MAX_WINDOW_HOURS`. */
   windowHours?: number;
-  /** Population of the WINDOW (far ends are any kind). */
-  kind: SessionKindFilter;
+  /**
+   * Population of the WINDOW (far ends are any kind). ABSENT = the default
+   * window: every kind EXCEPT closed automation runs
+   * (`closedAutomationRunWhere`, founder default 26 Nov 2026: one automation
+   * closing ~2,000 runs a day buried the map's other work under the
+   * ceiling). Named explicitly, `all` included, the window keeps them.
+   */
+  kind?: SessionKindFilter;
   /** Triage lens of the WINDOW (far ends are any lens). */
   lens: SessionLens;
   /** Honour the human-roster branch — `rosterReadFor(ctx)`, as the list does. */
@@ -423,7 +523,8 @@ function sectionOf(
 export async function buildWorkGraph(
   input: BuildWorkGraphInput
 ): Promise<WorkGraph> {
-  const { userId, scope, kind, lens, roster } = input;
+  const { userId, scope, lens, roster } = input;
+  const kind = input.kind ?? "all";
   const narrowed = input.reach && !input.reach.whole ? input.reach : null;
   const withheld = {
     status: "unavailable" as const,
@@ -451,6 +552,7 @@ export async function buildWorkGraph(
     kind,
     lens,
     roster,
+    ...(input.kind === undefined ? { withoutClosedAutomationRuns: true } : {}),
     ...(focus && "trackId" in focus ? { trackId: focus.trackId } : {}),
     ...(focus && "rootSessionId" in focus
       ? { waveRootId: focus.rootSessionId }
