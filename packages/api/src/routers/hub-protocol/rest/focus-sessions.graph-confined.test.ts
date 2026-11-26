@@ -89,3 +89,36 @@ describe("Hub REST GET /focus-sessions/graph — a workspace-bound key", () => {
     expect(boundOf(h.inputs[0])).toBeUndefined();
   });
 });
+
+const kindOf = (i: unknown) => (i as { kind?: string }).kind;
+
+describe("Hub REST GET /focus-sessions/graph — the default window", () => {
+  beforeEach(() => {
+    h.inputs = [];
+  });
+
+  it("no `kind` named ⇒ no kind passed: the service's default window (closed automation runs left out)", async () => {
+    const res = await buildTestApp(null).request(`/focus-sessions/graph`);
+    expect(res.status).toBe(200);
+    expect(h.inputs).toHaveLength(1);
+    expect(h.inputs[0]).toHaveProperty("kind", undefined);
+  });
+
+  it("`kind=all` named ⇒ `all` passed, so the closed runs stay; any kind is forwarded as named", async () => {
+    for (const k of ["all", "run", "work"]) {
+      const res = await buildTestApp(null).request(
+        `/focus-sessions/graph?kind=${k}`
+      );
+      expect(res.status).toBe(200);
+    }
+    expect(h.inputs.map(kindOf)).toEqual(["all", "run", "work"]);
+  });
+
+  it("an unknown kind is still a 400, no graph built", async () => {
+    const res = await buildTestApp(null).request(
+      `/focus-sessions/graph?kind=nope`
+    );
+    expect(res.status).toBe(400);
+    expect(h.inputs).toEqual([]);
+  });
+});

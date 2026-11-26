@@ -213,6 +213,7 @@ import {
 } from "../services/focus-sessions/session-holder.js";
 import {
   buildWorkGraph,
+  toWorkGraphAppNode,
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 } from "../services/focus-sessions/work-graph.js";
@@ -732,7 +733,9 @@ export const focusSessionsRouter = router({
    * plus the far end of every edge, as `{ nodes, edges, sections, window }`
    * (`services/focus-sessions/work-graph.ts`). Same floor as `list` (owner,
    * plus the room roster on this human door), same WHERE, same row
-   * projection; edges flat. At most 500 window sessions, and `window` says
+   * projection, each node then narrowed to the fields the apps draw
+   * (`WORK_GRAPH_APP_NODE_FIELDS`; Hub REST and MCP `full` send it whole);
+   * edges flat. At most 500 window sessions, and `window` says
    * when it cut. Same defaults as `list`: `kind: "work"`, `lens: "default"`.
    * `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave
    * (the root and every session spawned under it); one or the other. It also
@@ -769,7 +772,7 @@ export const focusSessionsRouter = router({
         })
     )
     .query(async ({ ctx, input }) => {
-      return buildWorkGraph({
+      const graph = await buildWorkGraph({
         userId: requireUserId(ctx.userId),
         scope: resolveScope(ctx, input),
         windowHours: input.windowHours,
@@ -785,6 +788,9 @@ export const focusSessionsRouter = router({
         playbookId: input.playbookId,
         subjectEntityId: input.subjectEntityId,
       });
+      // The apps draw the map from a few fields of each node: the rest of
+      // the row stays on the pod (`WORK_GRAPH_APP_NODE_FIELDS`).
+      return { ...graph, nodes: graph.nodes.map(toWorkGraphAppNode) };
     }),
   /**
    * TIMELINE — what happened to a goal, a session or a pull request, newest
