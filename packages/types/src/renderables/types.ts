@@ -13,8 +13,6 @@ import type {
   AttentionClass,
   LensSectionEmptyAnswer,
 } from "../lens/sections.js";
-import type { BentoPlace, Block } from "../blocks/index.js";
-import type { StoredBentoBlock } from "../views/config-schemas.js";
 
 // ─── Display modes ────────────────────────────────────────────────────────────
 
@@ -1091,8 +1089,12 @@ export interface FlowViewConfig {
 export interface BentoViewConfig {
   layout?: "bento" | "grid" | "flow";
   breakpoints?: Record<string, unknown>;
-  /** Stored tiles: a Block + its place (`BentoBlockSchema`); read each with `readLegacyBlock`. */
-  blocks?: StoredBentoBlock[];
+  /**
+   * Stored tiles. This module is a leaf (no import outside it), so the typed
+   * shape is `StoredBentoBlock` (`@synap-core/types/views`, the bento schema
+   * built on the one Block); read each tile with `readLegacyBlock`.
+   */
+  blocks?: unknown[];
 }
 
 export type EmptyViewConfig = Record<string, never>;
@@ -1605,10 +1607,11 @@ export interface CapabilitiesManifest {
 // ─── Template authoring helpers ───────────────────────────────────────────────
 
 /**
- * A bento tile as a template writes it, the legacy spelling: a cell by
- * `widgetType` + `config`, its place inline. Read it with `readLegacyBlock`.
+ * Type-safe bento block definition for use in workspace templates: the legacy
+ * spelling (a cell by `widgetType` + `config`, its place inline), the catalog
+ * wire shape. Read it with `readLegacyBlock` (`@synap-core/types/blocks`).
  */
-export interface LegacyBentoBlockDef {
+export interface BentoBlockDef {
   id?: string;
   /** Cell type key */
   widgetType: WidgetTypeKey;
@@ -1619,18 +1622,6 @@ export interface LegacyBentoBlockDef {
   /** Cell-specific config */
   config?: Partial<WidgetConfigByType[WidgetTypeKey]>;
 }
-
-/** A bento tile as a template writes it: one Block (view, entity or cell) and its place. */
-export interface PlacedBentoBlockDef {
-  id?: string;
-  block: Block;
-  place: BentoPlace;
-  title?: string;
-  chrome?: string;
-}
-
-/** Type-safe bento block definition for use in workspace templates. */
-export type BentoBlockDef = LegacyBentoBlockDef | PlacedBentoBlockDef;
 
 /** Type-safe view definition for use in workspace templates. */
 export interface TemplateViewDef {

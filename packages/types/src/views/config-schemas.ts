@@ -187,7 +187,13 @@ export const BentoBlockSchema = z
   .discriminatedUnion("kind", [
     ViewBlockSchema.extend(BentoTileFields),
     EntityBlockSchema.extend(BentoTileFields),
-    CellBlockSchema.extend({ ...BentoTileFields, query: BentoTileQuerySchema }),
+    // A bento draws a tile by its key: a cell tile always names it (with or
+    // without an instance), never an instance alone.
+    CellBlockSchema.extend({
+      ...BentoTileFields,
+      cellKey: z.string().min(1),
+      query: BentoTileQuerySchema,
+    }),
     // Legacy cell tile (widgetType = opaque string; the frontend registry decides the renderer).
     z.object({
       ...BentoTileFields,

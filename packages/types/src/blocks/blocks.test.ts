@@ -235,9 +235,13 @@ describe("the bento schema is built on the Block", () => {
     }
   });
 
-  it("refuses a cell tile that names neither a key nor an instance", () => {
+  it("refuses a cell tile without its key (a bento draws by key, an instance alone is not enough)", () => {
     expect(
       BentoBlockSchema.safeParse({ id: "c", kind: "cell", pos: POS }).success
+    ).toBe(false);
+    expect(
+      BentoBlockSchema.safeParse({ id: "c", kind: "cell", instanceId: INSTANCE, pos: POS })
+        .success
     ).toBe(false);
   });
 
