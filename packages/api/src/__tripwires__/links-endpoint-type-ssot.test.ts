@@ -43,6 +43,18 @@ function sourceFiles(): string[] {
   return out;
 }
 
+/** The member only a copy of the endpoint union carries (see site kind B). */
+const SIGNATURE_MEMBER = "participant";
+
+const REST_DOOR = join(
+  process.cwd(),
+  "src",
+  "routers",
+  "hub-protocol",
+  "rest",
+  "links.ts"
+);
+
 interface Site {
   file: string;
   kind: "union" | "array";
@@ -79,6 +91,14 @@ function discoverSites(union: ReadonlySet<string>): Site[] {
       const values = [...body.matchAll(/"([a-z_]+)"/g)].map((v) => v[1]);
       if (values.length < 5) continue;
       if (!values.every((v) => union.has(v))) continue;
+      // A copy of THIS union carries `participant` (a users-table id): no
+      // other domain list names it. Since `view` joined the union (Surfaces
+      // P3, `attaches`), four unrelated lists of object kinds became subsets
+      // of it (types ask, package-updates, proposals/landed, the surface
+      // context) and read as drifted mirrors. What this cannot see, stated:
+      // a copy that dropped `participant` itself is no longer discovered;
+      // the REST door's copy is pinned below so the scan cannot lose it.
+      if (!values.includes(SIGNATURE_MEMBER)) continue;
       sites.push({ file, kind: "array", members: values });
     }
   }
@@ -96,6 +116,11 @@ describe("tripwire: LinkEndpointType SSOT (derived registration sites)", () => {
     // population itself — new mirrors are found automatically.
     expect(sites.map((s) => s.file)).toContain(SCHEMA_FILE);
     expect(sites.length).toBeGreaterThanOrEqual(3);
+    // The hand-copied list the scan exists for is still found by it.
+    expect(
+      sites.filter((s) => s.kind === "array").map((s) => s.file)
+    ).toContain(REST_DOOR);
+    expect(schemaUnion()).toContain(SIGNATURE_MEMBER);
   });
 
   it("every discovered site matches the schema union exactly", () => {

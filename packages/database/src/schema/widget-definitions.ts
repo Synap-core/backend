@@ -20,7 +20,16 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { CONTENT_KINDS, type ContentKind } from "@synap-core/types/renderables";
+import {
+  CONTENT_KINDS,
+  type ContentKind,
+  type Placement,
+} from "@synap-core/types/renderables";
+import type { AnchorKind } from "@synap-core/types/surfaces";
+import type {
+  CellBridgeDeclaredReads,
+  CellBridgeDeclaredWrites,
+} from "@synap-core/types/cell-bridge";
 import { workspaces } from "./workspaces.js";
 
 export type WidgetRendererType =
@@ -74,6 +83,20 @@ export function isPackageCellRendererType(
  * unspecified row can never write directly.
  */
 export type WidgetTrustLevel = "trusted" | "installed" | "generated";
+
+/**
+ * Where a stored cell type stands (migration 0457). `draft` = being authored,
+ * `proposed` = waiting on a person's approval, `active` = placeable,
+ * `retired` = uninstalled (kept for history and undo). Backfilled from
+ * `is_active`; the writers that flip `is_active` write it too.
+ */
+export const CELL_TYPE_STATUSES = [
+  "draft",
+  "proposed",
+  "active",
+  "retired",
+] as const;
+export type CellTypeStatus = (typeof CELL_TYPE_STATUSES)[number];
 
 /**
  * Functional role of a widget/cell definition — what surface it targets.
@@ -285,6 +308,44 @@ export const widgetDefinitions = pgTable(
      * clears it: nobody approved that content here).
      */
     contentSha256: text("content_sha256"),
+
+    /**
+     * The reads this cell type's frame DECLARES it makes
+     * (`CellBridgeDeclaredReads`, `@synap-core/types/cell-bridge`): a subset
+     * of the ceiling `CELL_BRIDGE_READ_OPS`, checked by the server on its one
+     * frame read door (`surfaces.frameRead`, Hub `POST /frame/read`), which
+     * refuses a read outside it (`FRAME_READ_UNDECLARED`).
+     *
+     * NULL = declares nothing: every ceiling read is answered, and logged
+     * `declared: false` (hosts and authors migrate). `[]` = reads nothing.
+     * Written through `defineCell` only (omit-is-silence on update). See
+     * migration 0456.
+     */
+    reads: jsonb("reads").$type<CellBridgeDeclaredReads>(),
+
+    /**
+     * The writes this cell type's frame DECLARES (`CellBridgeDeclaredWrites`,
+     * a subset of `CELL_BRIDGE_WRITE_OPS`). Stored for the hosts to check;
+     * the server does not enforce it yet (a frame write still goes through
+     * the governed doors and the cell type's trust). NULL = declares nothing.
+     */
+    writes: jsonb("writes").$type<CellBridgeDeclaredWrites>(),
+
+    /**
+     * Where this cell type stands: draft | proposed | active | retired
+     * (`CELL_TYPE_STATUSES`). Backfilled from `is_active` (migration 0457);
+     * written with it by every writer that flips it.
+     */
+    status: text("status").notNull().default("active").$type<CellTypeStatus>(),
+
+    /** The markdown a host without this cell shows (the catalog's `fallback`). NULL = none. */
+    fallback: text("fallback"),
+
+    /** The bodies it may be placed in (the catalog's `placements`). NULL = every placement. */
+    placements: jsonb("placements").$type<Placement[]>(),
+
+    /** The objects it may be anchored to (`AnchorKind`). NULL = any. */
+    anchorKinds: jsonb("anchor_kinds").$type<AnchorKind[]>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

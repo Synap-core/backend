@@ -39,7 +39,11 @@ import {
   PROPOSAL_REJECTION_REASONS,
   type CompositeCreateLinkOp,
 } from "@synap-core/types/proposals";
-import { ANCHOR_KINDS } from "@synap-core/types/surfaces";
+import {
+  ANCHOR_KINDS,
+  ATTACHABLE_SURFACE_TYPES,
+  CREATABLE_SURFACE_BODIES,
+} from "@synap-core/types/surfaces";
 import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
@@ -1162,22 +1166,27 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+          "A thread's newest messages plus linked entities and documents; read it before posting. threadId: from synap_post_message or the personal channel. Or `object`: its comment threads (anchor with a pin's locator, resolvedAt); the person resolves, you reply (synap_post_message comment.replyTo).",
         inputSchema: {
           type: "object",
           properties: {
             threadId: { type: "string", description: "Channel/thread UUID" },
+            object: {
+              type: "object",
+              description:
+                "Instead of threadId: {type:'entity'|'document', id}.",
+            },
+            state: { type: "string", enum: ["open", "resolved"] },
             limit: {
               type: "number",
-              description:
-                "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn.",
+              description: "Newest messages, 1-100 (default 50).",
             },
             cursor: {
               type: "string",
               description: "Older messages: the last reply's `nextCursor`.",
             },
           },
-          required: ["threadId"],
+          required: [],
         },
       },
       {
@@ -1879,6 +1888,16 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            attachTo: {
+              type: "object",
+              description:
+                "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
+              properties: {
+                kind: { type: "string", enum: [...ANCHOR_KINDS] },
+                id: { type: "string" },
+              },
+              required: ["kind", "id"],
+            },
             idempotencyKey: {
               type: "string",
               description:
@@ -1931,6 +1950,11 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
+            },
+            reads: {
+              type: "array",
+              description:
+                'An html page\'s declared reads: [{op, params?}] of window.synap.query; "*" = any. Others are refused.',
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3948,6 +3972,11 @@ export const tools = {
               description:
                 "Bento view (synap_list_views) to add the cell to as a tile, in the same act.",
             },
+            reads: {
+              type: "array",
+              description:
+                'Reads its frame declares: [{op, params?}] of window.synap.query; param "*" = any. Others are refused.',
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -4030,6 +4059,117 @@ export const tools = {
             },
           },
           required: ["slot"],
+        },
+      },
+      {
+        name: "synap_create_surface",
+        annotations: {
+          title: "Create a surface for an object",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Create UI for ONE object, anchored to it, in the body the choice rule picks (rules/surfaces): view, bento, whiteboard, document, html or cell. Pass the anchor {kind, id}, the body, a title and the body's spec (viewType/config for a view or bento, content or url for a document, content for html, cellKey/props for a cell). Call synap_find_surfaces first; never twin. Governed: may propose; `proposed` is success. Returns the open link /open/<kind>/<id>?surface=<id>.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            anchor: {
+              type: "object",
+              description:
+                "The object the surface is for: {kind, id}, kind one of entity, profile, workspace, project, track (a goal), playbook, session.",
+              properties: {
+                kind: { type: "string", enum: [...ANCHOR_KINDS] },
+                id: { type: "string" },
+              },
+              required: ["kind", "id"],
+            },
+            body: {
+              type: "string",
+              enum: [...CREATABLE_SURFACE_BODIES],
+              description:
+                "View (records of one kind), bento (monitor), whiteboard (think), document (text), html (present outside the pod; read-only), cell (one catalog cell).",
+            },
+            title: { type: "string", description: "Its name." },
+            spec: {
+              type: "object",
+              description:
+                "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's).",
+            },
+            slot: {
+              type: "string",
+              description:
+                "Optional renderer slot it fills on the object's page (detail).",
+            },
+            label: {
+              type: "string",
+              description: "Optional name shown in the object's Surfaces list.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["anchor", "body", "title"],
+        },
+      },
+      {
+        name: "synap_attach_surface",
+        annotations: {
+          title: "Attach a surface to an object",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          'Put an existing surface (a view, a bento, a document, an HTML artifact, a cell) on one more object, or take it off (`detach: true`). Use it for "give this project an investor radar" when the radar exists, and instead of a per-object renderer. Governed: may propose.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            anchor: {
+              type: "object",
+              description:
+                "The object: {kind, id}, kind one of entity, profile, workspace, project, track, playbook, session.",
+              properties: {
+                kind: { type: "string", enum: [...ANCHOR_KINDS] },
+                id: { type: "string" },
+              },
+              required: ["kind", "id"],
+            },
+            surface: {
+              type: "object",
+              description:
+                "The surface: {type, id}, type view (a view, bento or whiteboard), document (a document or HTML artifact) or cell_instance.",
+              properties: {
+                type: { type: "string", enum: [...ATTACHABLE_SURFACE_TYPES] },
+                id: { type: "string" },
+              },
+              required: ["type", "id"],
+            },
+            detach: {
+              type: "boolean",
+              description: "Take it off the object (the surface stays).",
+            },
+            slot: {
+              type: "string",
+              description: "Optional renderer slot it fills (detail).",
+            },
+            label: {
+              type: "string",
+              description: "Optional name shown in the object's Surfaces list.",
+            },
+            position: {
+              type: "number",
+              description: "Optional order (0 first; default last).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["anchor", "surface"],
         },
       },
       {
@@ -6368,6 +6508,16 @@ export const tools = {
               type: "string",
               enum: CREATABLE_VIEW_TYPE_KEYS,
             },
+            attachTo: {
+              type: "object",
+              description:
+                "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
+              properties: {
+                kind: { type: "string", enum: [...ANCHOR_KINDS] },
+                id: { type: "string" },
+              },
+              required: ["kind", "id"],
+            },
             workspaceId: {
               type: "string",
               description:
@@ -6773,7 +6923,7 @@ export const tools = {
                 anchor: {
                   type: "object",
                   description:
-                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?}.",
+                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}; locator: {surface:'design', frameId, blockId?} | {surface:'story', storyId}, + viewport, point {x,y} 0-1, contentVersion, screenshot?.",
                 },
                 replyTo: {
                   type: "string",

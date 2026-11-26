@@ -16,7 +16,8 @@
  * pretend to render here.
  *
  * `?flowType=` addresses a run (`{flowType, id}`); the public route forwards
- * it and the run page falls back to the resolver without it.
+ * it and the run page falls back to the resolver without it. `?surface=`
+ * opens an object's page on one surface attached to it (Surfaces P3).
  */
 
 import type { Metadata } from "next";
@@ -28,6 +29,7 @@ import {
   openDocumentTitle,
   openRedirect,
   parseOpenParams,
+  parseOpenSurfaceParam,
 } from "../../open-params";
 import { packageUpdateOpenPath } from "../../open-model";
 
@@ -64,7 +66,7 @@ export default async function OpenPage({
   searchParams,
 }: OpenPageProps) {
   const { type, id } = await params;
-  const { flowType } = await searchParams;
+  const { flowType, surface } = await searchParams;
   // `/open/update/<slug>`: one template update's Review page.
   const update = packageUpdateOpenPath([type, id]);
   if (update) redirect(update);
@@ -87,6 +89,7 @@ export default async function OpenPage({
     <OpenSurface
       parsed={parsed}
       flowType={typeof flowType === "string" ? flowType : undefined}
+      surface={parseOpenSurfaceParam(surface)}
       viewerIsPodAdmin={viewerIsPodAdmin}
       podHost={h.get("host") ?? undefined}
       identity={h.get("x-pod-admin-email") ?? undefined}

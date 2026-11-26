@@ -30,6 +30,9 @@
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
+ *   entity|profile|workspace|project|track|playbook|session
+ *                       --attaches-->          view | document | cell_instance
+ *                                              (an ATTACHED surface, Surfaces P3)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -98,7 +101,13 @@ export type LinkEndpointType =
   | "track"
   // A `profiles` row — a KIND (or role). Target of `participant(agent)
   // --assigned_to--> profile`: an agent assigned to work on that kind.
-  | "profile";
+  | "profile"
+  // A `views` row (a View, Bento or Whiteboard) and a `cell_instances` row (a
+  // placed Cell): the SURFACE end of an `attaches` edge, and nothing else.
+  // Written only by the surfaces door (`services/surfaces/attach.ts`), which
+  // floors both ends; the Hub REST links door refuses them.
+  | "view"
+  | "cell_instance";
 
 // ── `governance_rule` was HERE and was removed, deliberately ────────────────
 // It was added so an intent-rule could hold an edge to the governance rule it
@@ -287,7 +296,21 @@ export type LinkType =
    * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
    * REST links door lists and refuses it: an install writes it, never a key.
    */
-  | "extends";
+  | "extends"
+  /**
+   * <anchor> --attaches--> view | document | cell_instance. An ATTACHED
+   * surface (Surfaces P3, founder decision 23 Nov 2026): 0..n extra screens on
+   * ONE object, beside its kind's look (`renders`, kind-level, in
+   * `renderer_bindings`) and its one body (`entities.document_id`). The anchor
+   * is any of entity · profile · workspace · project · track · playbook ·
+   * session; one surface may be attached to several objects. `metadata`:
+   * `{ position, slot?, label? }` (`@synap-core/types/surfaces`
+   * `AttachmentMeta`). ONE producer: `services/surfaces/attach.ts` (governed
+   * `surface/create` | `surface/attach` | `surface/detach`, both ends floored);
+   * ONE reader: `surfaces.forObject` (`services/surfaces/for-object.ts`). The
+   * Hub REST links door lists and refuses it: `POST /surfaces/attach` writes it.
+   */
+  | "attaches";
 
 export const links = pgTable(
   "links",

@@ -207,6 +207,12 @@ import type {
   HubView,
   HubSurfaceAnchorKind,
   HubSurfacesForObject,
+  HubSurfaceRef,
+  HubCreateSurfaceInput,
+  HubCreateSurfaceResult,
+  HubAttachSurfaceInput,
+  HubAttachSurfaceResult,
+  HubDetachSurfaceResult,
   HubWidgetDefinition,
   HubSearchResult,
   HubCommand,
@@ -1661,6 +1667,45 @@ export class HubRestClient {
     return this.request<HubSurfacesForObject>(
       "GET",
       `/api/hub/surfaces?${params}`
+    );
+  }
+
+  /**
+   * Make a surface FOR one object (POST /surfaces): the body (view, bento,
+   * whiteboard, document, html, cell) and its `attaches` link, one governed
+   * act. An agent key's call is a proposal (`status: 'proposed'`).
+   */
+  async createSurface(
+    input: HubCreateSurfaceInput
+  ): Promise<HubCreateSurfaceResult> {
+    return this.request<HubCreateSurfaceResult>(
+      "POST",
+      "/api/hub/surfaces",
+      input
+    );
+  }
+
+  /** Put an existing surface on one more object (POST /surfaces/attach). */
+  async attachSurface(
+    input: HubAttachSurfaceInput
+  ): Promise<HubAttachSurfaceResult> {
+    return this.request<HubAttachSurfaceResult>(
+      "POST",
+      "/api/hub/surfaces/attach",
+      input
+    );
+  }
+
+  /** Take a surface off an object (DELETE /surfaces/attach); it stays. */
+  async detachSurface(input: {
+    anchor: { kind: HubSurfaceAnchorKind; id: string };
+    surface: HubSurfaceRef;
+    reasoning?: string;
+  }): Promise<HubDetachSurfaceResult> {
+    return this.request<HubDetachSurfaceResult>(
+      "DELETE",
+      "/api/hub/surfaces/attach",
+      input
     );
   }
 

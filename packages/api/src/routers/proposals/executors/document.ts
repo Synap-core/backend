@@ -1,5 +1,7 @@
 import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { TRPCError } from "@trpc/server";
+import { parseDeclaredReads } from "@synap-core/types/cell-bridge";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
@@ -10,6 +12,24 @@ import {
   podDocumentScopeFloor,
   resolveDocumentScopeFields,
 } from "../../../services/document-scope/document-scope.js";
+
+/** The `metadata.reads` an approved html page stores, re-checked. */
+function declaredPageReadsOf(data: Record<string, unknown>): {
+  metadata?: Record<string, unknown>;
+} {
+  if (data.reads === undefined || data.reads === null) return {};
+  const parsed =
+    data.type === "html"
+      ? parseDeclaredReads(data.reads)
+      : ({ ok: false, error: "only an html page declares reads" } as const);
+  if (!parsed.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `This document proposal declares reads a page may not ask (${parsed.error}), and nothing was written.`,
+    });
+  }
+  return { metadata: { reads: parsed.value } };
+}
 
 /** Register the document/* approve executors. */
 export function registerDocumentExecutors(): void {
@@ -51,6 +71,9 @@ export function registerDocumentExecutors(): void {
         workspaceId: proposal.workspaceId,
         sourceProposalId: input.proposalId,
         fields,
+        // An html page's declared reads (`documents.metadata.reads`), carried
+        // by the create door; re-checked against the ceiling, never trusted.
+        ...declaredPageReadsOf(data),
       });
 
       await transitionProposal(db, {

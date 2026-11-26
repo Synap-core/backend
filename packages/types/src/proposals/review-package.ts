@@ -383,6 +383,8 @@ const DATA_TARGETS: ReadonlySet<string> = new Set([
   "view",
   "bento",
   "whiteboard",
+  // A screen made for, put on or taken off one object (Surfaces P3).
+  "surface",
   "workspace",
   "proactive",
   "messaging",

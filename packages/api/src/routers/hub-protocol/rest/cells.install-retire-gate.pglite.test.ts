@@ -23,7 +23,13 @@
  *  - a retire of a cell that does not exist → 404, no proposal;
  *  - an agent's install → 202 proposed, nothing fetched, nothing written;
  *    approving it installs the cell in the reviewed space; a person installs
- *    directly.
+ *    directly;
+ *  - TRUST (Surfaces P6a): both person-approved installs stamp
+ *    `trust_level = 'installed'` (rules out "nothing writes installed", so an
+ *    installed cell's writes would still propose); an agent's define,
+ *    approved, stays `generated` and keeps its declared reads (rules out "an
+ *    approval of agent code makes it trusted"); a later non-install write
+ *    over an installed row demotes it to `generated`.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -132,6 +138,7 @@ import {
 } from "../../proposals/execution-registry.js";
 import { registerCellExecutors } from "../../proposals/executors/cell.js";
 import { registerCellsRoutes } from "./cells.js";
+import { defineCell } from "../../../services/cells/define-cell.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const ADMIN = randomUUID(); // pod admin, owner of WS
@@ -225,6 +232,13 @@ async function seedCell(typeKey: string, workspaceId: string | null) {
     [typeKey, workspaceId]
   );
 }
+const trustOf = async (typeKey: string, workspaceId: string | null) =>
+  (
+    await q<{ trust_level: string }>(
+      `select trust_level from widget_definitions where type_key = $1 and workspace_id is not distinct from $2`,
+      [typeKey, workspaceId]
+    )
+  ).rows[0]?.trust_level;
 const isActive = async (typeKey: string, workspaceId: string | null) =>
   (
     await q<{ is_active: boolean }>(
@@ -446,6 +460,8 @@ describe("POST /cells/install — an agent's install is a proposal", () => {
     const [row] = await proposalsFor("install");
     await approve("cell/install", row!, MEMBER);
     expect(await isActive("cell:pkg:gauge", WS)).toBe(true);
+    // A person approved installing it: its frame's writes are trusted.
+    expect(await trustOf("cell:pkg:gauge", WS)).toBe("installed");
     expect(h.fetches).toHaveLength(1);
     const [after] = await proposalsFor("install");
     expect(after!.status).toBe("approved");
@@ -464,6 +480,63 @@ describe("POST /cells/install — an agent's install is a proposal", () => {
       typeKey: "cell:pkg:gauge",
     });
     expect(await isActive("cell:pkg:gauge", WS)).toBe(true);
+    expect(await trustOf("cell:pkg:gauge", WS)).toBe("installed");
     expect((await proposalsFor("install")).length).toBe(before);
+  });
+});
+
+describe("trust: only a person's install stamps installed", () => {
+  const reads = [{ op: "entities.list", params: { profileSlug: "deal" } }];
+
+  it("an agent's define, approved, stays generated and keeps its declared reads", async () => {
+    const res = await call("POST", "/cells/define", {
+      asUser: MEMBER,
+      agentUserId: AGENT,
+      grant: AI_PRESET,
+      body: {
+        name: "Agent gauge",
+        rendererSource: "export default () => null",
+        workspaceId: WS,
+        reads,
+      },
+    });
+    expect(res.status).toBe(202);
+    const rows = await proposalsFor("define");
+    expect(rows).toHaveLength(1);
+    await approve("cell/define", rows[0]!, MEMBER);
+    const { rows: cell } = await q<{ trust_level: string; reads: unknown }>(
+      `select trust_level, reads from widget_definitions where type_key = 'generated:agent-gauge' and workspace_id = $1`,
+      [WS]
+    );
+    expect(cell[0]).toEqual({ trust_level: "generated", reads });
+  });
+
+  it("a declaration outside the ceiling is refused before anything is filed", async () => {
+    const before = (await proposalsFor("define")).length;
+    const res = await call("POST", "/cells/define", {
+      asUser: MEMBER,
+      agentUserId: AGENT,
+      grant: AI_PRESET,
+      body: {
+        name: "Greedy gauge",
+        rendererSource: "export default () => null",
+        workspaceId: WS,
+        reads: [{ op: "users.list" }],
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((await proposalsFor("define")).length).toBe(before);
+  });
+
+  it("a write over an installed row by another door demotes it to generated", async () => {
+    expect(await trustOf("cell:pkg:gauge", WS)).toBe("installed");
+    await defineCell({
+      name: "Gauge",
+      rendererSource: "export default () => null; // v2",
+      typeKey: "cell:pkg:gauge",
+      workspaceId: WS,
+      userId: MEMBER,
+    });
+    expect(await trustOf("cell:pkg:gauge", WS)).toBe("generated");
   });
 });
