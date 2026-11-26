@@ -8,6 +8,11 @@
  *   hostModules  the bundle's host-module set, or `notModified` when the
  *                caller already holds `knownSetSha256`; NOT_FOUND
  *                (`reasonCode: NO_RENDERER_BUNDLE`) when none is installed
+ *   updates      (pod admins) what the 10-minute pass last read about the
+ *                bundle's updates: the newest version, why it waits, a hold,
+ *                a refusal, a pause; null = never read
+ *                (`renderer-bundle-updates.ts`). Applying, Undo and Pause
+ *                are `packageUpdates.*`.
  *
  * A cell's source stays on `widgetDefinitions.get`. The Hub REST mirror of
  * `hostModules` is `GET /api/hub/renderers/host-modules` (ETag / 304).
@@ -15,7 +20,8 @@
  */
 
 import { z } from "zod";
-import { router, podProcedure } from "../trpc.js";
+import { router, podProcedure, podAdminProcedure } from "../trpc.js";
+import { readRendererBundleUpdateState } from "../services/renderers/renderer-bundle-updates.js";
 import {
   readRendererHostModules,
   readRendererStatus,
@@ -40,4 +46,6 @@ export const renderersRouter = router({
     .query(({ input }) =>
       readRendererHostModules({ knownSetSha256: input?.knownSetSha256 })
     ),
+
+  updates: podAdminProcedure.query(() => readRendererBundleUpdateState()),
 });

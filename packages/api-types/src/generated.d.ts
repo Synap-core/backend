@@ -13323,7 +13323,8 @@ declare const INSTALLED_PACKAGE_KINDS: readonly [
 	"view",
 	"skill",
 	"automation",
-	"agent"
+	"agent",
+	"renderer-bundle"
 ];
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 declare const PACKAGE_UPDATE_COMPARED_BY: readonly [
@@ -13540,9 +13541,13 @@ declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
 	"combine"
 ];
 export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
-/** One field an apply (or an undo) changed. */
+/**
+ * One field an apply (or an undo) changed. A renderer bundle's update is one
+ * change of its `version` (`rowKind: "renderer-bundle"`, `rowId` its slug):
+ * Undo puts the version kept on the pod back (`renderer_bundle_versions`).
+ */
 export interface PackageUpdateChange {
-	rowKind: PackageUpdateRowKind;
+	rowKind: PackageUpdateRowKind | "renderer-bundle";
 	rowId: string;
 	field: string;
 	before: unknown;
@@ -13586,6 +13591,61 @@ export type PackageUpdateApplyResult = {
 	proposalIds: string[];
 	status: "proposed";
 };
+declare const RENDERER_BUNDLE_HOLD_REASONS: readonly [
+	"requires",
+	"kit",
+	"undone",
+	"failed"
+];
+export type RendererBundleHoldReason = (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+declare const RENDERER_BUNDLE_WAIT_REASONS: readonly [
+	"soak",
+	"auto_off",
+	"setting_unreadable",
+	"paused",
+	"held",
+	"frozen",
+	"no_owner",
+	"refused"
+];
+export type RendererBundleWaitReason = (typeof RENDERER_BUNDLE_WAIT_REASONS)[number];
+/**
+ * What the pod knows about its renderer bundle's updates
+ * (`renderers.updates`), written by the after-sync pass every 10 minutes.
+ * Dates are ISO strings.
+ */
+export interface RendererBundleUpdateState {
+	slug: string;
+	/** The control plane's newest version; null = never read. */
+	latestVersion: string | null;
+	latestPublishedAt: string | null;
+	/** The last read of the control plane that answered. */
+	checkedAt: string | null;
+	/** Synap retired the version installed here: no wait. */
+	installedRetired: boolean;
+	/**
+	 * The last read or install refused (`reasonCode` is the pod's machine reason,
+	 * e.g. `renderer_bundle_plan_required`); null once one went through.
+	 */
+	refusal: {
+		at: string;
+		message: string;
+		reasonCode: string;
+	} | null;
+	/** A hold on one version (see RENDERER_BUNDLE_HOLD_REASONS). */
+	hold: {
+		at: string;
+		detail: string;
+		reason: RendererBundleHoldReason;
+		version: string;
+	} | null;
+	/** The owner paused this bundle's updates; null = updates on. */
+	pausedAt: string | null;
+	/** Why the newest version waits; null when nothing waits. */
+	waitReason: RendererBundleWaitReason | null;
+	/** When it applies on its own (`waitReason: "soak"` only). */
+	applyAfter: string | null;
+}
 declare const SHIP_STAGES: readonly [
 	"working",
 	"checks",
@@ -51699,6 +51759,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PackageUpdateList;
 		}>;
+		pauseUpdates: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				paused: boolean;
+				slug: string;
+			};
+			meta: object;
+			output: RendererBundleUpdateState | null;
+		}>;
 		undo: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				receiptId: string;
@@ -58447,6 +58515,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: RendererStatus;
+		}>;
+		updates: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: RendererBundleUpdateState | null;
 		}>;
 	}>>;
 	resourceState: import("@trpc/server").TRPCBuiltRouter<{

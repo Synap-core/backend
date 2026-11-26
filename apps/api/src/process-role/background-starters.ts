@@ -603,7 +603,12 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           notifyCapabilityUpdatesAvailable,
           installOfficialAgentTemplates,
           selfHealAgentTemplateLinks,
+          syncRendererBundleUpdates,
         } = await import("@synap/api");
+        const { readPodUpdateSettingsRaw } =
+          await import("../routers/pod-updates-deps.js");
+        const { resolvePodUpdateSettings } =
+          await import("../pod-updates/index.js");
         registerOfficialCatalogSyncedHandler(async () => {
           // The catalog installs every official agent template on every pod
           // (founder decision D8), then links the agents whose program is
@@ -612,6 +617,27 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           // skip them.
           await installOfficialAgentTemplates();
           await selfHealAgentTemplateLinks();
+          // Synap's renderer bundle: installed on a plan pod's first sync,
+          // updated under the pod's ONE update setting after its soak. Its
+          // own failure never stops the capability converge.
+          try {
+            let settings: { auto: boolean; channel: "stable" | "fast" } | null =
+              null;
+            try {
+              settings = resolvePodUpdateSettings(
+                await readPodUpdateSettingsRaw()
+              );
+            } catch (err) {
+              log.warn(
+                { err },
+                "Could not read the pod's update setting: no renderer update applies on its own this run"
+              );
+            }
+            const outcome = await syncRendererBundleUpdates({ settings });
+            log.info({ outcome }, "Renderer bundle update pass");
+          } catch (err) {
+            log.error({ err }, "Renderer bundle update pass FAILED");
+          }
           const report = await reconcileChangedCapabilityTemplates();
           if (report) await notifyCapabilityUpdatesAvailable(report);
         });

@@ -9404,7 +9404,7 @@
                           "comparedBy": {
                             "type": "string",
                             "enum": ["field", "package"],
-                            "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                            "description": "`field`: compared and applied field by field (view, skill, automation, agent template). `package`: applied as a whole through the kind's own door (workspace, capability, renderer bundle); no field rows."
                           },
                           "name": { "type": "string" },
                           "installedVersion": { "type": ["string", "null"] },
@@ -9467,7 +9467,8 @@
                               "view",
                               "skill",
                               "automation",
-                              "agent"
+                              "agent",
+                              "renderer-bundle"
                             ]
                           },
                           "name": { "type": "string" },
@@ -9542,7 +9543,7 @@
                     "comparedBy": {
                       "type": "string",
                       "enum": ["field", "package"],
-                      "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                      "description": "`field`: compared and applied field by field (view, skill, automation, agent template). `package`: applied as a whole through the kind's own door (workspace, capability, renderer bundle); no field rows."
                     },
                     "name": { "type": "string" },
                     "installedVersion": { "type": ["string", "null"] },
