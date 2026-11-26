@@ -185,6 +185,6 @@ named after the area touched, for example `fix(proposals): ...` or
    pull request.
 
 By contributing, you license your contribution to Synap on terms that let Synap
-distribute it under the project license ([PolyForm Noncommercial 1.0.0](LICENSE),
+distribute it under the project license ([Apache License 2.0](LICENSE),
 or the MIT License for the SDK and contract packages) and relicense it in the
 future. You keep your copyright. (Pending legal review.)
