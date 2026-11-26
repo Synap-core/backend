@@ -7019,6 +7019,7 @@ export interface CellBridgeDeclaredWrite {
 	op: CellBridgeWriteOp;
 }
 export type CellBridgeDeclaredWrites = CellBridgeDeclaredWrite[];
+declare const FRAME_READ_UNDECLARED: "FRAME_READ_UNDECLARED";
 /**
  * What a frame is ABOUT, and the brand it draws in (frame contract v3).
  *
@@ -26351,6 +26352,101 @@ export interface SurfaceWriteProposed {
 	proposalId: string;
 	reviewPath?: string;
 	reviewUrl?: string;
+}
+export interface TokenFinding {
+	source: string;
+	line: number;
+	column: number;
+	kind: "colour" | "font";
+	/** The text found, e.g. `#1a73e8`, `rgb(0 0 0)`, `Inter, sans-serif`. */
+	found: string;
+	/** The CSS property it is set on, when one is written before it. */
+	property: string | null;
+	/** The token to use instead. */
+	suggestion: string;
+}
+declare const A11Y_RULES: readonly [
+	"img-alt",
+	"button-name",
+	"link-name",
+	"field-label",
+	"heading-order"
+];
+export type A11yRule = (typeof A11Y_RULES)[number];
+export interface A11yFinding {
+	source: string;
+	line: number;
+	rule: A11yRule;
+	/** The opening tag as written (cut at 120 characters). */
+	element: string;
+	message: string;
+}
+declare const INSPECT_SURFACE_KINDS: readonly [
+	"cell",
+	"document",
+	"view"
+];
+export type InspectSurfaceKind = (typeof INSPECT_SURFACE_KINDS)[number];
+export type Section<T> = ({
+	status: "ok";
+} & T) | {
+	reason: string;
+	status: "unavailable";
+};
+export interface OpCount {
+	op: string;
+	count: number;
+	lastAt: string;
+}
+/** What one logged surface (a cell type or a page) read. */
+export interface SurfaceReads {
+	surfaceKind: "cell" | "document";
+	key: string;
+	/** What it declares; null = it declares nothing (every read answered). */
+	declared: CellBridgeDeclaredReads | null;
+	used: OpCount[];
+	refused: Array<OpCount & {
+		code: typeof FRAME_READ_UNDECLARED;
+	}>;
+	declaredUnused: string[];
+	/** Ops it asked for that the declaration does not name (all, when it declares nothing). */
+	usedUndeclared: string[];
+}
+export interface ReadsReport {
+	days: number;
+	since: string;
+	surfaces: SurfaceReads[];
+	/** Cells whose reads do not go through the frame read door. */
+	notLogged: Array<{
+		key: string;
+		reason: string;
+	}>;
+}
+export interface LintReport<F> {
+	findings: F[];
+	linted: string[];
+	notLinted: Array<{
+		reason: string;
+		source: string;
+	}>;
+}
+export interface SurfaceInspection {
+	surface: {
+		/** view: the cell types it places. */
+		cellKeys?: string[];
+		id: string | null;
+		kind: InspectSurfaceKind;
+		title: string;
+		typeKey: string | null;
+		workspaceId: string | null;
+	};
+	reads: Section<ReadsReport>;
+	tokens: Section<LintReport<TokenFinding>>;
+	a11y: Section<LintReport<A11yFinding>>;
+	render: {
+		reason: string;
+		status: "unavailable";
+	};
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -61559,6 +61655,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: SurfacesForObject;
+		}>;
+		inspect: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				days?: number | undefined;
+				surface: {
+					id?: string | undefined;
+					kind: "cell" | "document" | "view";
+					typeKey?: string | undefined;
+				};
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: SurfaceInspection;
 		}>;
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

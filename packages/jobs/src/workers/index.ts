@@ -106,6 +106,10 @@ import {
   handleApiUsageRetention,
 } from "./api-usage-retention.js";
 import {
+  FRAME_READ_LOG_RETENTION_QUEUE,
+  handleFrameReadLogRetention,
+} from "./frame-read-log-retention.js";
+import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_RECEIPTS_QUEUE,
   handlePushDeviceSweep,
@@ -408,6 +412,8 @@ const ALL_QUEUES = [
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   // API usage telemetry: 30-day retention of api_usage_buckets (0364).
   API_USAGE_RETENTION_QUEUE,
+  // Frame read log: 30-day retention of frame_read_log (0456, Surfaces P7).
+  FRAME_READ_LOG_RETENTION_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
   PUSH_RECEIPTS_QUEUE,
   // An owed ask back from the person's Later (one job per Later, handler slot, IoC).
@@ -953,6 +959,12 @@ export async function registerAllWorkers(): Promise<void> {
     await handleApiUsageRetention();
   });
   logger.info("Registered worker: api-usage-retention");
+
+  // Frame read log retention (cron: daily at 2:35 AM UTC)
+  await boss.work(FRAME_READ_LOG_RETENTION_QUEUE, async () => {
+    await handleFrameReadLogRetention();
+  });
+  logger.info("Registered worker: frame-read-log-retention");
 
   // Phone push hygiene (receipts: ~15 min after each send; sweep: daily)
   await boss.work(PUSH_RECEIPTS_QUEUE, async ([job]: any[]) =>

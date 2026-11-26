@@ -3,6 +3,8 @@
  * writes (P3).
  *
  * GET /surfaces?kind=<anchor kind>&id=<anchor id>[&workspaceId=]
+ * GET /surfaces/inspect?kind=cell|document|view&id=|typeKey=[&workspaceId=&days=]
+ *                             what one framed surface does (`inspectSurface`, P7)
  * POST /surfaces              make a surface FOR an object (`surface/create`)
  * POST /surfaces/attach       put an existing surface on it (`surface/attach`)
  * DELETE /surfaces/attach     take it off (`surface/detach`)
@@ -44,6 +46,10 @@ import { resolveVerifiedSessionId } from "../_middleware/session.js";
 
 import { AccessContext } from "../../../access/context.js";
 import { surfacesForObject } from "../../../services/surfaces/for-object.js";
+import {
+  INSPECT_SURFACE_KINDS,
+  inspectSurface,
+} from "../../../services/surfaces/inspect.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -86,6 +92,36 @@ const SurfaceRowSchema = z.object({
 const SurfacesResponseSchema = z.object({
   rows: z.array(SurfaceRowSchema),
   unavailable: z.array(z.object({ source: z.string(), error: z.string() })),
+});
+
+const InspectQuerySchema = z.object({
+  kind: z.enum(INSPECT_SURFACE_KINDS),
+  id: z.string().uuid().optional(),
+  typeKey: z.string().min(1).max(200).optional(),
+  workspaceId: z.string().uuid().optional(),
+  days: z.coerce.number().int().min(1).max(30).optional(),
+});
+
+const InspectSectionSchema = z
+  .object({
+    status: z.enum(["ok", "unavailable"]),
+    reason: z.string().optional(),
+  })
+  .passthrough();
+
+const InspectResponseSchema = z.object({
+  surface: z.object({
+    kind: z.enum(INSPECT_SURFACE_KINDS),
+    id: z.string().nullable(),
+    typeKey: z.string().nullable(),
+    title: z.string(),
+    workspaceId: z.string().nullable(),
+    cellKeys: z.array(z.string()).optional(),
+  }),
+  reads: InspectSectionSchema,
+  tokens: InspectSectionSchema,
+  a11y: InspectSectionSchema,
+  render: z.object({ status: z.literal("unavailable"), reason: z.string() }),
 });
 
 const WriteAnchorSchema = z.object({
@@ -273,6 +309,84 @@ export function registerSurfacesRoutes(app: HubHono): void {
     } catch (err) {
       const status = httpStatusForTrpcError(err);
       if (status >= 500) logger.error({ err }, "surfaces.forObject failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        status
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/surfaces/inspect",
+    tags: ["Surfaces"],
+    summary: "Inspect one framed surface",
+    description:
+      "Before you hand a surface over, read what it does: `kind` cell (by " +
+      "`typeKey`, or a cell instance `id`), document (an HTML page `id`) or " +
+      "view (`id`: the cells it places). Four sections, each " +
+      "`{status:'ok', …}` or `{status:'unavailable', reason}`: `reads` (what " +
+      "the frame read door logged in the last `days` days, at most 30: ops " +
+      "used, refused, declared but unused, asked but undeclared), `tokens` " +
+      "(hard-coded colours and fonts, each with its line and the token to " +
+      "use), `a11y` (static HTML accessibility lint) and `render` (always " +
+      "unavailable on the pod: no browser). 404 when the surface does not " +
+      "exist or you cannot see it.",
+    request: { query: InspectQuerySchema },
+    responses: {
+      200: { description: "The inspection", schema: InspectResponseSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "No such surface", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/surfaces/inspect", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const parsed = InspectQuerySchema.safeParse({
+      kind: c.req.query("kind") || undefined,
+      id: c.req.query("id") || undefined,
+      typeKey: c.req.query("typeKey") || undefined,
+      workspaceId: c.req.query("workspaceId") || undefined,
+      days: c.req.query("days") || undefined,
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid query", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const { kind, id, typeKey, workspaceId, days } = parsed.data;
+    if (!id && !(kind === "cell" && typeKey)) {
+      return c.json(
+        { error: "Pass the surface's id (or a cell's typeKey)." },
+        400
+      );
+    }
+    const userId = c.get("userId") as string;
+    try {
+      const inspection = await inspectSurface(
+        {
+          userId,
+          access: AccessContext.agent({
+            userId,
+            agentUserId: c.get("agentUserId") as string | undefined,
+          }),
+        },
+        {
+          surface: { kind, id, typeKey },
+          // A workspace-bound key reads its own space only.
+          workspaceId: getConfinedWorkspace(c, workspaceId) ?? null,
+          days,
+        }
+      );
+      return c.json(inspection);
+    } catch (err) {
+      const status = httpStatusForTrpcError(err);
+      if (status >= 500) logger.error({ err }, "surfaces.inspect failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         status

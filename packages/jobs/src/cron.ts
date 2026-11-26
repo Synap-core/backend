@@ -124,6 +124,10 @@ import {
   API_USAGE_RETENTION_QUEUE,
 } from "./workers/api-usage-retention.js";
 import {
+  FRAME_READ_LOG_RETENTION_CRON,
+  FRAME_READ_LOG_RETENTION_QUEUE,
+} from "./workers/frame-read-log-retention.js";
+import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_DEVICE_SWEEP_CRON,
 } from "./workers/push-devices.js";
@@ -521,6 +525,17 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: api-usage-retention (daily at 2:25 AM UTC)");
+
+  // Frame read log keeps 30 days (frame_read_log, 0456; read by surfaces.inspect).
+  await scheduleSafe(
+    boss,
+    FRAME_READ_LOG_RETENTION_QUEUE,
+    FRAME_READ_LOG_RETENTION_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: frame-read-log-retention (daily at 2:35 AM UTC)"
+  );
 
   // Phones unused for 90 days stop getting pushes (daily at 2:50 AM UTC).
   await scheduleSafe(boss, PUSH_DEVICE_SWEEP_QUEUE, PUSH_DEVICE_SWEEP_CRON, {});
