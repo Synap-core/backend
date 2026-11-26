@@ -93,6 +93,11 @@ const cellsIn = async (ws: string) =>
 
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
+  // The edge `link` writes beside the relation (`attaches`) lands on this
+  // unique index (the DDL helper carries no unique indexes).
+  await h.client!.exec(
+    `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
+  );
   for (const [ws, owner] of [
     [WA, ALICE],
     [WB, BOB],
