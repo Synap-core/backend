@@ -33,14 +33,28 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS = resolve(HERE, "../..");
 const MODEL = process.env.SURFACES_EVAL_MODEL || "claude-opus-5-5";
 const BAR = { prompts: 24, adversarial: 7 };
-const BODIES = ["view", "document", "bento", "html", "whiteboard", "renderer", "cell", "site"];
+const BODIES = [
+  "view",
+  "document",
+  "bento",
+  "html",
+  "whiteboard",
+  "renderer",
+  "cell",
+  "site",
+];
 
 // ── prompts.yaml: the flat subset it is written in (no YAML library) ─────────
 export function parsePrompts(text) {
   const sections = {};
   let section = null;
   let item = null;
-  for (const raw of text.split("\n")) {
+  // A flow list prettier wrapped over several lines is joined back into one.
+  const flat = text.replace(
+    /:[ \t]*\n\s*\[([^\]]*)\]/g,
+    (_, inner) => `: [${inner.replace(/\s+/g, " ")}]`
+  );
+  for (const raw of flat.split("\n")) {
     const line = raw.replace(/\s+$/, "");
     if (!line || line.trimStart().startsWith("#")) continue;
     const top = /^([a-z]+):$/.exec(line);
@@ -53,7 +67,11 @@ export function parsePrompts(text) {
     if (kv[1]) section.push((item = {}));
     const value = kv[3];
     item[kv[2]] = value.startsWith("[")
-      ? value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean)
+      ? value
+          .slice(1, -1)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
       : value === "true" || value === "false"
         ? value === "true"
         : value.startsWith('"')
@@ -63,10 +81,12 @@ export function parsePrompts(text) {
   for (const [name, items] of Object.entries(sections)) {
     for (const it of items) {
       for (const key of ["id", "prompt", "expectBody", "expectDoor", "why"]) {
-        if (it[key] === undefined) throw new Error(`prompts.yaml ${name}/${it.id}: no ${key}`);
+        if (it[key] === undefined)
+          throw new Error(`prompts.yaml ${name}/${it.id}: no ${key}`);
       }
       const bad = it.expectBody.filter((b) => !BODIES.includes(b));
-      if (bad.length) throw new Error(`prompts.yaml ${it.id}: unknown body ${bad}`);
+      if (bad.length)
+        throw new Error(`prompts.yaml ${it.id}: unknown body ${bad}`);
     }
   }
   return sections;
@@ -79,16 +99,21 @@ function systemPrompt() {
   if (process.env.SURFACES_EVAL_CORE === "full") {
     core = readFileSync(join(SKILLS, "synap/SKILL.md"), "utf8");
   } else {
-    const teaching = JSON.parse(readFileSync(join(SKILLS, "_teaching.json"), "utf8"));
+    const teaching = JSON.parse(
+      readFileSync(join(SKILLS, "_teaching.json"), "utf8")
+    );
     core = Object.entries(teaching)
-      .filter(([k, v]) => k.startsWith("synap/") && typeof v === "object" && v.alwaysOn)
+      .filter(
+        ([k, v]) =>
+          k.startsWith("synap/") && typeof v === "object" && v.alwaysOn
+      )
       .map(([k]) => readFileSync(join(SKILLS, `${k}.md`), "utf8"))
       .join("\n\n---\n\n");
   }
   return [
     "You are an agent connected to the person's Synap pod. These are the skills you have loaded.",
-    "<skill name=\"synap\">\n" + core + "\n</skill>",
-    "<skill name=\"surfaces\">\n" + surfaces + "\n</skill>",
+    '<skill name="synap">\n' + core + "\n</skill>",
+    '<skill name="surfaces">\n' + surfaces + "\n</skill>",
   ].join("\n\n");
 }
 
@@ -114,9 +139,12 @@ function lastJson(text) {
 
 export function grade(item, answer) {
   const misses = [];
-  if (!item.expectBody.includes(answer.body)) misses.push(`body ${answer.body}`);
-  if (!item.expectDoor.includes(answer.door)) misses.push(`door ${answer.door}`);
-  if (item.attached && !answer.attachedTo) misses.push("not anchored to one object");
+  if (!item.expectBody.includes(answer.body))
+    misses.push(`body ${answer.body}`);
+  if (!item.expectDoor.includes(answer.door))
+    misses.push(`door ${answer.door}`);
+  if (item.attached && !answer.attachedTo)
+    misses.push("not anchored to one object");
   if (item.expectViewType && !item.expectViewType.includes(answer.viewType))
     misses.push(`viewType ${answer.viewType}`);
   return misses;
@@ -124,7 +152,9 @@ export function grade(item, answer) {
 
 async function loadSdk() {
   const require = createRequire(join(process.cwd(), "noop.js"));
-  const mod = await import(pathToFileURL(require.resolve("@anthropic-ai/sdk")).href);
+  const mod = await import(
+    pathToFileURL(require.resolve("@anthropic-ai/sdk")).href
+  );
   return mod.default;
 }
 
@@ -137,11 +167,19 @@ async function main() {
   try {
     Anthropic = await loadSdk();
   } catch {
-    console.error("NOT RUN: @anthropic-ai/sdk is not installed in the current directory (npm i @anthropic-ai/sdk).");
+    console.error(
+      "NOT RUN: @anthropic-ai/sdk is not installed in the current directory (npm i @anthropic-ai/sdk)."
+    );
     process.exit(2);
   }
   const client = new Anthropic();
-  const system = [{ type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } }];
+  const system = [
+    {
+      type: "text",
+      text: systemPrompt(),
+      cache_control: { type: "ephemeral" },
+    },
+  ];
   const results = {};
   for (const [name, items] of Object.entries(sets)) {
     results[name] = [];
@@ -165,7 +203,9 @@ async function main() {
         misses = grade(item, answer);
       } catch (err) {
         if (err instanceof Anthropic.AuthenticationError) {
-          console.error("NOT RUN: no valid Anthropic credential (ANTHROPIC_API_KEY or `ant auth login`).");
+          console.error(
+            "NOT RUN: no valid Anthropic credential (ANTHROPIC_API_KEY or `ant auth login`)."
+          );
           process.exit(2);
         }
         if (err instanceof Anthropic.APIError) {
@@ -176,8 +216,16 @@ async function main() {
         misses = ["no answer"];
       }
       const pass = misses.length === 0;
-      results[name].push({ id: item.id, prompt: item.prompt, pass, misses, answer });
-      console.log(`${pass ? "PASS" : "FAIL"} ${item.id} ${JSON.stringify(item.prompt)} → ${answer.body ?? "?"} / ${answer.door ?? "?"}${answer.attachedTo ? ` on ${answer.attachedTo}` : ""}${pass ? "" : `  (${misses.join("; ")})`}`);
+      results[name].push({
+        id: item.id,
+        prompt: item.prompt,
+        pass,
+        misses,
+        answer,
+      });
+      console.log(
+        `${pass ? "PASS" : "FAIL"} ${item.id} ${JSON.stringify(item.prompt)} → ${answer.body ?? "?"} / ${answer.door ?? "?"}${answer.attachedTo ? ` on ${answer.attachedTo}` : ""}${pass ? "" : `  (${misses.join("; ")})`}`
+      );
     }
   }
   const score = (n) => (results[n] ?? []).filter((r) => r.pass).length;
@@ -186,7 +234,9 @@ async function main() {
     core: process.env.SURFACES_EVAL_CORE === "full" ? "full" : "alwaysOn",
     prompts: `${score("prompts")}/${results.prompts.length}`,
     adversarial: `${score("adversarial")}/${results.adversarial.length}`,
-    pass: score("prompts") >= BAR.prompts && score("adversarial") >= BAR.adversarial,
+    pass:
+      score("prompts") >= BAR.prompts &&
+      score("adversarial") >= BAR.adversarial,
   };
   console.log(`SUMMARY ${JSON.stringify(summary)}`);
   if (out) writeFileSync(out, JSON.stringify({ summary, results }, null, 2));

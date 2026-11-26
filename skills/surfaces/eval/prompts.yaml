@@ -93,7 +93,13 @@ prompts:
   - id: p16
     prompt: "Show deals as a funnel chart"
     expectBody: [bento, cell, document]
-    expectDoor: [synap_create_view, synap_update_view, synap_create_document, synap_create_surface]
+    expectDoor:
+      [
+        synap_create_view,
+        synap_update_view,
+        synap_create_document,
+        synap_create_surface,
+      ]
     why: "The catalog has chart-funnel: catalog before generate."
   - id: p17
     prompt: "A chart the catalog does not have: a cohort heatmap of retention"
@@ -161,7 +167,13 @@ adversarial:
   - id: a03
     prompt: "Show the pipeline as a funnel"
     expectBody: [bento, cell, document]
-    expectDoor: [synap_create_view, synap_update_view, synap_create_document, synap_create_surface]
+    expectDoor:
+      [
+        synap_create_view,
+        synap_update_view,
+        synap_create_document,
+        synap_create_surface,
+      ]
     why: "Was 'generate a frame'; chart-funnel is a catalog cell."
   - id: a04
     prompt: "Build me a dashboard to keep an eye on Project Eve"

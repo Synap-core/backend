@@ -56,7 +56,11 @@ function retiredTopics(): Topic[] {
       .filter((f) =>
         RETIRED_MARK.test(readFileSync(join(SKILLS_DIR, pkg, f), "utf8"))
       )
-      .map((f) => ({ pkg, stem: f.slice(0, -3), file: join(SKILLS_DIR, pkg, f) }))
+      .map((f) => ({
+        pkg,
+        stem: f.slice(0, -3),
+        file: join(SKILLS_DIR, pkg, f),
+      }))
   );
 }
 

@@ -17,6 +17,7 @@ metadata:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY
     homepage: https://synap.live
-    capabilities: [surfaces, views, documents, bento, html, whiteboard, cells, renderers]
+    capabilities:
+      [surfaces, views, documents, bento, html, whiteboard, cells, renderers]
     os: [macos, linux, windows]
     userInvocable: false
