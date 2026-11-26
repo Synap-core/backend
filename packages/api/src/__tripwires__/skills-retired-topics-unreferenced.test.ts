@@ -14,7 +14,7 @@
  *      carries a redirect);
  *   2. its `_teaching.json` entry teaches no tool (it never ranks for one);
  *   3. no other skill text names it: every `*.md` under `skills/` (the
- *      assembled `SKILL.md` and `README.md` included), every `_skill.yaml`,
+ *      assembled `SKILL.md` bundles and the package readmes included), every `_skill.yaml`,
  *      every other `_teaching.json` summary, and every MCP tool description in
  *      the committed manifest (the served wire text).
  *
@@ -52,7 +52,9 @@ function packages(): string[] {
 function retiredTopics(): Topic[] {
   return packages().flatMap((pkg) =>
     readdirSync(join(SKILLS_DIR, pkg))
-      .filter((f) => f.endsWith(".md") && f !== "SKILL.md" && f !== "README.md")
+      // A bundle opens with frontmatter and a readme with its title: only a
+      // stub carries the mark, so no file needs excluding by name.
+      .filter((f) => f.endsWith(".md"))
       .filter((f) =>
         RETIRED_MARK.test(readFileSync(join(SKILLS_DIR, pkg, f), "utf8"))
       )
