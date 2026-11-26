@@ -37,6 +37,8 @@ import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import {
   needsYouSlotClassSql,
   sessionAgentEventClocks,
+  sessionLastAgentActivitySql,
+  sessionLastAgentWorkSql,
   sessionStoppedOnItsAsksWhere,
   SLOT_ENDS_WITH_SESSION_SQL,
 } from "./needs-you-predicate.js";
@@ -683,6 +685,59 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
         page.map((p) => ({ source, rulesOut: p.rulesOut, cls: p.want }))
       );
     }
+  });
+
+  it("the joined clocks read a room many sessions share for each of them", async () => {
+    // The GitHub dev-loop runs share ONE room: the room terms are grouped by
+    // channel and must fan back out to every session of the page in it. Rules
+    // out a room clock keyed by session (the second session reads NULL), a
+    // question counted as work, and a session with no room reading another's.
+    const room = randomUUID();
+    const post = (author: string, ts: string, kind: string) =>
+      client.query(
+        `insert into messages (id, channel_id, author_type, timestamp, metadata) values ($1, $2, $3, $4, $5::jsonb)`,
+        [randomUUID(), room, author, ts, JSON.stringify({ roomPost: { kind } })]
+      );
+    await post("ai_agent", ago(5 * DAY), "update");
+    await post("ai_agent", ago(2 * DAY), "question");
+    await post("bot", ago(DAY), "update");
+    const ids: string[] = [];
+    for (const channel of [room, room, null]) {
+      const id = randomUUID();
+      await client.query(
+        `insert into focus_sessions (id, status, expected_outputs, channel_id, started_at, updated_at)
+         values ($1, 'active', '[]'::jsonb, $2, $3, $4)`,
+        [id, channel, ago(10 * DAY), NOW.toISOString()]
+      );
+      ids.push(id);
+    }
+    const list = drizzleSql.join(
+      ids.map((id) => drizzleSql`${id}::uuid`),
+      drizzleSql`, `
+    );
+    const read = async (clocks?: ReturnType<typeof sessionAgentEventClocks>) =>
+      run(drizzleSql`
+        select fs.id::text as id,
+               (${sessionLastAgentActivitySql("fs", clocks)})::text as activity,
+               (${sessionLastAgentWorkSql("fs", clocks)})::text as work
+        from focus_sessions fs
+        ${clocks ? drizzleSql`left join ${clocks.table} on ${clocks.on}` : drizzleSql``}
+        where fs.id in (${list})
+        order by fs.id`);
+    const perRow = await read();
+    // Non-vacuity: both sessions in the room read its posts, and they differ.
+    const inRoom = perRow.filter((r) => r.id !== ids[2]);
+    expect(inRoom).toHaveLength(2);
+    for (const r of inRoom) {
+      expect(r.activity).not.toBeNull();
+      expect(r.work).not.toBeNull();
+      expect(r.activity).not.toBe(r.work);
+    }
+    expect(perRow.find((r) => r.id === ids[2])).toMatchObject({
+      activity: null,
+      work: null,
+    });
+    expect(await read(sessionAgentEventClocks("fs", ids))).toEqual(perRow);
   });
 
   it("a grade waiting on its output is in no list; delivered, it needs you (W5)", async () => {

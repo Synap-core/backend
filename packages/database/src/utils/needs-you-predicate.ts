@@ -25,7 +25,9 @@
  * the founder's pod, 2026-11-26: 2.7 ms × 100 sessions per term, ~555 ms of
  * a 594 ms owed read). The clocks read the same two maxima in ONE grouped
  * pass for the whole page (~40 ms) and slot in for exactly those terms; the
- * rest of each formula is unchanged, and the parity test runs both.
+ * rest of each formula is unchanged, and the parity test runs both. They
+ * carry the two room-`messages` terms too, grouped by channel (a room many
+ * sessions share was walked once per session).
  *
  * Two choices keep the twins EXACT (see the rule's header): `owedSince` is
  * compared as text, `COLLATE "C"`, only in the canonical `toISOString()` form
@@ -67,16 +69,25 @@ function at(ms: number): SQL {
 }
 
 /**
- * The two `events` terms of the agent evidence, read for a PAGE of sessions
- * in one grouped pass and LEFT JOINed onto it (`.leftJoin(c.table, c.on)`):
- * `write` is the newest agent event on the session, `work` the newest one
- * that is not the asking itself. Each is NULL when the session has none,
- * exactly as the correlated `max()` it replaces. Pass the clocks to the
- * fragments below (`sessionLastAgentActivitySql(s, clocks)`, …) of a query
- * that joins them; never to one that does not.
+ * The `events` and room-`messages` terms of the agent evidence, read for a
+ * PAGE of sessions in one grouped pass each and LEFT JOINed onto it
+ * (`.leftJoin(c.table, c.on)`): `write` is the newest agent event on the
+ * session, `work` the newest one that is not the asking itself; `post` is the
+ * newest agent message in the session's room, `workPost` the newest one that
+ * is not a question. Each is NULL when the session has none, exactly as the
+ * correlated `max()` it replaces. Pass the clocks to the fragments below
+ * (`sessionLastAgentActivitySql(s, clocks)`, …) of a query that joins them;
+ * never to one that does not.
+ *
+ * The room terms are grouped by CHANNEL: many sessions share one room (the
+ * GitHub dev-loop runs, measured on the founder's pod 2026-11-26: 57,207
+ * sessions, one channel, 61,387 `bot` messages and no agent post), so the
+ * correlated read walked that whole channel once PER SESSION on the
+ * `(channel_id, timestamp)` index looking for an `ai_agent` row (29 ms each,
+ * twice per session). The grouped pass reads each room of the page once.
  */
 export interface SessionAgentEventClocks {
-  /** The grouped read, aliased `ny_ev`: one row per session with agent events. */
+  /** The grouped read, aliased `ny_ev`: one row per session of the page. */
   table: SQL;
   /** The join condition onto the session alias. */
   on: SQL;
@@ -84,6 +95,10 @@ export interface SessionAgentEventClocks {
   write: SQL;
   /** SQL timestamptz: the newest agent event that is not asking, or NULL. */
   work: SQL;
+  /** SQL timestamptz: the newest agent post in the session's room, or NULL. */
+  post: SQL;
+  /** SQL timestamptz: the newest agent post that is not a question, or NULL. */
+  workPost: SQL;
 }
 
 /**
@@ -99,33 +114,59 @@ export function sessionAgentEventClocks(
   const list = Array.isArray(sessionIds)
     ? (sessionIds as readonly string[])
     : null;
-  const ids = !list
-    ? (sessionIds as SQL)
-    : list.length > 0
-      ? drizzleSql.join(
-          list.map((id) => drizzleSql`${id}`),
-          drizzleSql`, `
-        )
-      : drizzleSql`NULL`;
+  const ids = (): SQL =>
+    !list
+      ? (sessionIds as SQL)
+      : list.length > 0
+        ? drizzleSql.join(
+            list.map((id) => drizzleSql`${id}`),
+            drizzleSql`, `
+          )
+        : drizzleSql`NULL`;
   return {
     table: drizzleSql`(
-      SELECT ny_ev_e.session_id,
-             max(ny_ev_e.timestamp) AS write_at,
-             max(ny_ev_e.timestamp)
-               FILTER (WHERE ny_ev_e.type NOT IN (${ASKING_EVENTS})) AS work_at
-        FROM events ny_ev_e
-       WHERE ny_ev_e.agent_user_id IS NOT NULL
-         AND ny_ev_e.session_id IN (${ids})
-       GROUP BY ny_ev_e.session_id
+      SELECT ny_ev_s.id AS session_id,
+             ny_ev_e.write_at, ny_ev_e.work_at,
+             ny_ev_m.post_at, ny_ev_m.work_post_at
+        FROM focus_sessions ny_ev_s
+        LEFT JOIN (
+          SELECT ny_ev_ee.session_id,
+                 max(ny_ev_ee.timestamp) AS write_at,
+                 max(ny_ev_ee.timestamp)
+                   FILTER (WHERE ny_ev_ee.type NOT IN (${ASKING_EVENTS})) AS work_at
+            FROM events ny_ev_ee
+           WHERE ny_ev_ee.agent_user_id IS NOT NULL
+             AND ny_ev_ee.session_id IN (${ids()})
+           GROUP BY ny_ev_ee.session_id
+        ) ny_ev_e ON ny_ev_e.session_id = ny_ev_s.id
+        LEFT JOIN (
+          SELECT ny_ev_mm.channel_id,
+                 max(ny_ev_mm.timestamp) AS post_at,
+                 max(ny_ev_mm.timestamp)
+                   FILTER (WHERE (ny_ev_mm.metadata->'roomPost'->>'kind') IS DISTINCT FROM ${NEEDS_YOU_QUESTION_POST_KIND}) AS work_post_at
+            FROM messages ny_ev_mm
+           WHERE ny_ev_mm.author_type = ${MessageAuthorType.AI_AGENT}
+             AND ny_ev_mm.channel_id IN (
+               SELECT ny_ev_c.channel_id FROM focus_sessions ny_ev_c
+                WHERE ny_ev_c.id IN (${ids()})
+             )
+           GROUP BY ny_ev_mm.channel_id
+        ) ny_ev_m ON ny_ev_m.channel_id = ny_ev_s.channel_id
+       WHERE ny_ev_s.id IN (${ids()})
     ) ny_ev`,
     on: drizzleSql`ny_ev.session_id = ${col(s, "id")}`,
     write: drizzleSql.raw("ny_ev.write_at"),
     work: drizzleSql.raw("ny_ev.work_at"),
+    post: drizzleSql.raw("ny_ev.post_at"),
+    workPost: drizzleSql.raw("ny_ev.work_post_at"),
   };
 }
 
-/** The `events` evidence of a session: the joined clocks, else its own read. */
-type EventClocks = Pick<SessionAgentEventClocks, "write" | "work">;
+/** The joined evidence of a session: the page's clocks, else its own reads. */
+type EventClocks = Pick<
+  SessionAgentEventClocks,
+  "write" | "work" | "post" | "workPost"
+>;
 
 /**
  * SQL timestamptz: the newest WRITE an agent filed in the session aliased
@@ -153,9 +194,12 @@ export function sessionLastAgentWriteSql(s: string, clocks?: EventClocks): SQL {
  */
 export function sessionLastAgentMarkSql(s: string, clocks?: EventClocks): SQL {
   return drizzleSql`GREATEST(
-    (SELECT max(ny_m.timestamp) FROM messages ny_m
+    ${
+      clocks?.post ??
+      drizzleSql`(SELECT max(ny_m.timestamp) FROM messages ny_m
        WHERE ny_m.channel_id = ${col(s, "channel_id")}
-         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
+         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT})`
+    },
     ${sessionLastAgentWriteSql(s, clocks)}
   )`;
 }
@@ -183,10 +227,13 @@ export function sessionLastAgentActivitySql(
  */
 export function sessionLastAgentWorkSql(s: string, clocks?: EventClocks): SQL {
   return drizzleSql`GREATEST(
-    (SELECT max(ny_wm.timestamp) FROM messages ny_wm
+    ${
+      clocks?.workPost ??
+      drizzleSql`(SELECT max(ny_wm.timestamp) FROM messages ny_wm
        WHERE ny_wm.channel_id = ${col(s, "channel_id")}
          AND ny_wm.author_type = ${MessageAuthorType.AI_AGENT}
-         AND (ny_wm.metadata->'roomPost'->>'kind') IS DISTINCT FROM ${NEEDS_YOU_QUESTION_POST_KIND}),
+         AND (ny_wm.metadata->'roomPost'->>'kind') IS DISTINCT FROM ${NEEDS_YOU_QUESTION_POST_KIND})`
+    },
     (SELECT max(ny_wt.updated_at) FROM chat_turns ny_wt
        WHERE ny_wt.channel_id = ${col(s, "channel_id")}),
     (SELECT max(ny_wp.created_at) FROM proposals ny_wp
