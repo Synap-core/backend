@@ -237,11 +237,7 @@ export async function frameRead(
     if (input.surface.kind === "cell") {
       surface = await loadCellSurface(input.surface.typeKey, lens);
     } else {
-      const draft = await loadDraftSurface(
-        userId,
-        input.surface.draftId,
-        lens
-      );
+      const draft = await loadDraftSurface(userId, input.surface.draftId, lens);
       notYours = !draft.mine;
       surface = draft;
     }
@@ -257,8 +253,7 @@ export async function frameRead(
   const declared = surface.declared !== null;
   const allowed =
     !notYours &&
-    (surface.declared === null ||
-      isReadDeclared(surface.declared, op, params));
+    (surface.declared === null || isReadDeclared(surface.declared, op, params));
 
   // Logged before anything is answered: a refused read is a fact too.
   await db.insert(frameReadLog).values({
