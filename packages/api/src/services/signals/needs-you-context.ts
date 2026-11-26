@@ -73,6 +73,10 @@ import {
   type MediaRef,
 } from "@synap-core/types/presentation";
 import type { ProposalWaits } from "@synap-core/types/proposals/fate";
+import {
+  proposalObjectsOf,
+  type ProposalLandedRow,
+} from "@synap-core/types/proposals/landed";
 import { isUuid } from "@synap-core/types/property-render";
 import type { ExpectedOutput } from "@synap/playbooks";
 
@@ -110,14 +114,11 @@ function isSubjectKind(kind: string): kind is RequestSubjectKind {
   return (REQUEST_SUBJECT_KINDS as readonly string[]).includes(kind);
 }
 
-/** A proposal's target, when it names an in-pod object this read resolves. */
-function proposalTargetRef(p: {
-  targetType: string;
-  targetId: string;
-}): SubjectRef | null {
-  return isSubjectKind(p.targetType) && isUuid(p.targetId)
-    ? { kind: p.targetType, id: p.targetId }
-    : null;
+/** The objects a proposal names (`proposalObjectsOf`) that this read resolves. */
+function proposalSubjectRefs(p: ProposalLandedRow): SubjectRef[] {
+  return proposalObjectsOf(p).flatMap((o): SubjectRef[] =>
+    isSubjectKind(o.kind) ? [{ kind: o.kind, id: o.id }] : []
+  );
 }
 
 const refKey = (r: SubjectRef) =>
@@ -385,8 +386,8 @@ export async function readNeedsYouContext(
     ),
   ];
 
-  // Each row's subject ref: an owed slot's `ref`; a proposal row's target,
-  // when every member it stands for names the same one. A proposal row whose
+  // Each row's subject ref: an owed slot's `ref`; a proposal row's object
+  // (`proposalObjectsOf`), when every member it stands for names the same one. A proposal row whose
   // members could not be read has no ref to resolve: its subject is
   // unreadable, never absent.
   const rowSubjectRef = new Map<string, SubjectRef | "unreadable">();
@@ -405,8 +406,9 @@ export async function readNeedsYouContext(
       const targets = new Map<string, SubjectRef>();
       for (const id of ids) {
         const p = proposalById.get(id);
-        const target = p ? proposalTargetRef(p) : null;
-        if (target) targets.set(refKey(target), target);
+        for (const target of p ? proposalSubjectRefs(p) : []) {
+          targets.set(refKey(target), target);
+        }
       }
       const [only] = [...targets.values()];
       if (targets.size === 1 && only) rowSubjectRef.set(row.id, only);

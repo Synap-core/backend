@@ -60,6 +60,10 @@
  *      tab with `noopener`, nothing without a recent user activation. OFF by
  *      default: a host that does not handle the message keeps its frame as it
  *      was.
+ *  10. Slides, when a host presents the page (`slides.ts`): the host posts
+ *      `synap:slide:goto` with a slide's id, the SDK shows that `data-slide`
+ *      element alone and answers `synap:slide:changed` (`parseFrameSlideChanged`).
+ *      Only a position and an id cross.
  *
  * WHAT IT DOES NOT COVER (measured limits, not wishes)
  *   - A page can still LEAK what it read, through a URL: by navigating its
@@ -75,6 +79,10 @@
  */
 
 export { CELL_BRIDGE_CONTRACT_VERSION } from "./contract-version.js";
+export {
+  POD_BRIDGE_CONTRACT,
+  unmetRendererBundleRequirements,
+} from "./bundle-requirements.js";
 export {
   CELL_BRIDGE_READ_OPS,
   CELL_BRIDGE_READ_OP_NAMES,
@@ -178,6 +186,15 @@ export {
   type CellBridgeTarget,
 } from "./host.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
+export {
+  FRAME_SLIDE_ATTRIBUTE,
+  FRAME_SLIDE_CHANGED_TYPE,
+  FRAME_SLIDE_GOTO_TYPE,
+  frameSlideGoto,
+  parseFrameSlideChanged,
+  type FrameSlideChangedMessage,
+  type FrameSlideGotoMessage,
+} from "./slides.js";
 export { narrowHomeToSpace } from "./home-lens.js";
 export {
   FRAME_BLOB_URLS_SCRIPT,

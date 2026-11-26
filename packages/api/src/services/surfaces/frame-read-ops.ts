@@ -26,6 +26,7 @@ import {
   type CellBridgeReadOp,
 } from "@synap-core/types/cell-bridge";
 import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
+import { TRPCError } from "@trpc/server";
 import type { Context } from "../../types/context.js";
 
 type Params = Record<string, CellBridgeParamValue>;
@@ -49,8 +50,12 @@ function defined<T extends Record<string, unknown>>(input: T): T {
     Object.entries(input).filter(([, v]) => v !== undefined)
   ) as T;
 }
+/** A read the frame asked wrongly is the caller's error: 400, never a 500. */
+function badRequest(message: string): TRPCError {
+  return new TRPCError({ code: "BAD_REQUEST", message });
+}
 function required(op: string, name: string, v: string | undefined): string {
-  if (!v) throw new Error(`"${op}" needs ${name}.`);
+  if (!v) throw badRequest(`"${op}" needs ${name}.`);
   return v;
 }
 
@@ -66,8 +71,17 @@ export async function runFrameReadOp(
   workspaceId: string | null
 ): Promise<unknown> {
   // The space the procedures that read it from the context see (the console
-  // sends it as a header per call): the door's lens, nothing else.
-  const ctx = { ...viewerCtx, workspaceId } as Context;
+  // sends it as a header per call): the door's lens, nothing else. A role
+  // derived for another space does not follow the lens: cleared, so a
+  // workspace procedure derives it again for this one.
+  const ctx = {
+    ...viewerCtx,
+    workspaceId,
+    workspaceRole:
+      workspaceId === (viewerCtx.workspaceId ?? null)
+        ? viewerCtx.workspaceRole
+        : undefined,
+  } as Context;
   const ws = workspaceId ?? undefined;
   switch (op) {
     case "entities.list": {
@@ -220,7 +234,7 @@ export async function runFrameReadOp(
     case "lens.page": {
       // One space's own page: refused with no space to stamp.
       const refusal = cellBridgeReadRefusal(op, { workspaceId });
-      if (refusal || !ws) throw new Error(refusal ?? `"${op}" needs a space.`);
+      if (refusal || !ws) throw badRequest(refusal ?? `"${op}" needs a space.`);
       const { signalsRouter } = await import("../../routers/signals.js");
       return signalsRouter.createCaller(ctx).list(
         defined({

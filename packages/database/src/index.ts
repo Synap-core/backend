@@ -85,6 +85,7 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/session-started-by.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/seen-by-agent.js";
 export * from "./utils/stage-run-waiting.js";
 export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
@@ -131,6 +132,7 @@ export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
 export * from "./utils/message-shape.js";
 export * from "./utils/config-settings.js";
+export * from "./utils/pod-settings.js";
 export * from "./utils/structure-context.js";
 export * from "./utils/import-staging.js";
 export * from "./utils/filed-document.js";

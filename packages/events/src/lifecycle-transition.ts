@@ -29,9 +29,10 @@
  *     `entity:updated`, AT MOST once per move — a retry finds the row
  *     written and appends nothing, so a crash between the insert and the
  *     hooks pushes nothing on retry. A pod-wide entity's push (workspace
- *     null) is refused by the realtime schema, like every pod-wide entity
- *     push. Goals and sessions are not bridged as an update: no client
- *     listens for that, and `focus_session:updated` has its own producer.
+ *     null) goes to the room of each person who may read the entity, the
+ *     same readers as its status event below. Goals and sessions are not
+ *     bridged as an update: no client listens for that, and
+ *     `focus_session:updated` has its own producer.
  *   - status events (`api/services/status/status-realtime.ts`): EVERY
  *     transition (a thing's, a role's, a goal's, a session's) is pushed as
  *     `status:transition:completed` to the room of each user who may read

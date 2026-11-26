@@ -36,11 +36,14 @@
  *                                    caller). Unwidenable by any rung below.
  *   2.08 AGENT_SCHEMA_DEFINITION_EVENT_KEYS → always propose; an agent defining
  *                                    a kind/role (`profile.create`, D6).
- *                                    Unwidenable by any rung below.
+ *                                    Unwidenable by any rung below; only the
+ *                                    pod's `@agent-defines-kinds` switch makes
+ *                                    it yield to them (`floorsYield`).
  *   2.09 AGENT_STRUCTURE_WRITE_EVENT_KEYS → always propose; an agent creating
  *                                    a workspace, cell, playbook or automation,
  *                                    or activating one (D1/D2). Same guarantees
- *                                    as 2.08.
+ *                                    as 2.08; the `@agent-builds-structure`
+ *                                    switch yields its create / activate half.
  *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
  *                                    merge), regardless of ANY override rung
  *                                    below (ownership, explicit autoApproveFor,
@@ -425,7 +428,7 @@ export type SettingSensitivity = "loosening" | "tightening" | "benign";
 export function classifySettingSensitivity(input: {
   store: GovConfigStore;
   op: "set" | "revoke";
-  spec?: { verdict?: string; posture?: string };
+  spec?: { verdict?: string; posture?: string; podSetting?: unknown };
 }): SettingSensitivity {
   const { store, op, spec } = input;
   // Removing a stored guard/rule/guideline changes what auto-applies — always a
@@ -441,6 +444,9 @@ export function classifySettingSensitivity(input: {
       // A rule set to `auto` widens auto-approve (loosens); `propose` tightens.
       return spec?.verdict === "auto" ? "loosening" : "tightening";
     case "config_settings":
+      // A pod number the governance reads (a freshness window, an evidence
+      // count) changes what applies without a person: always the person's.
+      if (spec?.podSetting !== undefined) return "loosening";
       // A guideline with posture:auto would auto-apply (loosens); plain text is
       // benign guidance.
       return spec?.posture === "auto" ? "loosening" : "benign";
@@ -925,17 +931,72 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "floored" | "other-floor" | "widenable"
 >;
 
+/** A structure door's event keys, both spellings (as ADMIN_ACTIONS_LIVE). */
+function structureDoorEventKeys(door: StructureDoor): GateEventKey[] {
+  const slash = door.indexOf("/");
+  const subject = door.slice(0, slash);
+  const action = door.slice(slash + 1);
+  return [`${subject}.${action}`, `${subject}s.${action}`] as GateEventKey[];
+}
+
 export const AGENT_STRUCTURE_WRITE_EVENT_KEYS: readonly GateEventKey[] = (
   Object.keys(AGENT_STRUCTURE_DOOR_CLASS) as StructureDoor[]
 )
   .filter((door) => AGENT_STRUCTURE_DOOR_CLASS[door] === "floored")
-  .flatMap((door) => {
-    const slash = door.indexOf("/");
-    const subject = door.slice(0, slash);
-    const action = door.slice(slash + 1);
-    // Both spellings, for the same reason as ADMIN_ACTIONS_LIVE.
-    return [`${subject}.${action}`, `${subject}s.${action}`] as GateEventKey[];
-  });
+  .flatMap(structureDoorEventKeys);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLOORS A POD MAY SWITCH
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Two floor families a pod admin may switch from Settings › Approvals, each
+ * ONE `governance_rules` class row (principal any, scope pod, action), seeded
+ * `propose` (migration 0451), switched like `@reversible`:
+ *
+ *   `@agent-defines-kinds`    rung 2.08 (an agent defining a kind or role);
+ *   `@agent-builds-structure` the create / activate half of rung 2.09 (an
+ *                             agent creating a playbook, an automation or a
+ *                             workspace, or activating an automation).
+ *
+ * Switched on (an active `auto` row), the floor YIELDS: the write is decided
+ * by the rungs below it, so it may still propose. The row itself never makes
+ * a write `auto`: its pattern matches no write at rung 2.8. A revoked,
+ * missing or `propose` row keeps the floor. Resolved by the caller
+ * (`floorsYield`); this engine stays pure.
+ */
+export const AGENT_DEFINES_KINDS_CLASS_PATTERN = "@agent-defines-kinds";
+export const AGENT_BUILDS_STRUCTURE_CLASS_PATTERN = "@agent-builds-structure";
+export const FLOOR_CLASS_PATTERNS = [
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+] as const;
+export type FloorClassPattern = (typeof FLOOR_CLASS_PATTERNS)[number];
+
+/** The rung 2.09 doors `@agent-builds-structure` yields; every other one stays floored. */
+const BUILDS_STRUCTURE_DOORS = [
+  "automation/activate",
+  "automation/create",
+  "playbook/create",
+  "workspace/create",
+] as const satisfies readonly StructureDoor[];
+
+export const AGENT_BUILDS_STRUCTURE_EVENT_KEYS: readonly GateEventKey[] =
+  BUILDS_STRUCTURE_DOORS.flatMap(structureDoorEventKeys);
+
+/** Which floor family covers this event key, or null. */
+export function floorClassOf(eventKey: string): FloorClassPattern | null {
+  if (
+    (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[]).includes(eventKey)
+  ) {
+    return AGENT_DEFINES_KINDS_CLASS_PATTERN;
+  }
+  if (
+    (AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[]).includes(eventKey)
+  ) {
+    return AGENT_BUILDS_STRUCTURE_CLASS_PATTERN;
+  }
+  return null;
+}
 
 /**
  * Filesystem paths ALWAYS blocked for external agent writes, regardless of user
@@ -1149,7 +1210,9 @@ export function findMatchingPattern(
         // subjects are the agent's own fresh work (`ownWorkOrganise`) — a fact
         // no list can see. `resolveGovernanceRule` matches it with that fact;
         // a whitelist or glob naming it matches nothing.
-        pattern === OWN_ORGANISE_CLASS_PATTERN
+        pattern === OWN_ORGANISE_CLASS_PATTERN ||
+          // A floor switch only lets a floor yield; it never matches a write.
+          (FLOOR_CLASS_PATTERNS as readonly string[]).includes(pattern)
         ? false
         : pattern.endsWith(".*")
           ? eventKey.startsWith(pattern.slice(0, -1))
@@ -1552,6 +1615,15 @@ export interface AgentPolicyInput {
    */
   podAdminSchemaChange?: boolean;
   /**
+   * The floor families the pod switched on (their class rows, resolved by the
+   * caller: {@link FLOOR_CLASS_PATTERNS}). On, rung 2.08 / the create and
+   * activate half of 2.09 yield to the rungs below. Absent/false → the floor.
+   */
+  floorsYield?: {
+    agentDefinesKinds?: boolean;
+    agentBuildsStructure?: boolean;
+  };
+  /**
    * Explicit opt-in that lets a DESTRUCTIVE action (delete/archive/purge/merge)
    * be resolved to "execute" by a downstream override rung (ownership, explicit
    * autoApproveFor, DEFAULT_AUTO_APPROVE, capability governance). Absent/false
@@ -1920,9 +1992,12 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   }
 
   // 2.08 AGENT-DEFINED SCHEMA → always propose; above rules (2.8), ownership (3),
-  // autoApproveFor (4) and DEFAULT_AUTO_APPROVE (8).
+  // autoApproveFor (4) and DEFAULT_AUTO_APPROVE (8). The pod's switch yields it.
   if (
-    (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[]).includes(eventKey)
+    (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[]).includes(
+      eventKey
+    ) &&
+    input.floorsYield?.agentDefinesKinds !== true
   ) {
     return {
       verdict: "propose",
@@ -1932,9 +2007,18 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   }
 
   // 2.09 AGENT STRUCTURE WRITE → always propose; same placement and guarantees
-  // as 2.08 (see AGENT_STRUCTURE_DOOR_CLASS).
+  // as 2.08 (see AGENT_STRUCTURE_DOOR_CLASS). The pod's switch yields its
+  // create / activate half.
   if (
-    (AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[]).includes(eventKey)
+    (AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[]).includes(
+      eventKey
+    ) &&
+    !(
+      input.floorsYield?.agentBuildsStructure === true &&
+      (AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[]).includes(
+        eventKey
+      )
+    )
   ) {
     return {
       verdict: "propose",
@@ -2377,8 +2461,15 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
  * 2.1 forcePropose, 2.55 untrusted origin, 2.56 ceiling). A rule on those keys
  * still fires whenever the context is absent. Globs (`*`, `entity.*`) also
  * cover widenable keys, so they are never non-widenable here.
+ *
+ * `floorsYield`: the pod's floor switches (`readPodFloorsYield`). A family
+ * switched on is not a floor here either, so a person may write the rule it
+ * yields to through the rule doors.
  */
-export function nonWidenableFloorFor(eventKey: string): string | null {
+export function nonWidenableFloorFor(
+  eventKey: string,
+  floorsYield?: AgentPolicyInput["floorsYield"]
+): string | null {
   if (eventKey.includes("*")) return null;
   const dot = eventKey.lastIndexOf(".");
   if (dot <= 0 || dot === eventKey.length - 1) return null;
@@ -2388,6 +2479,7 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
     governanceRuleVerdict: "auto",
     // A rule on this exact key names the write (2.8, the outward floor).
     governanceRuleNamesWrite: true,
+    floorsYield,
   });
   return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
 }

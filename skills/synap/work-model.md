@@ -122,7 +122,7 @@ Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 
-A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe, params and shapes: `system/surfaces/cells` and `system/surfaces/cell-authoring`. For ONE object rather than the kind, attach a surface to it (`synap_attach_surface`). A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
 
 ### Rules of thumb
 

@@ -174,10 +174,19 @@ const uiFocusSchema = z.object({
 // unchanged via the absence of a schema entry. Lock them down in a follow-up
 // once each emitter is audited.
 
+/**
+ * The entity's space: a workspace id, or null / absent for a POD-WIDE entity
+ * (most kinds are pod-wide). A pod-wide entity's push goes to each reader's
+ * `user:<id>` room (`domain-event-bridge.ts`), so it names no workspace; when
+ * this required one, the bridge dropped every pod-wide push and open pages
+ * went stale. An empty string is still refused.
+ */
+const entityWorkspaceIdSchema = z.string().min(1).nullish();
+
 const entityCreatedSchema = z
   .object({
     entityId: z.string().min(1),
-    workspaceId: z.string().min(1),
+    workspaceId: entityWorkspaceIdSchema,
     type: z.string().min(1),
     title: z.string(),
     createdBy: z.string(),
@@ -189,7 +198,7 @@ const entityCreatedSchema = z
 const entityUpdatedSchema = z
   .object({
     entityId: z.string().min(1),
-    workspaceId: z.string().min(1),
+    workspaceId: entityWorkspaceIdSchema,
     changes: z.record(z.string(), z.unknown()),
     updatedBy: z.string(),
     updatedAt: z.string().min(1),
@@ -199,7 +208,7 @@ const entityUpdatedSchema = z
 const entityDeletedSchema = z
   .object({
     entityId: z.string().min(1),
-    workspaceId: z.string().min(1),
+    workspaceId: entityWorkspaceIdSchema,
     deletedBy: z.string(),
     deletedAt: z.string().min(1),
   })

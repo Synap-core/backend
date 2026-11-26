@@ -470,6 +470,22 @@ export const cellInstancesRouter = router({
         },
         userId
       );
+      // The cell is ATTACHED to the entity (links `attaches`, the one store
+      // of an object's surfaces since the founder decision of 23 Nov 2026):
+      // the same edge the `cell-relation` conversion folds the old relations
+      // into, written here so this door keeps both stores in step. Same gate
+      // as the relation above (the person's own write).
+      const { insertAttachment } =
+        await import("../services/surfaces/attach.js");
+      await insertAttachment({
+        anchor: { kind: "entity", id: input.entityId },
+        surface: { type: "cell_instance", id: input.cellId },
+        workspaceId:
+          (entity as { workspaceId?: string | null }).workspaceId ?? null,
+        createdBy: userId,
+        meta: {},
+        attribution: { agentUserId: ctx.agentUserId ?? null },
+      });
 
       return { id: relation.id, status: "created" as const };
     }),

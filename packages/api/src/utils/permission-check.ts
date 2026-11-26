@@ -1588,6 +1588,9 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // B6: only an attributed agent's run is held as the person's draft
     // (`runPlaybook` holds on `agentUserId`); an unattributed write never is.
     heldAsDraft: undefined,
+    // The pod's floor switches yield 2.08 / 2.09 for an ATTRIBUTED agent
+    // only: an unattributed write keeps both floors.
+    floorsYield: undefined,
     // The host step's second pass judges an agent AS its computer; an
     // unattributed key has no agent and runs on no computer.
     hostPass: undefined,

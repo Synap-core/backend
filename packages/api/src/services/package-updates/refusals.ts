@@ -20,6 +20,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { getActingAgentUserId } from "@synap/database";
 import {
   zodIssuesSentence,
   type ZodIssueLike,
@@ -50,6 +51,23 @@ export function packageUpdateRefusal(
   const err = new TRPCError({ code, message, cause }) as RefusalError;
   err.reasonCode = reasonCode;
   return err;
+}
+
+/** The acting agent of a call, the way the governed doors derive it. */
+export function actingAgentOf(ctx: {
+  agentUserId?: string | null;
+}): string | undefined {
+  return getActingAgentUserId() ?? (ctx.agentUserId || undefined);
+}
+
+/** A person's act: an agent credential is refused NEEDS_PERSON. */
+export function refuseAgentCaller(
+  ctx: { agentUserId?: string | null },
+  message: string
+): void {
+  if (actingAgentOf(ctx)) {
+    throw packageUpdateRefusal("FORBIDDEN", "NEEDS_PERSON", message);
+  }
 }
 
 /**

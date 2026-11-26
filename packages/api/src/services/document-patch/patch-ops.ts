@@ -3,7 +3,7 @@
  * ops against a document's markdown and enforce the floors, with no database,
  * storage or governance in sight.
  *
- * Eight ops, applied in order to the evolving content:
+ * Nine ops, applied in order to the evolving content:
  *   - `upsert_section {id, title, body}` — one `::::synap-section` block by id
  *     (replace in place, or append), the session-document door's op;
  *   - `replace_text {old, new}` — str_replace: `old` must occur EXACTLY ONCE,
@@ -22,7 +22,12 @@
  *     document's `LensScope` and its bound refresher (0387). Like `set_title`
  *     they leave the content alone; `resolvePatchFields` reads them (last one
  *     wins) and the door reads them through the scope floor
- *     (`document-scope.ts`) before anything is written or proposed.
+ *     (`document-scope.ts`) before anything is written or proposed;
+ *   - `replace_block {blockId, html}` — an HTML page's (`type: "html"`) one
+ *     addressable block (`data-block-id` / `data-slide`, `html-blocks.ts`):
+ *     exactly that element's outer HTML is replaced, every other byte stays.
+ *     An unknown or duplicated id, or new HTML that would change another
+ *     block, is refused. The door refuses it on a document that is not a page.
  *
  * FLOORS, checked against the RESULT of every op together (so no op order can
  * slip past them), and refused BEFORE anything is written or proposed:
@@ -64,6 +69,7 @@ import {
   isBlockEmbedDirective,
   type BlockEmbedDirective,
 } from "@synap-core/types/blocks";
+import { HtmlBlockError, replaceHtmlBlock } from "./html-blocks.js";
 
 export const SECTION_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -148,6 +154,13 @@ export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
     /** The automation bound to refresh the document, or null to unbind it. */
     automationId: z.string().uuid().nullable(),
   }),
+  z.object({
+    op: z.literal("replace_block"),
+    /** The block's `data-block-id` (a slide's id when it has none: its `data-slide` value, else `slide-<n>`). */
+    blockId: z.string().trim().min(1).max(200),
+    /** The block's new outer HTML: one element that keeps the same block id. */
+    html: z.string().max(1_000_000),
+  }),
 ]);
 export type DocumentPatchOp = z.infer<typeof DocumentPatchOpSchema>;
 
@@ -155,6 +168,11 @@ export const DocumentPatchOpsSchema = z
   .array(DocumentPatchOpSchema)
   .min(1)
   .max(50);
+
+/** Does this patch hold an op only an HTML page takes? */
+export function hasPageOnlyOp(ops: readonly DocumentPatchOp[]): boolean {
+  return ops.some((op) => op.op === "replace_block");
+}
 
 /** Who is writing — what the ownership floor keys on, and what gets stamped. */
 export interface PatchWriter {
@@ -403,6 +421,15 @@ function applyOp(
       return op.content;
     case "insert_embed":
       return insertEmbed(content, op);
+    case "replace_block":
+      try {
+        return replaceHtmlBlock(content, op.blockId, op.html);
+      } catch (err) {
+        if (err instanceof HtmlBlockError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
     case "set_title":
     case "set_scope":
     case "set_refresher":

@@ -26,12 +26,25 @@ const ROUTER = readFileSync(
   "utf8"
 );
 
-/** The batchApprove procedure body, bounded by the next top-level procedure. */
+/**
+ * The batchApprove procedure body, bounded by the next top-level procedure,
+ * plus the per-item door it runs for each id (`approveOneOfMany`, shared with
+ * `approveSession`) with its result type.
+ */
 function batchApproveBlock(): string {
   const start = ROUTER.indexOf("batchApprove: protectedProcedure");
   expect(start, "batchApprove not found in proposals.ts").toBeGreaterThan(-1);
   const next = ROUTER.indexOf("protectedProcedure", start + 40);
-  return ROUTER.slice(start, next === -1 ? start + 8000 : next);
+  const item = ROUTER.indexOf("type ApproveManyItem");
+  const itemEnd = ROUTER.indexOf("async function approveOneOfMany(", item);
+  expect(item, "the per-item door vanished — scan is blind").toBeGreaterThan(
+    -1
+  );
+  const itemFnEnd = ROUTER.indexOf("export const proposalsRouter", itemEnd);
+  return (
+    ROUTER.slice(start, next === -1 ? start + 8000 : next) +
+    ROUTER.slice(item, itemFnEnd)
+  );
 }
 
 describe("tripwire: batchApprove is diff-scoped", () => {
@@ -104,13 +117,21 @@ describe("tripwire: batchApprove is diff-scoped", () => {
  * gate.
  */
 describe("tripwire: batchApprove reports a per-item errorCode", () => {
-  /** Every `results.push({...})` literal inside the batchApprove body. */
+  /** Every per-item result literal (`results.push({` or the door's `return {`). */
   function resultPushes(): string[] {
     const block = batchApproveBlock();
     const found: string[] = [];
-    const NEEDLE = "results.push({";
-    let at = block.indexOf(NEEDLE);
-    while (at !== -1) {
+    const NEEDLES = ["results.push({", "return {"];
+    const nextAt = (from: number) =>
+      Math.min(
+        ...NEEDLES.map((n) => block.indexOf(n, from)).filter((i) => i !== -1),
+        Infinity
+      );
+    let at = nextAt(0);
+    while (at !== Infinity) {
+      const NEEDLE = block.startsWith("return {", at)
+        ? "return {"
+        : "results.push({";
       // Brace-match from the object literal's `{` so a nested object (none
       // today, but a `data: {…}` tomorrow) cannot truncate the capture — the
       // `[^}]*` shortcut is how a sibling tripwire went blind once.
@@ -127,7 +148,7 @@ describe("tripwire: batchApprove reports a per-item errorCode", () => {
         }
       }
       found.push(block.slice(at, end + 1));
-      at = block.indexOf(NEEDLE, end);
+      at = nextAt(end);
     }
     return found;
   }
