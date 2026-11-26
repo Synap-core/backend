@@ -1541,6 +1541,7 @@ async function objectComments(ctx: McpToolContext): Promise<CallToolResult> {
     await import("../../../services/comments/comments.js");
   const listing = await listObjectComments({
     userId,
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
     object: { type, id },
     state,
   });

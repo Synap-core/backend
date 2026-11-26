@@ -805,8 +805,9 @@ describe("an entity comment pinned to an exact place (locator)", () => {
  * The same pins through the Design app's door (Hub REST `/comments`, the
  * person's app token) and an agent's read (MCP `synap_get_thread_context`
  * with `object`). The routes are the real ones over the real service; a
- * scoped key is bounded by its grant: the object's own update right
- * (`entity.<kind>.update`) to comment or resolve, and an agent never resolves.
+ * scoped key has the person's floors capped by its grant (READ on the object
+ * to comment and to resolve, never the update right), and an agent never
+ * resolves.
  */
 describe("pins through Hub REST /comments and the MCP object read", () => {
   const pin = {
@@ -847,14 +848,13 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-  const grantOf = (permissions: string[]) =>
+  const grantPod = (permissions: string[]) =>
     ({
       scopes: [
-        { permissions, workspaceIds: [WS], projectIds: null, entityIds: null },
+        { permissions, workspaceIds: null, projectIds: null, entityIds: null },
       ],
       clientId: null,
     }) as never;
-  const READ_ONLY = ["entity.*.read", "channel.read"];
 
   it("Hub REST: posts a pin, lists it back with its locator, and the person resolves it", async () => {
     const posted = await post(hubApp(EDITOR), "/comments", {
@@ -945,39 +945,94 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
     expect(await messageCount()).toBe(before);
   });
 
-  it("a scoped key comments only with the object's update right; reading needs only read", async () => {
-    const before = await messageCount();
-    const refused = await runWithGrant(grantOf(READ_ONLY), () =>
+  it("a scoped key comments and resolves on READ, capped by its grant (never the update right); an agent never resolves", async () => {
+    // A sync-owned record (D0: never edited by hand) the Design app pins a
+    // story on. The person's app token holds only read on its kind.
+    const UI = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, title, type) values ($1,$2,$3,'Button','ui-component')`,
+      [UI, OWNER, WS]
+    );
+    const appGrant = grantPod(["entity.ui-component.read"]);
+    const storyPin = {
+      kind: "entity",
+      entityId: UI,
+      locator: {
+        surface: "story",
+        storyId: "components-button--primary",
+        viewport: "phone",
+        point: { x: 0.5, y: 0.25 },
+        contentVersion: "sha256:b0770n",
+      },
+    };
+
+    const posted = await runWithGrant(appGrant, () =>
       post(hubApp(EDITOR), "/comments", {
-        anchor: pinAnchor,
-        content: "read-only app",
+        anchor: storyPin,
+        content: "Label wraps on phone",
       })
     );
-    expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { error: string }).error).toContain(
-      "entity.company.update"
-    );
-    expect(await messageCount()).toBe(before);
+    expect(posted.status).toBe(200);
+    const { messageId } = (await posted.json()) as { messageId: string };
 
-    const listed = await runWithGrant(grantOf(READ_ONLY), () =>
+    const listed = await runWithGrant(appGrant, () =>
       hubApp(EDITOR).request(
-        `/comments?objectType=entity&objectId=${ENTITY}&state=open`
+        `/comments?objectType=entity&objectId=${UI}&state=open`
       )
     );
     expect(listed.status).toBe(200);
+    const thread = (
+      (await listed.json()) as {
+        threads: Array<{ id: string; anchor: unknown; canResolve: boolean }>;
+      }
+    ).threads.find((t) => t.id === messageId)!;
+    expect(thread.anchor).toEqual(storyPin);
+    expect(thread.canResolve).toBe(true);
 
-    const allowed = await runWithGrant(
-      grantOf([...READ_ONLY, "entity.company.update"]),
-      () =>
-        post(hubApp(EDITOR), "/comments", {
-          anchor: pinAnchor,
-          content: "the app may change this entity",
-        })
+    // An agent's key reads the pin but is never offered, nor allowed, a resolve.
+    const asAgent = await runWithGrant(appGrant, () =>
+      hubApp(EDITOR, { agentUserId: "agent-1" }).request(
+        `/comments?objectType=entity&objectId=${UI}&state=open`
+      )
     );
-    expect(allowed.status).toBe(200);
+    expect(
+      (
+        (await asAgent.json()) as {
+          threads: Array<{ id: string; canResolve: boolean }>;
+        }
+      ).threads.find((t) => t.id === messageId)?.canResolve
+    ).toBe(false);
+    const agentResolve = await runWithGrant(appGrant, () =>
+      post(
+        hubApp(EDITOR, { agentUserId: "agent-1" }),
+        `/comments/${messageId}/resolved`,
+        { resolved: true }
+      )
+    );
+    expect(agentResolve.status).toBe(403);
 
-    // The "AI — read & propose" preset every new agent key starts with holds
-    // the entity update right: an agent may still reply in a pin's thread.
+    // The person, through the app's read-only token, resolves their own pin.
+    const resolved = await runWithGrant(appGrant, () =>
+      post(hubApp(EDITOR), `/comments/${messageId}/resolved`, {
+        resolved: true,
+      })
+    );
+    expect(resolved.status).toBe(200);
+    expect(await resolved.json()).toMatchObject({ changed: true });
+
+    // A key that cannot read the object comments on nothing.
+    const before = await messageCount();
+    const noRead = await runWithGrant(grantPod(["entity.note.read"]), () =>
+      post(hubApp(EDITOR), "/comments", {
+        anchor: storyPin,
+        content: "cannot read it",
+      })
+    );
+    expect([403, 404]).toContain(noRead.status);
+    expect(await messageCount()).toBe(before);
+
+    // The "AI — read & propose" preset every new agent key starts with reads
+    // every entity: an agent may still reply in a pin's thread.
     const aiPreset = {
       scopes: [
         {

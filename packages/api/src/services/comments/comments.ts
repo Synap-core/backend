@@ -15,9 +15,9 @@
  * object (the Google model: a viewer may comment). RESOLVING needs the root's
  * author or a person who may EDIT the object — and it is a human act: an
  * agent is refused at `setCommentResolved` (agents propose, humans resolve).
- * A SCOPED KEY (a person's app token, an agent's key) is also bounded by its
- * grant: the object's own update right in its space (`objectTalkGrant`), to
- * comment and to resolve.
+ * A SCOPED KEY (a person's app token, an agent's key) has the same floors,
+ * capped by its grant: its read right on the object (`objectCommentGrant`),
+ * to comment and, for a key acting for a person, to resolve.
  *
  * Agent comments are SPEECH, not mutations: like `synap_post_message` they are
  * ungoverned and attributed (`agentUserId` → `routed_teammate_id`). An agent's
@@ -174,20 +174,23 @@ export function readAnchor(
 }
 
 /**
- * The grant a SCOPED key needs to comment on an object or resolve one of its
- * threads: the object's own update right (`entity.<kind>.update` or
- * `document.update`) in the space its room lives in (the object's). Talking
- * in an object's room is taking part in that object, as talking in a
- * session's room asks `session.update` (`roomPostGrantWrite`, hub
- * `rest/threads.ts`). A no-op without a grant (a signed-in session).
+ * The grant a SCOPED key (a person's app token, an agent's key) needs to
+ * comment on an object or resolve one of its threads: the same floor as the
+ * person's (V2: a reader may comment), capped by the key's grant, so its
+ * READ right on the object (`entity.<kind>.read` / `document.read`) in the
+ * space its room lives in (the object's). Named here so the door's grant bound
+ * is explicit, beside the read floor `assertObjectReadable` already applies;
+ * never the update right: a sync-owned record (a ui-component, a ui-page) is
+ * never edited by hand, and its pins must still be written and resolved
+ * (lead decision, 26 Nov 2026). A no-op without a grant (a signed-in session).
  */
-function objectTalkGrant(
+function objectCommentGrant(
   object: ObjectRef,
   workspaceId: string | null
 ): GrantWriteInput {
   return {
     subjectType: object.type,
-    action: "update",
+    action: "read",
     workspaceId,
     data: { id: object.id },
   };
@@ -246,9 +249,9 @@ export async function postComment(
   }
 
   // A scoped key (a person's app token, an agent's key) takes part in an
-  // object's conversation only as its grant allows (see `objectTalkGrant`).
+  // object's conversation only as its grant allows (`objectCommentGrant`).
   const denial = await grantWriteDenial(
-    objectTalkGrant(object, roomWorkspaceId)
+    objectCommentGrant(object, roomWorkspaceId)
   );
   if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
 
@@ -450,9 +453,11 @@ export async function setCommentResolved(params: {
     params.userId,
     params.messageId
   );
-  // A scoped key (a person's app token) changes the thread's state only as
-  // its grant allows (`objectTalkGrant`, as a comment).
-  const denial = await grantWriteDenial(objectTalkGrant(object, workspaceId));
+  // A scoped key acting for a person (an app token) resolves on that
+  // person's floor, capped by its grant (`objectCommentGrant`).
+  const denial = await grantWriteDenial(
+    objectCommentGrant(object, workspaceId)
+  );
   if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
   if (!(await mayResolve(params.userId, root, object))) {
     throw new TRPCError({
@@ -532,6 +537,8 @@ function toReply(m: MessageRow): CommentReply {
  */
 export async function listObjectComments(params: {
   userId: string;
+  /** The acting agent, when an agent reads: it may resolve nothing. */
+  agentUserId?: string;
   object: ObjectRef;
   state: CommentState;
 }): Promise<ObjectCommentsListing> {
@@ -573,8 +580,13 @@ export async function listObjectComments(params: {
     .limit(THREADS_MAX);
 
   const threads: CommentThread[] = [];
+  // An agent resolves nothing (`setCommentResolved` refuses it), so the
+  // listing never offers it a resolve.
+  const agent = Boolean(params.agentUserId);
   const editor =
-    roots.length > 0 && (await isObjectEditor(params.userId, params.object));
+    !agent &&
+    roots.length > 0 &&
+    (await isObjectEditor(params.userId, params.object));
   const rootIds = roots.map((r) => r.id);
   const replies = rootIds.length
     ? await db
@@ -597,7 +609,7 @@ export async function listObjectComments(params: {
     threads.push({
       ...toReply(root),
       anchor,
-      canResolve: editor || isAuthor(params.userId, root),
+      canResolve: !agent && (editor || isAuthor(params.userId, root)),
       resolvedAt: root.resolvedAt,
       resolvedBy: root.resolvedBy,
       replyCount: mine.length,

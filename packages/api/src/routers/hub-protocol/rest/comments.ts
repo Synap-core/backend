@@ -11,11 +11,11 @@
  * with the person's app token (`app_person`), so its board annotations (pins,
  * `anchor.locator`) come through here.
  *
- * Floors are the service's: writing a comment needs READ access to the object
- * and, for a scoped key, the grant's update right on it (`entity.<kind>.update`
- * or `document.update` in its space); resolving needs the thread's author or
- * an editor of the object, the same grant right, and a person: an agent's key
- * is refused (agents propose, humans resolve). An invalid anchor is a 400
+ * Floors are the service's, the person's own, capped by a scoped key's grant:
+ * writing a comment needs READ on the object (`entity.<kind>.read` /
+ * `document.read` for a key); resolving needs the thread's author or an
+ * editor of the object, the same read cap, and a person: an agent's key is
+ * refused (agents propose, humans resolve). An invalid anchor is a 400
  * naming every bad field.
  */
 import { z } from "@hono/zod-openapi";
@@ -128,9 +128,9 @@ export function registerCommentsRoutes(app: HubHono): void {
       "(desktop / tablet / phone), `point` `{x, y}` (fractions 0 to 1), " +
       "`contentVersion` and an optional `screenshot` (a pod file id). " +
       "`parentId` replies in a thread instead (exactly one of the two). " +
-      "Needs read access to the object and, for a scoped key, the update " +
-      "right on it (`entity.<kind>.update` or `document.update` in its " +
-      "space). 400 names every bad anchor field.",
+      "Needs read access to the object; a scoped key, its grant's read " +
+      "right on it (`entity.<kind>.read` or `document.read` in its space). " +
+      "400 names every bad anchor field.",
     request: { body: PostCommentRequestSchema },
     responses: {
       200: {
@@ -209,9 +209,11 @@ export function registerCommentsRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     try {
+      const agentUserId = c.get("agentUserId") as string | undefined;
       return c.json(
         await listObjectComments({
           userId: acting.userId,
+          ...(agentUserId ? { agentUserId } : {}),
           object: { type: query.data.objectType, id: query.data.objectId },
           state: query.data.state,
         }),
@@ -232,7 +234,8 @@ export function registerCommentsRoutes(app: HubHono): void {
       "Sets the thread's resolved state (any message of the thread names " +
       "it). The thread's author or an editor of the object, a person: an " +
       "agent's key is refused (it replies in the thread; the person " +
-      "resolves). A scoped key needs the update right on the object. " +
+      "resolves). A key acting for a person is capped by its grant's read " +
+      "right on the object. " +
       "Idempotent: `changed` is false when the thread already had that state.",
     request: {
       params: z.object({ messageId: z.string().uuid() }),
