@@ -17,11 +17,17 @@
  * shared.
  *
  * UNIFORM MISS. Unknown token, revoked, expired, draft (unpublished), link
- * audience, a non-entity resource (views and standalone documents are not
- * publishable in v1), a deleted entity, a pin that does not belong to the
- * entity's document: ALL return `null`, and the route answers every `null` with
- * the byte-identical 404. A FAILED read (database, storage) throws — a 500 is
- * never folded into a 404.
+ * audience, a resource that is neither an entity nor a standalone HTML page
+ * (views, projects, a site row), a deleted entity or page, a pin that does
+ * not belong to the record's document: ALL return `null`, and the route
+ * answers every `null` with the byte-identical 404. A FAILED read (database,
+ * storage) throws — a 500 is never folded into a 404.
+ *
+ * PUBLISHED MODE (Surfaces P6b). An HTML body also comes as `body.page`: the
+ * page composed to run with scripts (`published-page.ts`): the frame policy
+ * (no network), the brand CSS, and a `window.synap.query` that answers ONLY
+ * from the reads taken at publish time (`published_properties["@page"]`).
+ * Serving it reads nothing else from the pod.
  *
  * LOOKUP. One indexed query on the unique `token_hash` index (0276), never a
  * scan. The token is hashed before anything else happens, whatever its shape.
@@ -42,6 +48,12 @@ import { hashToken } from "../../utils/share-token.js";
 import { isPublicationLive } from "./publication-live.js";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { isFramePage } from "../surfaces/frame-read.js";
+import {
+  PUBLISHED_PAGE_KEY,
+  composePublishedPage,
+  readPublishedPagePayload,
+} from "./published-page.js";
 
 /** The ONE body every miss is answered with. */
 export const PUBLIC_NOT_FOUND_BODY = { error: "Not found" } as const;
@@ -136,6 +148,12 @@ export type PublicBodyFormat = "markdown" | "html";
 export interface PublicBody {
   format: PublicBodyFormat;
   content: string;
+  /**
+   * An HTML page in PUBLISHED mode: shown in a scripts-allowed sandbox
+   * (`allow-scripts`, never `allow-same-origin`); its reads answer from the
+   * publish-time snapshot only. Absent: show `content` with scripts off.
+   */
+  page?: string;
 }
 
 /**
@@ -171,11 +189,11 @@ export function publicBodyFormat(
 
 /**
  * Bumped when what a record read SERVES changes for the same pinned revision
- * (2: the body carries its real format). Part of every record ETag, so a
- * client holding a body served under the old contract revalidates to the new
- * one instead of a 304 that keeps it.
+ * (2: the body carries its real format; 3: an HTML body carries its published
+ * page). Part of every record ETag, so a client holding a body served under
+ * the old contract revalidates to the new one instead of a 304 that keeps it.
  */
-export const PUBLIC_BODY_CONTRACT = 2;
+export const PUBLIC_BODY_CONTRACT = 3;
 
 /**
  * The body of a publication's PINNED checkpoint, ids redacted, in its real
@@ -215,7 +233,8 @@ export async function readPinnedBody(
 }
 
 export interface PublicShareView {
-  resourceType: "entity";
+  /** `document`: an HTML page published as itself. */
+  resourceType: "entity" | "document";
   /** Present only when the snapshot allowlisted `title`. */
   title?: string;
   properties: Record<string, string | number | boolean>;
@@ -279,22 +298,58 @@ export async function readPublishedShare(
     return null;
   }
 
-  const [entity] = await db
-    .select({
-      documentId: entities.documentId,
-      deletedAt: entities.deletedAt,
-    })
-    .from(entities)
-    .where(eq(entities.id, row.resourceId))
-    .limit(1);
-  if (!entity || entity.deletedAt) return null;
+  // An entity, or an HTML page published as itself (never a site member).
+  let recordDocumentId: string | null;
+  if (row.resourceType === "entity") {
+    const [entity] = await db
+      .select({
+        documentId: entities.documentId,
+        deletedAt: entities.deletedAt,
+      })
+      .from(entities)
+      .where(eq(entities.id, row.resourceId))
+      .limit(1);
+    if (!entity || entity.deletedAt) return null;
+    recordDocumentId = entity.documentId;
+  } else if (row.resourceType === "document" && !row.siteShareId) {
+    const [page] = await db
+      .select({
+        id: documents.id,
+        type: documents.type,
+        mimeType: documents.mimeType,
+        deletedAt: documents.deletedAt,
+      })
+      .from(documents)
+      .where(eq(documents.id, row.resourceId))
+      .limit(1);
+    // Only an HTML page is published as itself (`publish-service.ts`).
+    if (!page || page.deletedAt || !isFramePage(page)) return null;
+    recordDocumentId = page.id;
+  } else {
+    return null;
+  }
 
   const pinned = await readPinnedBody(
     row.publishedDocumentVersionId,
-    entity.documentId
+    recordDocumentId
   );
   if (!pinned.ok) return null;
-  const body = pinned.body;
+  let body = pinned.body;
+  // Published mode: the page runs from the publish-time snapshot only.
+  const pagePayload =
+    body?.format === "html"
+      ? readPublishedPagePayload(
+          (row.publishedProperties as Record<string, unknown> | null)?.[
+            PUBLISHED_PAGE_KEY
+          ]
+        )
+      : null;
+  if (body && pagePayload) {
+    body = {
+      ...body,
+      page: redactInternalIds(composePublishedPage(body.content, pagePayload)),
+    };
+  }
 
   if (!(await publicDoorsOpenFor(row.workspaceId))) return { closed: true };
 
@@ -303,7 +358,7 @@ export async function readPublishedShare(
   );
 
   const view: PublicShareView = {
-    resourceType: "entity",
+    resourceType: row.resourceType === "document" ? "document" : "entity",
     ...(title !== undefined ? { title } : {}),
     properties,
     body,

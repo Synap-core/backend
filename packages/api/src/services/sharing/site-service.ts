@@ -1101,7 +1101,8 @@ async function planSiteMember(
   }
   const snapshot = await buildPublishedSnapshot(database, {
     requestedKind: "entity",
-    entityId: record.id,
+    resourceType: "entity",
+    resourceId: record.id,
     workspaceId: record.workspaceId,
     documentId: record.documentId ?? null,
     fields: resolvePublicFields(settings, "entity"),

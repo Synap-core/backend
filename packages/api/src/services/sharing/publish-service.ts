@@ -18,13 +18,19 @@
  *     `projectPublishedProperties` the read uses (identity keys and id-valued
  *     properties never enter the row);
  *   - `published_document_version_id` — the latest `document_versions`
- *     checkpoint of the record's document, if it has one.
+ *     checkpoint of the record's document, if it has one;
+ *   - for an HTML page (Surfaces P6b, `published-page.ts`): its declared reads,
+ *     run as the publisher, and its anchor's brand, under the reserved key
+ *     `@page` of the same snapshot — what its `window.synap.query` answers
+ *     from in published mode. Never a live read.
  * Re-publishing takes a NEW snapshot and a new pin; the URL stays the same.
  *
  * WHAT CAN BE PUBLISHED. An entity, or a document (which resolves to its
- * owning entity — documents follow their entity). Views and projects are
- * refused: the public read serves entities only. A pod-wide record (no
- * workspace) is refused: there is no workspace policy to publish it under.
+ * owning entity — documents follow their entity). An HTML page (a
+ * `type: "html"` document, never an entity's body) has no owning entity: it
+ * is published as ITSELF (`resource_type = 'document'`). Views and projects
+ * are refused. A pod-wide record (no workspace) is refused: there is no
+ * workspace policy to publish it under.
  * The policy must say `public.read = 'direct'` for the requested kind (the
  * default denies public entirely).
  *
@@ -53,6 +59,7 @@ import { randomUUID } from "node:crypto";
 import { getDb, and, eq, isNull, desc } from "@synap/database";
 import {
   entities,
+  documents,
   documentVersions,
   resourceShares,
   workspaces,
@@ -70,6 +77,8 @@ import {
 } from "./exposure-policy.js";
 import { projectPublishedProperties } from "./public-read.js";
 import { isPublicationLive } from "./publication-live.js";
+import { isFramePage } from "../surfaces/frame-read.js";
+import { PUBLISHED_PAGE_KEY, buildPublishedPage } from "./published-page.js";
 import {
   agentOf,
   attributedShareCaller,
@@ -92,18 +101,24 @@ export interface PublishRequest {
 /** The validated, authorized plan — what the gate carries and approval replays. */
 export interface PublishPlan {
   requestedKind: "entity" | "document";
-  entityId: string;
+  /** What the publication row names: an entity, or an HTML page published as itself. */
+  resourceType: "entity" | "document";
+  resourceId: string;
   workspaceId: string;
   documentId: string | null;
   /** The policy's public `fields` allowlist for the requested kind. */
   fields: string[];
 }
 
-/** Load the record a publish names. A document resolves to its owning entity. */
+/**
+ * Load the record a publish names. A document resolves to its owning entity;
+ * an HTML page (no owning entity) is its own record.
+ */
 async function loadRecord(
   database: Db,
   req: PublishRequest
 ): Promise<{
+  kind: "entity" | "document";
   id: string;
   workspaceId: string | null;
   ownerId: string;
@@ -131,14 +146,37 @@ async function loadRecord(
       )
     )
     .limit(1);
+  if (!row && req.resourceType === "document") {
+    const [page] = await database
+      .select({
+        id: documents.id,
+        workspaceId: documents.workspaceId,
+        userId: documents.userId,
+        type: documents.type,
+        mimeType: documents.mimeType,
+      })
+      .from(documents)
+      .where(and(eq(documents.id, req.resourceId), isNull(documents.deletedAt)))
+      .limit(1);
+    if (page && isFramePage(page)) {
+      return {
+        kind: "document",
+        id: page.id,
+        workspaceId: page.workspaceId,
+        ownerId: page.userId,
+        documentId: page.id,
+      };
+    }
+  }
   if (!row) {
     throw req.resourceType === "entity"
       ? notFound("Entity")
       : badRequest(
-          "This document has no owning entity, so it cannot be published (a document follows its entity)."
+          "This document has no owning entity, so it cannot be published (a document follows its entity; only an HTML page is published as itself)."
         );
   }
   return {
+    kind: "entity",
     id: row.id,
     workspaceId: row.workspaceId,
     ownerId: row.userId,
@@ -181,7 +219,8 @@ export async function planPublish(
   }
   return {
     requestedKind: kind,
-    entityId: record.id,
+    resourceType: record.kind,
+    resourceId: record.id,
     workspaceId: record.workspaceId,
     documentId: record.documentId,
     fields: resolvePublicFields(ws.settings, kind),
@@ -205,13 +244,25 @@ export async function buildPublishedSnapshot(
   plan: PublishPlan
 ): Promise<Record<string, string | number | boolean>> {
   if (plan.fields.length === 0) return {};
-  const [row] = await database
-    .select({ title: entities.title, properties: entities.properties })
-    .from(entities)
-    .where(eq(entities.id, plan.entityId))
-    .limit(1);
-  if (!row) throw notFound("Entity");
-  const props = (row.properties ?? {}) as Record<string, unknown>;
+  // An HTML page published as itself has a title and no properties.
+  const [row] =
+    plan.resourceType === "document"
+      ? await database
+          .select({ title: documents.title })
+          .from(documents)
+          .where(eq(documents.id, plan.resourceId))
+          .limit(1)
+      : await database
+          .select({ title: entities.title, properties: entities.properties })
+          .from(entities)
+          .where(eq(entities.id, plan.resourceId))
+          .limit(1);
+  if (!row)
+    throw notFound(plan.resourceType === "document" ? "Document" : "Entity");
+  const props = ("properties" in row ? (row.properties ?? {}) : {}) as Record<
+    string,
+    unknown
+  >;
   const raw: Record<string, unknown> = {};
   for (const key of plan.fields) {
     const v = scalar(key === "title" ? row.title : props[key]);
@@ -255,6 +306,8 @@ export type PublishResult =
       publishedFields: string[];
       pinned: boolean;
       rowsWritten: number;
+      /** An HTML page: how many declared reads its snapshot answers, and how many it holds as errors. */
+      page?: { reads: number; failed: number };
     };
 
 /**
@@ -287,8 +340,8 @@ export async function publishResource(
       audience: "public",
       resourceType: req.resourceType,
       resourceId: req.resourceId,
-      resolvedResourceType: "entity",
-      resolvedResourceId: plan.entityId,
+      resolvedResourceType: plan.resourceType,
+      resolvedResourceId: plan.resourceId,
       workspaceId: plan.workspaceId,
     },
   });
@@ -324,6 +377,16 @@ export async function applyPublish(
 ): Promise<Extract<PublishResult, { status: "published" | "republished" }>> {
   const snapshot = await buildPublishedSnapshot(database, plan);
   const pin = await latestCheckpointId(database, plan.documentId);
+  // An HTML page also keeps what its published mode answers from.
+  const page = (await isPageDocument(database, plan.documentId))
+    ? await buildPublishedPage(database, {
+        publisherUserId: opts.userId,
+        documentId: plan.documentId!,
+      })
+    : null;
+  const stored: Record<string, unknown> = page
+    ? { ...snapshot, [PUBLISHED_PAGE_KEY]: page }
+    : snapshot;
   const now = new Date();
 
   const [live] = await database
@@ -342,8 +405,8 @@ export async function applyPublish(
     .from(resourceShares)
     .where(
       and(
-        eq(resourceShares.resourceType, "entity"),
-        eq(resourceShares.resourceId, plan.entityId),
+        eq(resourceShares.resourceType, plan.resourceType),
+        eq(resourceShares.resourceId, plan.resourceId),
         eq(resourceShares.audience, "public"),
         isNull(resourceShares.revokedAt),
         // The record's STANDALONE publication only: a site member row (0336)
@@ -373,7 +436,7 @@ export async function applyPublish(
         // A live publication never loses its pin (0276 trigger); keep the old
         // one if the document has no checkpoint now.
         publishedDocumentVersionId: pin ?? live.pin,
-        publishedProperties: snapshot,
+        publishedProperties: stored,
         ...(minted
           ? { tokenHash: hashToken(minted), tokenPrefix: minted.slice(0, 6) }
           : {}),
@@ -397,8 +460,8 @@ export async function applyPublish(
     const [row] = await database
       .insert(resourceShares)
       .values({
-        resourceType: "entity",
-        resourceId: plan.entityId,
+        resourceType: plan.resourceType,
+        resourceId: plan.resourceId,
         workspaceId: plan.workspaceId,
         audience: "public",
         anchorProjectId: null,
@@ -406,7 +469,7 @@ export async function applyPublish(
         publishedAt: now,
         publishedBy: opts.userId,
         publishedDocumentVersionId: pin,
-        publishedProperties: snapshot,
+        publishedProperties: stored,
         createdBy: opts.userId,
         permissions: { read: true },
         tokenHash: minted ? hashToken(minted) : null,
@@ -434,8 +497,8 @@ export async function applyPublish(
     data: {
       op: "publish",
       shareId,
-      resourceType: "entity",
-      resourceId: plan.entityId,
+      resourceType: plan.resourceType,
+      resourceId: plan.resourceId,
       publishedFields: Object.keys(snapshot),
       pinned: !!(pin ?? live?.pin),
       outcome: status,
@@ -454,7 +517,29 @@ export async function applyPublish(
     publishedFields: Object.keys(snapshot),
     pinned: !!(pin ?? live?.pin),
     rowsWritten,
+    ...(page
+      ? {
+          page: {
+            reads: page.reads.length,
+            failed: page.reads.filter((r) => !r.ok).length,
+          },
+        }
+      : {}),
   };
+}
+
+/** Is this document an HTML page (what a published page is made of)? */
+async function isPageDocument(
+  database: Db,
+  documentId: string | null
+): Promise<boolean> {
+  if (!documentId) return false;
+  const [doc] = await database
+    .select({ type: documents.type, mimeType: documents.mimeType })
+    .from(documents)
+    .where(eq(documents.id, documentId))
+    .limit(1);
+  return !!doc && isFramePage(doc);
 }
 
 /**
@@ -485,7 +570,7 @@ export async function unpublishResource(
     .set({ state: "draft", updatedAt: new Date() })
     .where(
       and(
-        eq(resourceShares.resourceType, "entity"),
+        eq(resourceShares.resourceType, record.kind),
         eq(resourceShares.resourceId, record.id),
         eq(resourceShares.audience, "public"),
         eq(resourceShares.state, "published"),
@@ -506,7 +591,7 @@ export async function unpublishResource(
       data: {
         op: "unpublish",
         shareId,
-        resourceType: "entity",
+        resourceType: record.kind,
         resourceId: record.id,
       },
     });
@@ -557,7 +642,7 @@ export async function revokePublication(
     })
     .where(
       and(
-        eq(resourceShares.resourceType, "entity"),
+        eq(resourceShares.resourceType, record.kind),
         eq(resourceShares.resourceId, record.id),
         eq(resourceShares.audience, "public"),
         isNull(resourceShares.revokedAt)
@@ -577,7 +662,7 @@ export async function revokePublication(
     data: {
       op: "revoke_publication",
       shareId,
-      resourceType: "entity",
+      resourceType: record.kind,
       resourceId: record.id,
       revoked: true,
     },
