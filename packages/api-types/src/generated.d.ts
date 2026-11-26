@@ -64078,6 +64078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -64092,6 +64093,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -64100,11 +64102,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
 				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
@@ -64118,6 +64122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -64132,6 +64137,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -64140,11 +64146,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
 				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
@@ -64158,6 +64166,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: Pick<{
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -64172,6 +64181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -64180,11 +64190,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
 				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
@@ -64219,6 +64231,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				anchorKinds: ("entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace")[] | null;
 				bundleSource: string | null;
 				category: string | null;
 				configSchema: Record<string, unknown>;
@@ -64233,6 +64246,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deps: Record<string, string> | null;
 				description: string | null;
 				externalHosts: string[] | null;
+				fallback: string | null;
 				icon: string | null;
 				id: string;
 				isActive: boolean;
@@ -64241,11 +64255,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
+				placements: ("bento" | "floating" | "inline" | "page" | "side")[] | null;
 				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
 				source: string | null;
+				status: "active" | "draft" | "proposed" | "retired";
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
 				updatedAt: Date;
