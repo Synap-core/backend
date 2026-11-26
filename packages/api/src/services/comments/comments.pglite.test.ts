@@ -947,13 +947,15 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
 
   it("a scoped key comments and resolves on READ, capped by its grant (never the update right); an agent never resolves", async () => {
     // A sync-owned record (D0: never edited by hand) the Design app pins a
-    // story on. The person's app token holds only read on its kind.
+    // story on. The person's app token holds only reads: the kind, and
+    // `channel.read` (the rooms of the records the same scope reads, so the
+    // object's conversation; without it the room is not found).
     const UI = randomUUID();
     await q(
       `insert into entities (id, user_id, workspace_id, title, type) values ($1,$2,$3,'Button','ui-component')`,
       [UI, OWNER, WS]
     );
-    const appGrant = grantPod(["entity.ui-component.read"]);
+    const appGrant = grantPod(["entity.ui-component.read", "channel.read"]);
     const storyPin = {
       kind: "entity",
       entityId: UI,
@@ -1022,7 +1024,7 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
 
     // A key that cannot read the object comments on nothing.
     const before = await messageCount();
-    const noRead = await runWithGrant(grantPod(["entity.note.read"]), () =>
+    const noRead = await runWithGrant(grantPod(["entity.note.read", "channel.read"]), () =>
       post(hubApp(EDITOR), "/comments", {
         anchor: storyPin,
         content: "cannot read it",

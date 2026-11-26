@@ -1162,7 +1162,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel. Or, instead of threadId, `object` (+ `state`): that entity's or document's comment threads, each with its anchor (a pin's `locator`: design frame/block or story, viewport, point, contentVersion), replies and resolvedAt. Resolving is the person's: reply in the thread (synap_post_message comment.replyTo) with what you did.",
+          "A thread's newest messages plus linked entities and documents; read it before posting. threadId: from synap_post_message or the personal channel. Or `object`: its comment threads (anchor with a pin's locator, resolvedAt); the person resolves, you reply (synap_post_message comment.replyTo).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1170,23 +1170,12 @@ export const tools = {
             object: {
               type: "object",
               description:
-                "Instead of threadId: {type: 'entity' | 'document', id} — read its comment threads.",
-              properties: {
-                type: { type: "string", enum: ["entity", "document"] },
-                id: { type: "string" },
-              },
-              required: ["type", "id"],
+                "Instead of threadId: {type:'entity'|'document', id}.",
             },
-            state: {
-              type: "string",
-              enum: ["open", "resolved"],
-              description:
-                "With object: open threads (default) or resolved ones.",
-            },
+            state: { type: "string", enum: ["open", "resolved"] },
             limit: {
               type: "number",
-              description:
-                "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn.",
+              description: "Newest messages, 1-100 (default 50).",
             },
             cursor: {
               type: "string",
@@ -6739,7 +6728,7 @@ export const tools = {
                 anchor: {
                   type: "object",
                   description:
-                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}: locator pins it on a design ({surface:'design', frameId, blockId?}) or a story ({surface:'story', storyId}), with viewport ('desktop'|'tablet'|'phone'), point {x, y} (fractions 0 to 1), contentVersion (the revision you saw) and screenshot? (a pod file id).",
+                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}; locator: {surface:'design', frameId, blockId?} | {surface:'story', storyId}, + viewport, point {x,y} 0-1, contentVersion, screenshot?.",
                 },
                 replyTo: {
                   type: "string",
