@@ -154,8 +154,7 @@ const graph = (kind?: "all" | "run") =>
 const ids = (
   nodes: Array<{ id: string; inWindow: boolean }>,
   inWindow: boolean
-) =>
-  new Set(nodes.filter((n) => n.inWindow === inWindow).map((n) => n.id));
+) => new Set(nodes.filter((n) => n.inWindow === inWindow).map((n) => n.id));
 
 beforeAll(async () => {
   const tables = (Object.values(schema) as unknown[]).filter(
