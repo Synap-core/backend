@@ -71,9 +71,7 @@ export const OPENABLE_ANCHOR_KINDS = [
 ] as const satisfies readonly AnchorKind[];
 export type OpenableAnchorKind = (typeof OPENABLE_ANCHOR_KINDS)[number];
 
-export function isOpenableAnchorKind(
-  kind: string
-): kind is OpenableAnchorKind {
+export function isOpenableAnchorKind(kind: string): kind is OpenableAnchorKind {
   return (OPENABLE_ANCHOR_KINDS as readonly string[]).includes(kind);
 }
 

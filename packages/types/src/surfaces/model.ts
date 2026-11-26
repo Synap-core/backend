@@ -177,7 +177,7 @@ export interface SurfaceSpec {
   cellKey?: string;
   props?: Record<string, unknown>;
   /** html only: the declared reads, as sent (checked at the door). */
-  reads?: unknown;
+  reads?: unknown[] | null;
   workspaceId?: string;
 }
 
