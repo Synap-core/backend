@@ -391,9 +391,7 @@ export async function resolveEntityWorkspaceId(
 }
 
 /** The space is archived (a missing row is not: the read decides access). */
-export async function isWorkspaceArchived(
-  workspaceId: string
-): Promise<boolean> {
+async function isWorkspaceArchived(workspaceId: string): Promise<boolean> {
   const row = await db.query.workspaces.findFirst({
     columns: { archivedAt: true },
     where: eq(workspaces.id, workspaceId),

@@ -27,7 +27,6 @@ import {
   isUuid,
   logger,
   resolveProposalId,
-  getUserMemberWorkspaceIds,
 } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
@@ -82,7 +81,6 @@ import {
   readReasoning,
   rejectMissingWriteWorkspace,
   resolveEntityWorkspaceId,
-  isWorkspaceArchived,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -800,23 +798,8 @@ export const buildHandlers: McpHandlerMap = {
     // User-floor catalog (member workspaces + pod-wide) through the shared list
     // door. Narrow only on an explicit/confined workspaceId — not advisory
     // focus (focus is a write default; catalog stays full user floor).
-    // When workspaceId is null (no confinement), the listAllPage door's SQL skips
-    // the narrow-only WHERE clause, and the visibility predicate alone governs —
-    // which for a pod-level key may return 0 rows if the key's grant does not
-    // include a workspace lens. To avoid losing the full floor, always pass the
-    // user's first accessible workspace as the narrow lens when workspaceId is
-    // absent, so the predicate can evaluate against a concrete space. The full
-    // floor is still reachable by passing workspaceId explicitly.
-    const userId = ctx.userId;
-    let effectiveWorkspaceId = confinedWorkspaceId;
-    if (!effectiveWorkspaceId) {
-      const memberIds = await getUserMemberWorkspaceIds(userId, {
-        activeOnly: true,
-      });
-      effectiveWorkspaceId = memberIds?.[0] ?? null;
-    }
     const result = await listPlaybooksDoor(playbookDoorIdentity(ctx), {
-      workspaceId: effectiveWorkspaceId,
+      workspaceId: confinedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
       limit:
@@ -893,19 +876,7 @@ export const buildHandlers: McpHandlerMap = {
         userId,
         args.entityId as string | undefined
       );
-      // If the resolved workspace is archived, fall back to the first non-archived
-      // member workspace, or pod-wide matching via list_playbooks.
-      if (
-        resolved.workspaceId &&
-        !(await isWorkspaceArchived(resolved.workspaceId))
-      ) {
-        matchWsId = resolved.workspaceId;
-      } else {
-        const memberIds = await getUserMemberWorkspaceIds(userId, {
-          activeOnly: true,
-        });
-        matchWsId = memberIds?.[0] ?? null;
-      }
+      matchWsId = resolved.workspaceId;
       autoPicked = resolved.autoPicked;
       memberCount = resolved.memberCount;
     }
