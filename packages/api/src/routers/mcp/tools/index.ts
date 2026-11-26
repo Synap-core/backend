@@ -1884,7 +1884,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
+          "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`, on the ops it declares in `reads`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown): attach it with `attachTo`. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1979,7 +1979,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops; `insert_embed {directive, ref, props?, fallback?, sectionId?|after?}` adds an embed (synap-cell {cellKey} + props, synap-entity {id}, synap-view {viewId}) written for you — never hand-write directive text — at the end, at the end of section `sectionId`, or after the line holding `after`; `set_scope {scope}` sets the living document's scope (same shape as synap_create_document's, null clears it); `set_refresher {automationId}` binds the automation whose runs refresh its AI sections (null unbinds). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
+          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops; `insert_embed {directive, ref, props?, fallback?, sectionId?|after?}` adds an embed (synap-cell {cellKey} + props, synap-entity {id}, synap-view {viewId}) written for you — never hand-write directive text — at the end, at the end of section `sectionId`, or after the line holding `after`; `set_scope {scope}` sets the living document's scope (same shape as synap_create_document's, null clears it); `set_refresher {automationId}` binds the automation whose runs refresh its AI sections (null unbinds); `replace_block {blockId, html}` (html page) replaces the one element whose `data-block-id` (or slide id) is blockId; the rest stays. Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
         inputSchema: {
           type: "object",
           properties: {
@@ -2008,6 +2008,7 @@ export const tools = {
                       "insert_embed",
                       "set_scope",
                       "set_refresher",
+                      "replace_block",
                     ],
                   },
                   id: {
@@ -2080,6 +2081,14 @@ export const tools = {
                     type: ["string", "null"],
                     description:
                       "set_refresher: the automation's id, or null to unbind it.",
+                  },
+                  blockId: {
+                    type: "string",
+                    description: "replace_block: the block id.",
+                  },
+                  html: {
+                    type: "string",
+                    description: "replace_block: its new outer HTML, same id.",
                   },
                 },
                 required: ["op"],
@@ -3973,7 +3982,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).',
+          'Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit; configure a catalog cell first. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Declare its `reads`: the frame may query nothing else. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded, attached to one object (synap_attach_surface) or bound (synap_promote_cell_to_renderer).',
         inputSchema: {
           type: "object",
           properties: {
@@ -4042,7 +4051,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4: make a proven Cell a KIND's look (profileSlug; slots list|detail|card|dashboard), bound per kind, never as every kind's default. A report, cockpit or page for one object is a document, bento or HTML artifact, not a renderer. ONE capability, playbook or view: target {kind,id} (slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
+          "Escalation L4: make a proven Cell a KIND's look (profileSlug; slots list|detail|card|dashboard), bound per kind, never as every kind's default. A report, cockpit or page for one object is a document, bento or HTML artifact attached to it (synap_attach_surface), not a renderer. Still accepted: ONE capability, playbook or view as target {kind,id} (slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/surfaces/cell-authoring.",
         inputSchema: {
           type: "object",
           properties: {

@@ -111,6 +111,7 @@
     "esbuild": "^0.25.0",
     "gray-matter": "^4.0.3",
     "hono": "^4.12.10",
+    "htmlparser2": "^10.1.0",
     "isolated-vm": "^6.0.2",
     "jsonwebtoken": "^9.0.2",
     "linkedom": "^0.18.13",

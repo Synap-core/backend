@@ -275,7 +275,6 @@ const SKILL_STEM_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
   automations: ["capabilities"],
   capabilities: ["capabilities"],
   "escalation-ladder": ["capabilities", "schema"],
-  "viewframe-cells": ["build"],
   showing: ["build"],
   "document-embeds": ["build", "data"],
 };
@@ -292,9 +291,12 @@ const SKILL_STEM_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
  *
  * synap-ui teaches views, bento, cells (`build`) over profiles and the flow it
  * reads first (`synap_list_profiles`, `synap_get_flow`: `read`); synap-app
- * teaches the same pod-native build before a separate app, and `flow.of`.
+ * teaches the same pod-native build before a separate app, and `flow.of`;
+ * surfaces teaches the same build (find what an object carries, pick the
+ * body, anchor it) over the same reads.
  */
 const SKILL_PACKAGE_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
+  surfaces: ["build", "read"],
   "synap-ui": ["build", "read"],
   "synap-app": ["build", "read"],
 };

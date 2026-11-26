@@ -25876,6 +25876,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/** An HTML page: how many declared reads its snapshot answers, and how many it holds as errors. */
+	page?: {
+		failed: number;
+		reads: number;
+	};
 	/**
 	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
 	 * with the token, so present ONCE too — and only when the pod has a page.

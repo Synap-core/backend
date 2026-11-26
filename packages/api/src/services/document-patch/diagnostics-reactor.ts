@@ -2,7 +2,8 @@
  * The AFTER-SAVE diagnostics reactor: when a document's content changes by any
  * door (a person's autosave, a restore, an approval, a patch), re-check what
  * will not render and stamp it on `documents.metadata.diagnostics` for the
- * revision it checked.
+ * revision it checked. For an html page it also stamps the block manifest
+ * (`metadata.blocks`, `html-block-manifest.ts`).
  *
  * A reactor, not a line in each save door, for the reason
  * `closing-report-reactor.ts` gives: every content door already emits
@@ -29,6 +30,7 @@ import {
   storedRunTimeDiagnostics,
 } from "./apply-document-patch.js";
 import { readsAsMarkdown } from "./read-document.js";
+import { refreshHtmlBlockManifest } from "./html-block-manifest.js";
 
 const logger = createLogger({ module: "document-diagnostics-reactor" });
 
@@ -91,6 +93,16 @@ export const documentDiagnosticsReactor: Reactor = {
       logger.error(
         { error, documentId },
         "document diagnostics reactor failed — the document keeps no stamp for this revision"
+      );
+    }
+    // An html page's block manifest (`metadata.blocks`), stamped the same way:
+    // its own step, so a failed manifest never costs the diagnostics stamp.
+    try {
+      await refreshHtmlBlockManifest(documentId);
+    } catch (error) {
+      logger.error(
+        { error, documentId },
+        "html block manifest could not be stamped — readers re-derive it from the content"
       );
     }
   },

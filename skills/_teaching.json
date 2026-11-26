@@ -358,10 +358,10 @@
     }
   },
   "synap/viewframe-cells": {
-    "teachesTools": ["generate_widget", "create_cell"],
+    "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "ViewFrame cell generation: what the frame provides (React, @synap/kit, no CDN), SynapWidget bridge, intent reads (board, throughput, needs-you, sessions) for a kind's dashboard.",
+    "summary": "Retired: cells live in the surfaces skill (system/surfaces/cells, system/surfaces/cell-authoring).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -953,10 +953,10 @@
     }
   },
   "synap-ui/four-builds": {
-    "teachesTools": ["create_cell", "promote_cell_to_renderer"],
+    "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "The four things you can build: view, dashboard, cell, workspace.",
+    "summary": "Retired: which UI to build lives in the surfaces skill (system/surfaces/skill).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -1007,6 +1007,131 @@
     "skillGroup": "build",
     "alwaysOn": false,
     "summary": "Creating or proposing a workspace.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/SKILL": {
+    "teachesTools": [
+      "find_surfaces",
+      "list_cells",
+      "create_surface",
+      "attach_surface",
+      "create_view",
+      "create_document",
+      "create_cell",
+      "promote_cell_to_renderer",
+      "inspect_surface"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Surfaces: one way to make UI on any pod object. Find what it carries, pick the body (View, Document, Bento, HTML artifact, Whiteboard, renderer binding, attached surface, new Cell), create it anchored, inspect it, hand it over.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/overview": {
+    "teachesTools": [
+      "find_surfaces",
+      "list_views",
+      "list_cells",
+      "create_surface",
+      "attach_surface",
+      "inspect_surface"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "The surface model (bodies, blocks, renders vs attached) and the path: find, choose, create anchored, inspect, hand over.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/choose": {
+    "teachesTools": [
+      "create_view",
+      "create_document",
+      "create_surface",
+      "attach_surface",
+      "create_cell",
+      "promote_cell_to_renderer",
+      "update_view_content"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Which body for which intent, the tie-breakers (reports markdown-first, decks), the body ladder.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/examples": {
+    "teachesTools": [],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Worked prompts and the body each one gets.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/practices": {
+    "teachesTools": [
+      "find_surfaces",
+      "list_views",
+      "list_cells",
+      "create_cell",
+      "create_document",
+      "inspect_surface"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Practices: find before create, name the body, anchor, declared reads, proposals, inspect before handing over, words.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/html": {
+    "teachesTools": ["create_document", "update_document", "create_surface"],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "HTML artifacts: create, attach, edit, declared reads, window.synap.context, brand; what is not available yet.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/cells": {
+    "teachesTools": [
+      "list_cells",
+      "create_cell",
+      "attach_surface",
+      "promote_cell_to_renderer"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Cells: type vs instance, the cell block, list before generate, place / embed / attach / promote, a kind's dashboard.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "surfaces/cell-authoring": {
+    "teachesTools": ["create_cell", "promote_cell_to_renderer"],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Cell authoring: what the frame provides (React, @synap/kit, no CDN), the define recipe with declared reads, the bridge, intent and work reads, shell actions.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

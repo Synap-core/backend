@@ -1,0 +1,199 @@
+# The choice-rule eval of the `surfaces` skill (audit appendix E §4, document 639889d5).
+# Run: skills/surfaces/eval/run.mjs (see its header). Bar: >= 24/26 prompts and 7/7 adversarial.
+#
+# Shape (kept flat so run.mjs parses it with no YAML library): each item is
+#   - id: <id>
+#     prompt: "<what the person says>"
+#     expectBody: [<accepted bodies>]   view | document | bento | html | whiteboard | renderer | cell | site
+#     expectDoor: [<accepted doors>]    the door that makes or binds it (synap_*), or none (nothing new is made)
+#     attached: true                    optional: the surface must be anchored to ONE object
+#     why: "<the rule that decides it>"
+# A pass needs the body AND the door in the accepted lists (and an anchor when `attached`).
+
+prompts:
+  - id: p01
+    prompt: "Show all deals"
+    expectBody: [view]
+    expectDoor: [synap_create_view]
+    why: "Many records of one kind."
+  - id: p02
+    prompt: "Show my deals by stage"
+    expectBody: [view]
+    expectDoor: [synap_create_view]
+    expectViewType: [pipeline]
+    why: "The kind has a declared lifecycle, so its pipeline beats a kanban."
+  - id: p03
+    prompt: "What's due this week?"
+    expectBody: [view]
+    expectDoor: [synap_create_view]
+    why: "Records with dates: a calendar or a filtered list."
+  - id: p04
+    prompt: "Make a dashboard for my sales"
+    expectBody: [bento]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Numbers that change; monitor and operate."
+  - id: p05
+    prompt: "Make a dashboard for the Fundraising project"
+    expectBody: [bento]
+    expectDoor: [synap_create_surface, synap_create_view]
+    attached: true
+    why: "Monitor, and one object carries it."
+  - id: p06
+    prompt: "Give the Fundraising project an investor radar"
+    expectBody: [bento, cell]
+    expectDoor: [synap_create_surface, synap_attach_surface, synap_create_view]
+    attached: true
+    why: "An extra screen on ONE object, not a kind default."
+  - id: p07
+    prompt: "Make deals look different everywhere"
+    expectBody: [renderer]
+    expectDoor: [synap_promote_cell_to_renderer]
+    why: "Kind-wide look."
+  - id: p08
+    prompt: "Make this deal's page show its email thread on top"
+    expectBody: [cell, view, bento, document]
+    expectDoor: [synap_create_surface, synap_attach_surface]
+    attached: true
+    why: "One object, not the kind."
+  - id: p09
+    prompt: "Write a memo to the team about the pricing change"
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "Internal and mostly text."
+  - id: p10
+    prompt: "Draft the spec for the export feature"
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "Text, internal."
+  - id: p11
+    prompt: "Pitch deck for investors"
+    expectBody: [html]
+    expectDoor: [synap_create_document, synap_create_surface]
+    why: "Present outside, with a custom design."
+  - id: p12
+    prompt: "Make a one-pager I can send to a prospect"
+    expectBody: [html]
+    expectDoor: [synap_create_document, synap_create_surface]
+    why: "Audience outside the pod."
+  - id: p13
+    prompt: "Write the Q3 report for the board"
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "A report is written markdown-first; its HTML is generated when it is shared."
+  - id: p14
+    prompt: "Brainstorm names for the new product with me"
+    expectBody: [whiteboard]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Unfinished thinking."
+  - id: p15
+    prompt: "Map how our onboarding steps connect"
+    expectBody: [whiteboard]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Thinking and mapping, not records."
+  - id: p16
+    prompt: "Show deals as a funnel chart"
+    expectBody: [bento, cell, document]
+    expectDoor:
+      [
+        synap_create_view,
+        synap_update_view,
+        synap_create_document,
+        synap_create_surface,
+      ]
+    why: "The catalog has chart-funnel: catalog before generate."
+  - id: p17
+    prompt: "A chart the catalog does not have: a cohort heatmap of retention"
+    expectBody: [cell]
+    expectDoor: [synap_create_cell]
+    why: "A new visual unit, reused everywhere after."
+  - id: p18
+    prompt: "Where do things stand on project X? I just need a read-out for today."
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "Mostly text, read once."
+  - id: p19
+    prompt: "I want to watch project X every morning"
+    expectBody: [bento]
+    expectDoor: [synap_create_surface, synap_create_view]
+    attached: true
+    why: "Numbers that change, watched over time."
+  - id: p20
+    prompt: "Show me a summary comparing my top 5 leads"
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "Mostly text, internal."
+  - id: p21
+    prompt: "Publish our roadmap on the website"
+    expectBody: [site, html]
+    expectDoor: [none, synap_create_document, synap_create_view]
+    why: "Audience outside, live data: a Site over an exposed view, or an HTML artifact."
+  - id: p22
+    prompt: "Make the Posts kind's own dashboard"
+    expectBody: [renderer]
+    expectDoor: [synap_promote_cell_to_renderer]
+    why: "A kind-level page, not one object."
+  - id: p23
+    prompt: "Let's plan the offsite together, live"
+    expectBody: [whiteboard]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Live cooperation."
+  - id: p24
+    prompt: "Turn this whiteboard into slides for Monday"
+    expectBody: [whiteboard]
+    expectDoor: [none, synap_update_view_content]
+    why: "The presenter is a mode, not a new body."
+  - id: p25
+    prompt: "A board of my tasks I can drag between columns"
+    expectBody: [view]
+    expectDoor: [synap_create_view]
+    why: "Edit many records."
+  - id: p26
+    prompt: "Health of my pod: errors, queue, cost"
+    expectBody: [bento]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Monitor and operate."
+
+adversarial:
+  - id: a01
+    prompt: "Show me a summary comparing my top 5 leads"
+    expectBody: [document, view]
+    expectDoor: [synap_create_document, synap_create_view]
+    why: "Was routed to create_cell by creative-loop.md; a summary is a Document (or a View for the list)."
+  - id: a02
+    prompt: "Make a Q2 revenue report I can send to the board"
+    expectBody: [document]
+    expectDoor: [synap_create_document]
+    why: "Was a cell opened as a tab (viewframe-cells.md); a report is a Document first, then its HTML artifact."
+  - id: a03
+    prompt: "Show the pipeline as a funnel"
+    expectBody: [bento, cell, document]
+    expectDoor:
+      [
+        synap_create_view,
+        synap_update_view,
+        synap_create_document,
+        synap_create_surface,
+      ]
+    why: "Was 'generate a frame'; chart-funnel is a catalog cell."
+  - id: a04
+    prompt: "Build me a dashboard to keep an eye on Project Eve"
+    expectBody: [bento]
+    expectDoor: [synap_create_surface, synap_create_view]
+    attached: true
+    why: "Was a living Document; a cockpit watched over time is a Bento attached to the project."
+  - id: a05
+    prompt: "Brainstorm launch ideas with me"
+    expectBody: [whiteboard]
+    expectDoor: [synap_create_view, synap_create_surface]
+    why: "Was notes or a document; thinking together is a Whiteboard."
+  - id: a06
+    prompt: "Pitch deck for investors"
+    expectBody: [html]
+    expectDoor: [synap_create_document, synap_create_surface]
+    why: "Had no body; an HTML artifact deck on the project, colours from the brand kit."
+  - id: a07
+    prompt: "Give the Fundraising project an investor radar"
+    expectBody: [bento, cell]
+    expectDoor: [synap_create_surface, synap_attach_surface, synap_create_view]
+    attached: true
+    why: "Was a kind-wide renderer on project (it changes EVERY project); an attached surface on that one project."
