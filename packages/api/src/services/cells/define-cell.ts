@@ -25,6 +25,12 @@ import {
   type CellSourceFinding,
   type CellSourceRefusalCode,
 } from "@synap-core/types/renderables";
+import {
+  parseDeclaredReads,
+  parseDeclaredWrites,
+  type CellBridgeDeclaredReads,
+  type CellBridgeDeclaredWrites,
+} from "@synap-core/types/cell-bridge";
 import { slugify } from "../sharing/site-config.js";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
 import {
@@ -343,7 +349,8 @@ export interface DefineCellInput {
    * Explicit for the same reason as `rendererType`: a Cell Studio cell is
    * AUTHORED, not installed, and says so with its own category. Free text in the
    * schema; purely a picker grouping, never a trust signal (that is
-   * `trustLevel`, which stays `generated` on insert for every caller).
+   * `trustLevel`, which is `generated` on insert unless an install door
+   * passes `trustLevel: "installed"`).
    *
    * Omit-is-silence on update.
    */
@@ -396,15 +403,10 @@ export interface DefineCellInput {
    * `[]` or `null` to clear it.
    *
    * CHANGING it on an existing row demotes `trustLevel` to `generated` (see
-   * `defineCell`). ⚠️ That demotion is currently a NO-OP in practice, and the
-   * code is kept as a forward guard rather than a live control: nothing writes
-   * `widget_definitions.trust_level = "trusted"` today — every `"trusted"`
-   * write targets `cell_instances` (`routers/cell-instances.ts`,
-   * `hub-protocol/rest/cell-instances.ts`), and `sync.ts:1181` floors an
-   * incoming row to `"generated"` deliberately. So a row cannot be trusted, and
-   * demoting it changes nothing. It becomes load-bearing the moment a
-   * human-approval path grants definition-level trust — do not delete it, and
-   * do not cite it as an existing mitigation.
+   * `defineCell`). Load-bearing since the install doors stamp `installed`
+   * (`trustLevel`, Surfaces P6a): a re-push that re-points an installed
+   * cell's egress, by any door but an install, loses the installed trust.
+   * (`sync.ts` still floors an incoming row to `"generated"`.)
    *
    * Origins are NOT validated here: `buildFrameCsp` is the single parser of the
    * string before it reaches a CSP directive, and adding a second one is
@@ -440,8 +442,48 @@ export interface DefineCellInput {
    * `placeOn` (that act opens its own transaction).
    */
   tx?: DbOrTx;
+  /**
+   * The reads this cell's frame DECLARES (`CellBridgeDeclaredReads`): a
+   * subset of `CELL_BRIDGE_READ_OPS`, checked here (a `CellDefinitionError`
+   * when it is not) and enforced by the server's frame read door. Same
+   * omit-is-silence rule as `viewTypes`: undefined on an upsert of an
+   * EXISTING row leaves the stored declaration untouched; `null` clears it
+   * (back to undeclared).
+   */
+  reads?: CellBridgeDeclaredReads | null;
+  /** The writes it declares (`CellBridgeDeclaredWrites`); same rules as `reads`. */
+  writes?: CellBridgeDeclaredWrites | null;
+  /**
+   * `"installed"`: a PERSON approved installing this content (the install
+   * doors: `installMarketplaceCell` for Hub `POST /cells/install` and its
+   * `cell/install` approval, `installCellFromDefinition` for tRPC
+   * `cells.install`, `market.install`, `/packages/apply` and renderer
+   * bundles). Its frame then writes directly (`resolveViewTrust`, founder
+   * decision on backend#1290: trusted or installed write, generated
+   * proposes).
+   *
+   * Omitted (every other writer, an agent's approved define included): a new
+   * row is `generated`, and a write over an `installed` row DEMOTES it to
+   * `generated`, because the content is no longer the bytes a person
+   * installed. A `trusted` row keeps its level unless its egress changes
+   * (below). Never taken from a request body: only the install functions set it.
+   */
+  trustLevel?: "installed";
   /** Acting user — stamped on the realtime event; with `placeOn`, the view's writer. */
   userId: string;
+}
+
+/** A declaration as stored: undefined = silence, null = clear, else parsed. */
+function declaredOrRefuse<T>(
+  raw: T[] | null | undefined,
+  parse: (
+    raw: unknown
+  ) => { ok: true; value: T[] } | { ok: false; error: string }
+): T[] | null | undefined {
+  if (raw === undefined || raw === null) return raw;
+  const parsed = parse(raw);
+  if (!parsed.ok) throw new CellDefinitionError(parsed.error);
+  return parsed.value;
 }
 
 /** Normalize a declared string list: trimmed non-empty entries, deduped; `[]` → null. */
@@ -606,6 +648,14 @@ async function writeCell(
 
   const viewTypes = normalizeStringList(input.viewTypes);
   const externalHosts = normalizeStringList(input.externalHosts);
+  // Declared reads / writes: refused here when outside the ceiling, whichever
+  // door came in. Omit-is-silence on update, like `viewTypes`.
+  const reads = declaredOrRefuse(input.reads, parseDeclaredReads);
+  const writes = declaredOrRefuse(input.writes, parseDeclaredWrites);
+  const declaredUpdate = {
+    ...(reads === undefined ? {} : { reads }),
+    ...(writes === undefined ? {} : { writes }),
+  };
 
   // `contentKind` (the renderer SLOT) and `viewTypes` (view-renderer AFFINITY)
   // are DIFFERENT axes, but declaring an affinity IS declaring the cell renders
@@ -754,6 +804,7 @@ async function writeCell(
   let externalHostsUpdate:
     { externalHosts: string[] | null } | Record<string, never> = {};
   let trustDemotion: { trustLevel: "generated" } | Record<string, never> = {};
+  // (`trustUpdate` below folds this demotion with the install stamp.)
   if (externalHosts !== undefined) {
     externalHostsUpdate = { externalHosts };
     const [existing] = await db
@@ -779,6 +830,22 @@ async function writeCell(
       trustDemotion = { trustLevel: "generated" as const };
     }
   }
+
+  // TRUST of the row as written. An install a person approved stamps
+  // `installed` (it re-approves the egress too, so it wins over the demotion).
+  // Any other write demotes: a changed egress to `generated` (above), and an
+  // `installed` row to `generated` (its content is no longer what the person
+  // installed). A `trusted` or `generated` row otherwise keeps its level.
+  const trustUpdate =
+    input.trustLevel === "installed"
+      ? { trustLevel: "installed" as const }
+      : "trustLevel" in trustDemotion
+        ? trustDemotion
+        : {
+            trustLevel: drizzleSql<
+              "trusted" | "installed" | "generated"
+            >`CASE WHEN ${widgetDefinitions.trustLevel} = 'installed' THEN 'generated' ELSE ${widgetDefinitions.trustLevel} END`,
+          };
 
   // ONE instant for the insert's timestamps, set here rather than left to the
   // column default: `now()` has microsecond precision, the `Date` the write
@@ -806,7 +873,9 @@ async function writeCell(
     defaultSize: input.defaultSize ?? { w: 6, h: 4 },
     ...(input.minSize === undefined ? {} : { minSize: input.minSize }),
     isActive: true,
-    trustLevel: "generated" as const,
+    trustLevel: input.trustLevel ?? ("generated" as const),
+    reads: reads ?? null,
+    writes: writes ?? null,
     viewRendererViewTypes: viewTypes ?? null,
     // INSERT branch: omitted ⇒ NULL ⇒ the frame reaches no external origin.
     externalHosts: externalHosts ?? null,
@@ -881,7 +950,8 @@ async function writeCell(
           ...contentKindUpdate,
           ...versionUpdate,
           ...externalHostsUpdate,
-          ...trustDemotion,
+          ...trustUpdate,
+          ...declaredUpdate,
           // The content changes in this statement: the old fingerprint no
           // longer describes it. Stamped again right after.
           contentSha256: null,
@@ -920,7 +990,8 @@ async function writeCell(
         ...contentKindUpdate,
         ...versionUpdate,
         ...externalHostsUpdate,
-        ...trustDemotion,
+        ...trustUpdate,
+        ...declaredUpdate,
         // Same as the space branch: cleared here, stamped right after.
         contentSha256: null,
         updatedAt: new Date(),

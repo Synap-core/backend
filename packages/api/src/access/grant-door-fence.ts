@@ -1366,6 +1366,29 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // the transcription provider (rate class `ai_interactive`).
   [route("/files/:id/transcribe"), SEAMED],
   [/^\/memory\/search\/?$/, MEMORY_RECALL],
+  // THE frame read door (`frameRead`, services/surfaces/frame-read.ts): writes
+  // no pod data (its own `frame_read_log` line only). It runs one frame read
+  // op as the person through the tRPC procedure a host maps it to: entities,
+  // documents, views, sessions and their needs-you (proposals, rooms),
+  // playbooks, projects and goals, and the cell type it loads (`widget`).
+  // Those procedures are not all narrowed to a grant row by row, so a key
+  // passes only when it reads every one of them unbounded; a pinned key is
+  // refused (the desktop and pod admin read as the person).
+  [
+    /^\/frame\/read\/?$/,
+    READS(
+      "entity",
+      "document",
+      "view",
+      "session",
+      "proposal",
+      "channel",
+      "playbook",
+      "project",
+      "track",
+      "widget"
+    ),
+  ],
   // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
   // standing names a space only when the person's floor AND the key's grant
   // reach it (`readTemplateStanding`); a holder it hides is answered as absent

@@ -682,6 +682,8 @@ export const entityHandlers: McpHandlerMap = {
       ...(args.refreshAutomationId !== undefined
         ? { refreshAutomationId: args.refreshAutomationId as string | null }
         : {}),
+      // An html page's declared reads: checked and stored by the hub door.
+      ...(args.reads !== undefined ? { reads: args.reads } : {}),
     });
     // ATTACHMENT (the description used to claim it without doing it). The
     // link lives on `entities.documentId` — `documents.entityId` was removed —

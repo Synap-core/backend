@@ -33,6 +33,8 @@ export async function materializeApprovedDocument(input: {
   sourceProposalId: string | null;
   /** Scope / refresher (0387), already read through the floor by the caller. */
   fields?: DocumentScopeFields;
+  /** The body's metadata (an html page's declared `reads`), already checked. */
+  metadata?: Record<string, unknown>;
 }): Promise<{ id: string }> {
   const docRepo = new DocumentRepository(db, eventRepository);
   const title = input.title || "Untitled";
@@ -84,6 +86,7 @@ export async function materializeApprovedDocument(input: {
     type: docType,
     content: input.content || "",
     mimeType,
+    ...(input.metadata ? { metadata: input.metadata } : {}),
     ...input.fields,
     provenance: {
       createdByKind: "human",

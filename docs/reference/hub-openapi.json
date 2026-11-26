@@ -54654,6 +54654,124 @@
         }
       }
     },
+    "/frame/read": {
+      "post": {
+        "tags": ["Surfaces"],
+        "summary": "A framed surface's read, checked against what it declares",
+        "description": "The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:\"cell\", typeKey}` or `{kind:\"document\", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. The read runs as the caller, floored to what they may see. Every call is logged. Surface kinds: cell, document.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "surface": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["cell"] },
+                          "typeKey": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["kind", "typeKey"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["document"] },
+                          "id": { "type": "string", "format": "uuid" }
+                        },
+                        "required": ["kind", "id"]
+                      }
+                    ]
+                  },
+                  "op": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "params": { "type": "object", "additionalProperties": {} },
+                  "workspaceId": {
+                    "type": ["string", "null"],
+                    "format": "uuid"
+                  }
+                },
+                "required": ["surface", "op"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The read's answer: exactly what the op's procedure returns (an object, or a list for list reads).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    { "type": "object", "additionalProperties": {} },
+                    { "type": "array", "items": {} }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "code": { "type": "string" }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "code": { "type": "string" }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "code": { "type": "string" }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/designs/catalog": {
       "get": {
         "tags": ["Designs"],

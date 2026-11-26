@@ -139,6 +139,9 @@ export * from "./knowledge-keys.js";
 // NEW: Dynamic Widget Registry
 export * from "./widget-definitions.js";
 
+// Frame read log: every read a framed surface asked the frame read door for (0456)
+export * from "./frame-read-log.js";
+
 // NEW: Entity External Links (connector sync tracking)
 export * from "./entity-external-links.js";
 

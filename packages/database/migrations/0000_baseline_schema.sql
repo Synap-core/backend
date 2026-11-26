@@ -3557,9 +3557,32 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "external_hosts" jsonb
 -- sha256 of the cell's content as stored (mechanism, source, deps, egress),
 -- written by defineCell (0396). NULL = written before fingerprints, or synced.
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_sha256" text;
+-- Declared reads / writes of a cell type's frame (0456). NULL = declares
+-- nothing: the frame read door answers every ceiling read, logged undeclared.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "reads" jsonb;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "writes" jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");
+
+-- frame_read_log (0456): one row per read a framed surface asked the frame
+-- read door for, answered or refused. No foreign key (an append log).
+CREATE TABLE IF NOT EXISTS "frame_read_log" (
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"      text NOT NULL,
+  "workspace_id" uuid,
+  "surface_kind" text NOT NULL,
+  "surface_key"  text NOT NULL,
+  "op"           text NOT NULL,
+  "params_hash"  text NOT NULL,
+  "allowed"      boolean NOT NULL,
+  "declared"     boolean NOT NULL,
+  "at"           timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "frame_read_log_surface_idx"
+  ON "frame_read_log" ("surface_kind", "surface_key", "at");
+CREATE INDEX IF NOT EXISTS "frame_read_log_user_idx"
+  ON "frame_read_log" ("user_id", "at");
 
 CREATE INDEX IF NOT EXISTS "widget_def_workspace_id_idx"
   ON "widget_definitions" ("workspace_id");

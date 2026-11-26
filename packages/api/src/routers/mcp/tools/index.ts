@@ -1946,6 +1946,11 @@ export const tools = {
               description:
                 "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
             },
+            reads: {
+              type: "array",
+              description:
+                'An html page\'s declared reads: [{op, params?}] of window.synap.query; "*" = any. Others are refused.',
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -3961,6 +3966,11 @@ export const tools = {
               required: ["viewId"],
               description:
                 "Bento view (synap_list_views) to add the cell to as a tile, in the same act.",
+            },
+            reads: {
+              type: "array",
+              description:
+                'Reads its frame declares: [{op, params?}] of window.synap.query; param "*" = any. Others are refused.',
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the

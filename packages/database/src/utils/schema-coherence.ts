@@ -719,6 +719,23 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "content_sha256",
     addedBy: "0396_widget_definitions_content_sha256.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "reads",
+    addedBy: "0456_frame_declared_reads.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "writes",
+    addedBy: "0456_frame_declared_reads.sql",
+  },
+  // The frame read door writes one row per read; a missing table fails every
+  // frame read (the door logs before it answers).
+  {
+    table: "frame_read_log",
+    column: "declared",
+    addedBy: "0456_frame_declared_reads.sql",
+  },
 
   // knowledge_facts — Ebbinghaus decay columns (0113)
   {

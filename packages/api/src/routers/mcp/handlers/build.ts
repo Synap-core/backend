@@ -319,6 +319,8 @@ export const buildHandlers: McpHandlerMap = {
         contentKind: z.enum(CONTENT_KINDS).optional(),
         /** Place the cell as a tile on this bento view when it is defined. */
         placeOn: CellPlacementSchema.optional(),
+        /** The frame's declared reads (checked below, `readDeclaredFrameIo`). */
+        reads: z.unknown().optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -328,6 +330,14 @@ export const buildHandlers: McpHandlerMap = {
           .join(", ")}`
       );
     }
+    // A declaration outside the ceiling is refused before anything is filed.
+    const { readDeclaredFrameIo, declaredFrameIoFields } =
+      await import("../../../services/cells/declared-frame-io.js");
+    const declared = readDeclaredFrameIo(parsed.data);
+    if (!declared.ok) {
+      throw new Error(`Invalid synap_create_cell args: ${declared.error}`);
+    }
+    const declaredFields = declaredFrameIoFields(declared);
     const cellWorkspaceId = parsed.data.workspaceId ?? null;
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
@@ -383,6 +393,9 @@ export const buildHandlers: McpHandlerMap = {
         // Where approving places the cell: the executor defines it AND adds
         // its tile to this view, in one act.
         ...(placeOn ? { placeOn } : {}),
+        // What its frame declares it reads / writes: the reviewer sees it,
+        // the executor stores it.
+        ...declaredFields,
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -425,6 +438,7 @@ export const buildHandlers: McpHandlerMap = {
       viewTypes: parsed.data.viewTypes,
       contentKind: parsed.data.contentKind,
       placeOn: parsed.data.placeOn,
+      ...declaredFields,
       userId,
     });
     return ok({ status: result.changeType, ...result });
