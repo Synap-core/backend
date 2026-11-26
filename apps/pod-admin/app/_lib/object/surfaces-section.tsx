@@ -83,10 +83,7 @@ export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
               key={row.key}
               className="flex min-h-6 min-w-0 items-center gap-2 py-0.5"
             >
-              <Icon
-                aria-hidden
-                className="h-4 w-4 shrink-0 text-default-500"
-              />
+              <Icon aria-hidden className="h-4 w-4 shrink-0 text-default-500" />
               {row.href ? (
                 <Link href={row.href} className={DOOR}>
                   {name}

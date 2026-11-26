@@ -225,7 +225,9 @@ describe("tripwire: no user- or agent-facing 'widget'", () => {
     const sources = sourceFiles.map((f) => relative(REPO, f));
     expect(sources.length).toBeGreaterThan(1000);
     expect(sources).toContain("packages/api/src/services/surfaces/create.ts");
-    expect(sources).not.toContain("packages/api/src/routers/mcp/tool-aliases.ts");
+    expect(sources).not.toContain(
+      "packages/api/src/routers/mcp/tool-aliases.ts"
+    );
     const texts = manifestTexts();
     expect(texts.length).toBeGreaterThan(500);
     expect(texts.map((t) => t.where)).toContain("synap_list_cells.description");

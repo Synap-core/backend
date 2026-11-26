@@ -480,7 +480,8 @@ export const cellInstancesRouter = router({
       await insertAttachment({
         anchor: { kind: "entity", id: input.entityId },
         surface: { type: "cell_instance", id: input.cellId },
-        workspaceId: entity.workspaceId ?? null,
+        workspaceId:
+          (entity as { workspaceId?: string | null }).workspaceId ?? null,
         createdBy: userId,
         meta: {},
         attribution: { agentUserId: ctx.agentUserId ?? null },

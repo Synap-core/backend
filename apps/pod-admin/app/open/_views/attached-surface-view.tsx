@@ -29,6 +29,10 @@ import { ViewView } from "./view-view";
 /** An anchor this page opens on a surface (`SURFACE_ANCHOR_HOST_TYPES`). */
 type HostedAnchor = SurfaceAnchor & { kind: SurfaceAnchorHostType };
 
+type EntityRead = { entity?: { title?: string | null } };
+type GoalRead = { name?: string | null };
+type ProcessRead = { playbook?: { name?: string | null } };
+
 /**
  * The object's own title, read through the same procedure its page reads;
  * null while it loads or when it cannot be read (the door then names the
@@ -52,19 +56,13 @@ function useAnchorTitle(anchor: HostedAnchor): string | null {
     { playbookId: id },
     { enabled: kind === "playbook", retry: false }
   );
-  const title =
-    kind === "entity"
-      ? (entity.data as { entity?: { title?: string | null } } | undefined)
-          ?.entity?.title
-      : kind === "session"
-        ? session.data
-          ? resolveSessionTitle(session.data as never)
-          : null
-        : kind === "track"
-          ? (goal.data as { name?: string | null } | undefined)?.name
-          : (process.data as { playbook?: { name?: string | null } } | undefined)
-              ?.playbook?.name;
-  return title?.trim() || null;
+  const named: Record<SurfaceAnchorHostType, string | null | undefined> = {
+    entity: (entity.data as EntityRead | undefined)?.entity?.title,
+    session: session.data ? resolveSessionTitle(session.data as never) : null,
+    track: (goal.data as GoalRead | undefined)?.name,
+    playbook: (process.data as ProcessRead | undefined)?.playbook?.name,
+  };
+  return named[kind]?.trim() || null;
 }
 
 const BACK =

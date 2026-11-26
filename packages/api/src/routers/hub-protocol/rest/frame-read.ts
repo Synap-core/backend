@@ -131,12 +131,15 @@ export function registerFrameReadRoutes(app: HubHono): void {
         keyType,
         keyWorkspaceId
       );
-      const answer = await frameRead({ ...ctx, keyType, keyWorkspaceId }, {
-        surface: parsed.data.surface,
-        op: parsed.data.op,
-        params: parsed.data.params,
-        workspaceId: confined.workspaceId ?? null,
-      });
+      const answer = await frameRead(
+        { ...ctx, keyType, keyWorkspaceId },
+        {
+          surface: parsed.data.surface,
+          op: parsed.data.op,
+          params: parsed.data.params,
+          workspaceId: confined.workspaceId ?? null,
+        }
+      );
       return c.json(answer as never);
     } catch (err) {
       if (err instanceof FrameReadError) {
