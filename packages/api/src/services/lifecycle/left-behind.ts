@@ -34,7 +34,12 @@
  * (id, label, terminal status, when), never a page of session rows.
  */
 import { db, and, drizzleSql, WORKER_TARGET_LINK_ROLE } from "@synap/database";
-import { entities, focusSessions, links } from "@synap/database/schema";
+import {
+  entities,
+  entityFacets,
+  focusSessions,
+  links,
+} from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import {
   TERMINAL_SESSION_STATUSES,
@@ -42,6 +47,7 @@ import {
   type TerminalSessionStatus,
 } from "@synap-core/types/focus-sessions";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { notReceiptWhere } from "../focus-sessions/session-kind.js";
 import { rowsOf } from "../../utils/execute-rows.js";
 import {
@@ -138,6 +144,10 @@ export async function readLeftBehind(
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
   });
 
+  // The key's grant on the role facet itself (`facet.read`, in its space):
+  // the facet loaders narrow by the grant's spaces only.
+  const facetGrant = grantReadPredicate(entityFacets);
+
   const res = await db.execute(drizzleSql`
     WITH ended AS (
       SELECT DISTINCT ON (u.thing_id) u.*
@@ -202,6 +212,7 @@ export async function readLeftBehind(
              AND entity_facets.deleted_at IS NULL
              AND entity_facets.status_category IN (${stillOpen})
              AND ${and(...roleConds) ?? drizzleSql`TRUE`}
+             AND ${facetGrant ?? drizzleSql`TRUE`}
            ORDER BY entity_facets.updated_at DESC NULLS LAST
            LIMIT 1
         ) f ON TRUE

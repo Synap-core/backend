@@ -38,8 +38,10 @@ import {
   isNotNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
+  getRequestGrant,
   readStoredIntent,
 } from "@synap/database";
+import { permits } from "@synap/governance-policy/grants";
 import {
   entities,
   entityFacets,
@@ -69,6 +71,12 @@ import { resolveActorNames } from "../../utils/resolve-actor-names.js";
 import { rosterReadFor } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
 import { scopedDb } from "../../access/scoped-db.js";
+import {
+  grantHoldsAction,
+  isFencedGrant,
+  needsYouReadableWhole,
+} from "../../access/grant-door-fence.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { listWorkspacesUsedByProjects } from "../../utils/project-workspace.js";
 import {
   countThingsByProfileAndStatus,
@@ -182,8 +190,21 @@ export interface SpaceIntent {
   produces: ProducedKind[];
 }
 
+/**
+ * What a home read for a key bounded by a grant leaves out (`homesGrantOf`):
+ *  - `otherSpaces`: only the (space, kind) pairs its grant reads are listed;
+ *  - `needsYou`: every needs-you number is null (the grant does not read
+ *    sessions, proposals, rooms and records everywhere: `needsYouReadableWhole`);
+ *  - `beingWorked`: null on every kind (no `session.read`);
+ *  - `homeLastSeenAt`: the person's own stamp, never a key's.
+ */
+export type HomeWithheld =
+  "otherSpaces" | "needsYou" | "beingWorked" | "homeLastSeenAt";
+
 export interface HomeRead {
   spaces: SpaceIntent[];
+  /** Parts a key bounded by a grant does not read; absent = the whole home. */
+  withheld?: HomeWithheld[];
   /**
    * When this person last had Home on screen, ANY device (ISO; null = never
    * stamped) — the brief's "while you were away" window. Written by
@@ -284,6 +305,49 @@ export type NeedsYouByScopeRead = (scopes: {
   podLevel: number | null;
   podLevelTruncated: boolean | null;
 }>;
+
+/**
+ * What a key bounded by a grant may read of the homes (null = an unfenced
+ * caller: everything). The rows are narrowed by the seams already (things
+ * `accessScopeWhere`, sessions `sessionReadableWhere`); this narrows what no
+ * seam reaches: which spaces and kinds are listed at all (a kind is read in a
+ * space only by `entity.<kind>.read` there, a role by `facet.read` there; a
+ * scope pinned to projects or objects reads no whole space, so it lists none),
+ * the needs-you numbers (owner-floored notifications and captures) and the
+ * person's own last-seen stamp. Pure: `permits` probes, never a denial logged.
+ */
+interface HomesGrant {
+  readsKindIn(
+    workspaceId: string,
+    slug: string,
+    kind: "kind" | "role"
+  ): boolean;
+  needsYou: boolean;
+  sessions: boolean;
+}
+
+function homesGrantOf(grant = getRequestGrant()): HomesGrant | null {
+  if (!grant || !isFencedGrant(grant)) return null;
+  const g = grant;
+  return {
+    readsKindIn: (workspaceId, slug, kind) =>
+      g.scopes.some((scope) =>
+        permits(
+          scope,
+          kind === "role"
+            ? { subject: "facet", action: "read", workspaceId }
+            : {
+                subject: "entity",
+                qualifier: slug,
+                action: "read",
+                workspaceId,
+              }
+        )
+      ),
+    needsYou: needsYouReadableWhole(g),
+    sessions: grantHoldsAction(g, "session", "read"),
+  };
+}
 
 const readerOf = (ctx: HomesCtx) => ({
   userId: ctx.userId,
@@ -394,7 +458,7 @@ async function countThingsBySpaceAndProfile(params: {
   workspaceIds: string[];
   userId: string;
 }): Promise<Array<{ workspaceId: string; profileId: string; count: number }>> {
-  if (params.profileIds.length === 0 || params.workspaceIds.length === 0)
+  if (params.profileIds.length === 0 || params.workspaceIds.at(0) === undefined)
     return [];
   const conditions =
     params.kind === "role"
@@ -469,7 +533,7 @@ async function inferProduces(
   workspaceIds: string[]
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
-  if (workspaceIds.length === 0) return out;
+  if (workspaceIds.at(0) === undefined) return out;
   const declaredIds = await declaredLifecycleProfileIds();
   if (declaredIds.length === 0) return out;
   const profileRows = await db
@@ -580,6 +644,8 @@ async function readProducedKind(
     needsYou: number | null;
     needsYouTruncated: boolean | null;
     memo: BoardLensMemo;
+    /** The caller's grant reach (`homesGrantOf`); null = unfenced. */
+    grant: HomesGrant | null;
   }
 ): Promise<ProducedKind | null> {
   let lens;
@@ -608,6 +674,13 @@ async function readProducedKind(
   // decided only from rows it OWNS (`countThingsBySpaceAndProfile`), so
   // pod-wide rows never make a space a producer (homes X1, review #5).
   const { lifecycle, conditions, subject } = lens;
+  // A key bounded by a grant reads this pipeline only where its grant reads
+  // the kind (or, for a role, its facets) in this space.
+  if (
+    input.grant &&
+    !input.grant.readsKindIn(input.workspaceId, input.profileSlug, subject.kind)
+  )
+    return null;
   const now = Date.now();
   const since = new Date(now - HOME_WINDOW_DAYS * 86_400_000);
   const terminalKeys = new Set(
@@ -794,6 +867,7 @@ export async function readHome(
   input: { projectId?: string },
   readNeedsYou: NeedsYouByScopeRead
 ): Promise<HomeRead> {
+  const grant = homesGrantOf();
   // Inside a project the home is the project's own spaces (its parts + its
   // home), not every space narrowed to the project's counts.
   const [allSpaces, inProject] = await Promise.all([
@@ -810,7 +884,7 @@ export async function readHome(
   );
   const intents = spaces.map((s) => {
     const own = stored.get(s.id);
-    return own
+    const intent = own
       ? {
           space: s,
           label: own.label,
@@ -825,6 +899,18 @@ export async function readHome(
           produces: inferred.get(s.id) ?? [],
           helpers: [] as string[],
         };
+    // A key bounded by a grant: only the slugs it may read here, as a kind or
+    // a role (the exact one is checked once the lens says which it is).
+    return grant
+      ? {
+          ...intent,
+          produces: intent.produces.filter(
+            (slug) =>
+              grant.readsKindIn(s.id, slug, "kind") ||
+              grant.readsKindIn(s.id, slug, "role")
+          ),
+        }
+      : intent;
   });
 
   const settle = async <T>(what: string, read: () => Promise<T>) => {
@@ -846,22 +932,36 @@ export async function readHome(
     );
     return { work, asks };
   };
+  // What a key bounded by a grant does not read (`homesGrantOf`): left
+  // unread, and named in `withheld` — never a null that reads as a failure.
+  const withheld: HomeWithheld[] = grant
+    ? [
+        "otherSpaces",
+        ...(grant.needsYou ? [] : (["needsYou"] as const)),
+        ...(grant.sessions ? [] : (["beingWorked"] as const)),
+        "homeLastSeenAt",
+      ]
+    : [];
   const [words, open, needs, lastSeen] = await Promise.all([
     profileWords([...new Set(intents.flatMap((i) => i.produces))]),
-    settle("open work", openWorkAndAsks),
+    withheld.includes("beingWorked")
+      ? null
+      : settle("open work", openWorkAndAsks),
     // ONE attention read for every scope on the page (null per failed scope).
-    settle("needs-you", () =>
-      readNeedsYou({
-        ...(input.projectId ? { projectId: input.projectId } : {}),
-        spaces: intents.map((i) => ({
-          workspaceId: i.space.id,
-          profileSlugs: i.produces,
-        })),
-      })
-    ),
+    withheld.includes("needsYou")
+      ? null
+      : settle("needs-you", () =>
+          readNeedsYou({
+            ...(input.projectId ? { projectId: input.projectId } : {}),
+            spaces: intents.map((i) => ({
+              workspaceId: i.space.id,
+              profileSlugs: i.produces,
+            })),
+          })
+        ),
     // Not settled: a failed read must not read as "never seen" (the brief
     // would count today as if this were a first visit).
-    readHomeLastSeen(ctx),
+    withheld.includes("homeLastSeenAt") ? null : readHomeLastSeen(ctx),
   ]);
   const total = needs?.total ?? null;
   const truncated = needs?.truncated ?? null;
@@ -893,9 +993,10 @@ export async function readHome(
         needs?.byKindTruncated.get(pair.i.space.id)?.get(pair.profileSlug) ??
         null,
       memo,
+      grant,
     })
   );
-  const out = intents.map((i, idx): SpaceIntent => {
+  const listed = intents.map((i, idx): SpaceIntent => {
     const produced = read
       .filter((p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx)
       // What the template says each kind is to the space.
@@ -913,6 +1014,11 @@ export async function readHome(
     };
   });
 
+  // A key bounded by a grant sees only the spaces where it reads a produced
+  // kind: a space it reads nothing of is not listed (`otherSpaces`).
+  const out = grant ? listed.filter((s) => s.produces.length > 0) : listed;
+  const shown = new Set(out.map((s) => s.workspaceId));
+
   const liveOf = (s: SpaceIntent) => s.produces.reduce((n, p) => n + p.live, 0);
   out.sort(
     (a, b) =>
@@ -922,11 +1028,14 @@ export async function readHome(
   );
   return {
     spaces: out,
+    ...(withheld.length > 0 ? { withheld } : {}),
     homeLastSeenAt: lastSeen,
     needsYou: {
       total,
       truncated,
-      bySpace,
+      bySpace: grant
+        ? bySpace.filter((b) => shown.has(b.workspaceId))
+        : bySpace,
       podLevel: needs?.podLevel ?? null,
       podLevelTruncated: needs?.podLevelTruncated ?? null,
     },
@@ -984,6 +1093,7 @@ async function resolveMovingIdentities(
     }),
   ]);
   const declaredIds = new Set(declared);
+  const facetGrant = grantReadPredicate(entityFacets);
   const intentOf = new Map(
     spaces.map((s) => [s.id, storedIntentOf(s.settings)])
   );
@@ -1036,7 +1146,10 @@ async function resolveMovingIdentities(
           ),
           eq(profiles.profileKind, "role"),
           isNull(entityFacets.deletedAt),
-          ...roleConds
+          ...roleConds,
+          // The key's grant on the facet itself (`facet.read`, in its space):
+          // a role stage it does not read never names the thing.
+          ...(facetGrant ? [facetGrant] : [])
         )
       ),
   ]);
@@ -1114,6 +1227,15 @@ export async function readMoving(
   ctx: HomesCtx,
   input: { projectId?: string; workspaceId?: string; limit: number }
 ): Promise<MovingRead> {
+  // Moving is sessions on things: a key bounded by a grant that reads no
+  // session would read "nothing is moving", which this read must earn.
+  const grant = homesGrantOf();
+  if (grant && !grant.sessions)
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        'This key\'s grant does not allow "session.read": Moving now lists the sessions on things.',
+    });
   const [work, loose, leftBehind] = await Promise.all([
     loadOpenWork(readerOf(ctx), null),
     loadUnattachedWork(readerOf(ctx), {

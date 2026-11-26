@@ -286,7 +286,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "What each space produces, and how its things stand",
     description:
-      "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count. A workspace-bound key is refused (403): Home is every space.",
+      "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count. A workspace-bound key is refused (403): Home is every space. A key bounded by a grant needs `entity.<some kind>.read`: it gets only the spaces and kinds its grant reads, and `withheld` names what it does not read (`otherSpaces`, `needsYou`, `beingWorked`, `homeLastSeenAt`); absent = the whole home.",
     request: { query: homeQuery },
     responses: {
       200: { description: "Home", schema: z.object({}).passthrough() },
@@ -299,7 +299,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "The things being worked, with their work",
     description:
-      "Things with open work on them (a session, an in-flight worker, a scheduled prep), most urgent first, plus `unattached`: open work sessions on no thing, and `leftBehind`: things whose session ended while they stayed open or active, with no work on them now (`total` + newest-ended first; null when that read failed) (`lifecycle.moving`).",
+      "Things with open work on them (a session, an in-flight worker, a scheduled prep), most urgent first, plus `unattached`: open work sessions on no thing, and `leftBehind`: things whose session ended while they stayed open or active, with no work on them now (`total` + newest-ended first; null when that read failed) (`lifecycle.moving`). A key bounded by a grant needs `entity.<some kind>.read` and `session.read` (403 otherwise) and reads only the things, sessions and role stages its grant reads.",
     request: { query: movingQuery },
     responses: {
       200: { description: "Moving now", schema: z.object({}).passthrough() },

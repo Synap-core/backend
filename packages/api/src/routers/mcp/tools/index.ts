@@ -3640,6 +3640,38 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_home",
+        annotations: {
+          title: "Get Home or Moving now",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            view: {
+              type: "string",
+              enum: ["home", "moving"],
+              description: "home (default) or moving.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project's spaces and things.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "moving only, optional: only this space.",
+            },
+            limit: {
+              type: "number",
+              description: "moving only: things (default 30, max 100).",
+            },
+          },
+        },
+      },
+      {
         name: "synap_read_board",
         annotations: {
           title: "Read a whiteboard",
