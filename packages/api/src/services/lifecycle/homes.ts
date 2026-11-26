@@ -458,7 +458,7 @@ async function countThingsBySpaceAndProfile(params: {
   workspaceIds: string[];
   userId: string;
 }): Promise<Array<{ workspaceId: string; profileId: string; count: number }>> {
-  if (params.profileIds.length === 0 || params.workspaceIds.length === 0)
+  if (params.profileIds.length === 0 || params.workspaceIds.at(0) === undefined)
     return [];
   const conditions =
     params.kind === "role"
@@ -533,7 +533,7 @@ async function inferProduces(
   workspaceIds: string[]
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
-  if (workspaceIds.length === 0) return out;
+  if (workspaceIds.at(0) === undefined) return out;
   const declaredIds = await declaredLifecycleProfileIds();
   if (declaredIds.length === 0) return out;
   const profileRows = await db
