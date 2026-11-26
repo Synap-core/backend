@@ -4358,6 +4358,9 @@ CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_run_id
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS "idx_proposals_session_id"
   ON "proposals" ("session_id");
+-- 0459: a session's newest proposal in one descent (the needs-you clocks).
+CREATE INDEX IF NOT EXISTS "idx_proposals_session_created_at"
+  ON "proposals" ("session_id", "created_at" DESC);
 
 -- ── Wave B3: provenance columns on the knowledge-graph core (catch-up; see
 --    migration 0107_provenance_columns.sql). Additive + NULLABLE + idempotent. ──
