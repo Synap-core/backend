@@ -61,12 +61,11 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 
 **Load more detail on demand** (`GET /api/hub/skills/system?sections=<id>`):
 
-| Section ID                | When to load                                           |
-| ------------------------- | ------------------------------------------------------ |
-| `synap:capture`           | User pastes multi-entity text (email, transcript, bio) |
-| `synap:governance`        | Write was proposed or denied; need to explain policy   |
-| `synap:linking`           | Custom relation types, auto-sync edge cases            |
-| `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
-| `synap-ui:view-types`     | Specific view type config shapes                       |
-| `synap-ui:widget-catalog` | Available cell kinds and their configSchema            |
-| `synap-schema:SKILL`      | Creating custom profiles or property definitions       |
+| Section ID            | When to load                                           |
+| --------------------- | ------------------------------------------------------ |
+| `synap:capture`       | User pastes multi-entity text (email, transcript, bio) |
+| `synap:governance`    | Write was proposed or denied; need to explain policy   |
+| `synap:linking`       | Custom relation types, auto-sync edge cases            |
+| `surfaces:SKILL`      | Making any UI on an object (picks the body)            |
+| `synap-ui:view-types` | Specific view type config shapes                       |
+| `synap-schema:SKILL`  | Creating custom profiles or property definitions       |
