@@ -176,10 +176,7 @@ export const surfacesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return inspectSurface(
-        { userId, access: AccessContext.from(ctx) },
-        input
-      );
+      return inspectSurface({ userId, access: AccessContext.from(ctx) }, input);
     }),
 
   /**

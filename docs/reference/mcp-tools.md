@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 130 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 131 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -52,6 +52,7 @@ The pod's MCP server lists 130 tools. A new agent key lists the `entry` tools; t
 | [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
 | [`synap_read_board`](#synap_read_board)                                   | Read a whiteboard                 | read         | yes       |
 | [`synap_find_surfaces`](#synap_find_surfaces)                             | Find an object's surfaces         | build        | yes       |
+| [`synap_inspect_surface`](#synap_inspect_surface)                         | Inspect a surface                 | build        | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -903,6 +904,20 @@ Find every Surface an object carries before you make one: its kind's renderers (
 | `kind`        | enum   | yes      | The anchor's kind (profile = a kind of record, by id or slug; track = a goal). One of: `entity`, `profile`, `workspace`, `project`, `track`, `playbook`, `session`. |
 | `id`          | string | yes      | The anchor's id (a profile also by its slug).                                                                                                                       |
 | `workspaceId` | string | no       | Optional space to narrow to. Omit for everything you can see.                                                                                                       |
+
+## synap_inspect_surface
+
+**Inspect a surface** · Group: `build` · readOnlyHint: true · openWorldHint: false
+
+Inspect a framed surface before you hand it over: a cell ({kind: cell, typeKey} or a cell instance id), an HTML page ({kind: document, id}) or a view ({kind: view, id}: the cells it places). Returns four sections, each {status: ok} or {status: unavailable, reason}: reads (what its frame read in the last `days` days: ops used, refused as undeclared, declared but unused, asked but undeclared), tokens (hard-coded colours and fonts, each with its line and the --synap-* token to use), a11y (images without alt, unnamed buttons and links, unlabelled fields, skipped heading levels) and render (no screenshot on the pod). `unavailable` means the check could not run, not that it passed. Read-only.
+
+| Parameter     | Type   | Required | Description                                                                                                      |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `kind`        | enum   | yes      | cell (a cell type or instance), document (an HTML page) or view (its cells). One of: `cell`, `document`, `view`. |
+| `id`          | string | no       | The page, view or cell instance id (a row id from synap_find_surfaces).                                          |
+| `typeKey`     | string | no       | For a cell type: its key (a row's cellKey from synap_find_surfaces).                                             |
+| `workspaceId` | string | no       | Optional: the space a cell type is installed in (default: the pod-wide one).                                     |
+| `days`        | number | no       | How many days of reads to show (1 to 30, default 30).                                                            |
 
 ## synap_list_sessions
 

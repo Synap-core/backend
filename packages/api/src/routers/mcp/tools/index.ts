@@ -3730,7 +3730,8 @@ export const tools = {
             },
             days: {
               type: "number",
-              description: "How many days of reads to show (1 to 30, default 30).",
+              description:
+                "How many days of reads to show (1 to 30, default 30).",
             },
           },
           required: ["kind"],

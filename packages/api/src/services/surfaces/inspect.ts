@@ -354,7 +354,10 @@ async function resolveTarget(
   }
   if (!typeKey) throw badRequest("Pass the cell's typeKey or its id.");
   const lens = input.workspaceId ?? null;
-  if (lens && !(await canRead(userPrincipal(ctx.userId), { workspace: lens }))) {
+  if (
+    lens &&
+    !(await canRead(userPrincipal(ctx.userId), { workspace: lens }))
+  ) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "You cannot read this space.",
@@ -431,7 +434,10 @@ export function compareReads(
     lastAt: r.lastAt ? new Date(r.lastAt).toISOString() : "",
   });
   const byOp = (a: OpCount, b: OpCount) => a.op.localeCompare(b.op);
-  const used = rows.filter((r) => r.allowed).map(toCount).sort(byOp);
+  const used = rows
+    .filter((r) => r.allowed)
+    .map(toCount)
+    .sort(byOp);
   const refused = rows
     .filter((r) => !r.allowed)
     .map((r) => ({ ...toCount(r), code: FRAME_READ_UNDECLARED }))
@@ -633,10 +639,7 @@ function lintSection<F>(
 export function clampInspectDays(days: number | undefined): number {
   if (days === undefined || !Number.isFinite(days))
     return FRAME_READ_LOG_RETENTION_DAYS;
-  return Math.min(
-    FRAME_READ_LOG_RETENTION_DAYS,
-    Math.max(1, Math.floor(days))
-  );
+  return Math.min(FRAME_READ_LOG_RETENTION_DAYS, Math.max(1, Math.floor(days)));
 }
 
 export async function inspectSurface(

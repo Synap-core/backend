@@ -377,8 +377,8 @@ describe("GET /surfaces/inspect", () => {
     expect((await inspect({ kind: "document", id: NOTE })).status).toBe(400);
     expect((await inspect({ kind: "view" })).status).toBe(400);
     // B sees their own page.
-    expect(
-      (await inspect({ kind: "document", id: B_PAGE }, B)).status
-    ).toBe(200);
+    expect((await inspect({ kind: "document", id: B_PAGE }, B)).status).toBe(
+      200
+    );
   });
 });

@@ -113,7 +113,8 @@ function blankSynapVars(text: string): string {
       }
     }
     if (end === m.index) end = out.length;
-    out = out.slice(0, m.index) + blank(out.slice(m.index, end)) + out.slice(end);
+    out =
+      out.slice(0, m.index) + blank(out.slice(m.index, end)) + out.slice(end);
     re.lastIndex = end;
   }
   return out;
@@ -150,13 +151,15 @@ export function colourTokenFor(property: string | null): string {
 }
 
 export function fontTokenFor(value: string, line: string): string {
-  if (/mono|courier|consolas|menlo/i.test(value)) return "var(--synap-font-mono)";
+  if (/mono|courier|consolas|menlo/i.test(value))
+    return "var(--synap-font-mono)";
   if (/<h[1-6]\b|\bh[1-6]\b|heading|title|display/i.test(line))
     return "var(--synap-font-heading)";
   return "var(--synap-font-body)";
 }
 
-const LINK_ATTR_BEFORE = /(?:href|src|id|for|xlink:href)\s*=\s*["']?$|url\(\s*["']?$/i;
+const LINK_ATTR_BEFORE =
+  /(?:href|src|id|for|xlink:href)\s*=\s*["']?$|url\(\s*["']?$/i;
 
 export function lintTokens(source: LintSource): TokenFinding[] {
   const text = blankSynapVars(blankComments(source.text));
@@ -224,8 +227,7 @@ export function lintTokens(source: LintSource): TokenFinding[] {
 
 // ── Accessibility (HTML) ────────────────────────────────────────────────────
 
-const ATTR =
-  /([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+const ATTR = /([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
 
 function attrsOf(raw: string): Map<string, string> {
   const out = new Map<string, string>();

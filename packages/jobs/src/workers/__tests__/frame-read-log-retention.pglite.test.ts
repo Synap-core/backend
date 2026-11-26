@@ -55,7 +55,9 @@ describe("frame read log retention", () => {
     const old = new Date(
       NOW.getTime() - (FRAME_READ_LOG_RETENTION_DAYS + 1) * DAY
     );
-    const recent = new Date(NOW.getTime() - (FRAME_READ_LOG_RETENTION_DAYS - 1) * DAY);
+    const recent = new Date(
+      NOW.getTime() - (FRAME_READ_LOG_RETENTION_DAYS - 1) * DAY
+    );
     const oldAllowed = await insert(old, true);
     const oldRefused = await insert(old, false);
     const keptRecent = await insert(recent, false);

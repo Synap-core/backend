@@ -861,7 +861,8 @@ export const readHandlers: McpHandlerMap = {
           days: typeof args.days === "number" ? args.days : undefined,
         }
       );
-      const fence = "text from the surface (anyone who made it may have written it)";
+      const fence =
+        "text from the surface (anyone who made it may have written it)";
       const tokens =
         inspection.tokens.status === "ok"
           ? {
@@ -893,7 +894,11 @@ export const readHandlers: McpHandlerMap = {
       });
     } catch (err) {
       const code = (err as { code?: string }).code;
-      if (code === "NOT_FOUND" || code === "BAD_REQUEST" || code === "FORBIDDEN") {
+      if (
+        code === "NOT_FOUND" ||
+        code === "BAD_REQUEST" ||
+        code === "FORBIDDEN"
+      ) {
         return toolError(`Tool '${toolName}': ${(err as Error).message}`);
       }
       throw err;

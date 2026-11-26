@@ -10,11 +10,7 @@
  * colour (counted at their definition, not at their use).
  */
 import { describe, it, expect } from "vitest";
-import {
-  lintA11y,
-  lintTokens,
-  type LintSource,
-} from "./inspect-lint.js";
+import { lintA11y, lintTokens, type LintSource } from "./inspect-lint.js";
 
 const html = (text: string): LintSource => ({
   label: "document:p",
@@ -41,7 +37,9 @@ describe("lintTokens", () => {
         ].join("\n")
       )
     );
-    expect(found.map((f) => [f.line, f.found, f.property, f.suggestion])).toEqual([
+    expect(
+      found.map((f) => [f.line, f.found, f.property, f.suggestion])
+    ).toEqual([
       [2, "#1a73e8", "background", "var(--synap-background)"],
       [4, "rgb(10, 20, 30)", "color", "var(--synap-color)"],
       [5, "black", "border", "var(--synap-border-color)"],
@@ -56,7 +54,7 @@ describe("lintTokens", () => {
         [
           '<p style="color: var(--synap-color, #111111)">x</p>',
           '<a href="#abc">top</a>',
-          "<svg><path fill=\"url(#bad)\"/></svg>",
+          '<svg><path fill="url(#bad)"/></svg>',
           "<p>&#123;</p>",
           "<!-- background: #ffffff -->",
           "/* color: red */",
@@ -108,7 +106,7 @@ describe("lintA11y", () => {
   const rules = (text: string) =>
     lintA11y(html(text)).map((f) => [f.line, f.rule]);
 
-  it("an image needs alt text; alt=\"\" and aria-hidden are decoration", () => {
+  it('an image needs alt text; alt="" and aria-hidden are decoration', () => {
     expect(
       rules(
         [
@@ -130,7 +128,7 @@ describe("lintA11y", () => {
           "<button>Save</button>",
           '<a href="/x"><img src="i.png"></a>',
           '<a href="/y"><img src="i.png" alt="Home"></a>',
-          "<a name=\"anchor\"></a>",
+          '<a name="anchor"></a>',
           '<input type="submit">',
         ].join("\n")
       )
@@ -149,7 +147,7 @@ describe("lintA11y", () => {
         [
           '<input id="q" placeholder="Search">',
           '<label for="name">Name</label><input id="name">',
-          "<label>Email <input type=\"email\"></label>",
+          '<label>Email <input type="email"></label>',
           '<textarea aria-label="Notes"></textarea>',
           "<select></select>",
           '<input type="hidden" name="t">',
