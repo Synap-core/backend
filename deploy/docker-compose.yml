@@ -671,8 +671,22 @@ services:
     # is exactly this list. A `-c` flag outranks postgresql.conf and
     # postgresql.auto.conf. 200 leaves headroom over the per-service pool caps
     # (client-pg.ts lists them); the default 100 ran out at login 2026-11-02.
+    # shared_preload_libraries: the image's postgresql.conf preloads only
+    # `timescaledb` (its postgresql.conf.sample, line 740; measured on a pod
+    # 2026-11-26), so `pg_stat_statements` existed as an extension (migrate.ts
+    # creates it) but every read of it failed "must be loaded via
+    # shared_preload_libraries": no pod could say which query costs. This list
+    # REPLACES the file's, so it must keep `timescaledb`
+    # (pg-connection-budget.test.sh I). Takes effect when postgres restarts:
+    # the next `synap update` recreates it, its definition having changed.
     command:
-      ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
+      [
+        "postgres",
+        "-c",
+        "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}",
+        "-c",
+        "shared_preload_libraries=timescaledb,pg_stat_statements",
+      ]
     volumes:
       - postgres_data:/home/postgres/pgdata
       - ./state:/synap-state:ro
