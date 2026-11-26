@@ -6723,7 +6723,7 @@ export const tools = {
                 anchor: {
                   type: "object",
                   description:
-                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?}.",
+                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}: locator pins it on a design ({surface:'design', frameId, blockId?}) or a story ({surface:'story', storyId}), with viewport ('desktop'|'tablet'|'phone'), point {x, y} (fractions 0 to 1), contentVersion (the revision you saw) and screenshot? (a pod file id).",
                 },
                 replyTo: {
                   type: "string",

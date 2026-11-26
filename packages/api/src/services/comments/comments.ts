@@ -67,6 +67,7 @@ import {
   type ObjectRef,
 } from "./object-channel.js";
 import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
+import { zodIssuesSentence } from "../../utils/zod-field-errors.js";
 
 /** Longest comment body (same bound as the retired comment doors). */
 export const COMMENT_CONTENT_MAX = 50_000;
@@ -174,8 +175,17 @@ export async function postComment(
   let channelId: string;
   let root: MessageRow | null = null;
   if (params.anchor) {
-    // Validate here too: the MCP door hands a JSON object straight in.
-    const anchor = ObjectCommentAnchorSchema.parse(params.anchor);
+    // Validate here too: the MCP door hands a JSON object straight in. A
+    // refusal names every bad field (`locator.point.x: …`), on every door.
+    const parsed = ObjectCommentAnchorSchema.safeParse(params.anchor);
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Invalid comment anchor: ${zodIssuesSentence(parsed.error.issues)}`,
+        cause: parsed.error,
+      });
+    }
+    const anchor = parsed.data;
     object = anchorObjectRef(anchor);
     // Write floor = READ access to the object (V2); mints the room if absent.
     channelId = (await ensureObjectChannelFor(params.userId, object)).id;
