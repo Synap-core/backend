@@ -1511,10 +1511,13 @@ export const proposalsRouter = router({
       // UNREDACTED rows: the waits read applies the session floor itself.
       const needsYouClasses =
         input.classifyNeedsYou && input.status === "pending"
-          ? await classifyPendingProposals(rows, {
-              userId,
-              roster: rosterReadFor(ctx),
-            })
+          ? await classifyPendingProposals(
+              rows,
+              { userId, roster: rosterReadFor(ctx) },
+              undefined,
+              // The needs-you read's one open-PR read, when it calls here.
+              ctx.openPrRead ? { openPrRead: ctx.openPrRead } : {}
+            )
           : null;
       const clusterRows: ClusterInputRow[] = readableRows.map((r) => {
         const needsYouClass = needsYouClasses?.get(r.id) ?? null;
