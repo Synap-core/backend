@@ -4,13 +4,13 @@ Five baseline skills make up the Synap agent surface (`manifest.json` is the lis
 
 ## The baseline skills
 
-| Skill          | Purpose                                                                                    | Trigger                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `synap`        | Core data operations — read, write, link, search, remember                                 | "Save this", "Find my X", "Who is Y", "Remind me to Z"                       |
-| `synap-schema` | Extend the data model — new profiles, new properties                                       | "I need a type for X", "Add a field to tasks"                                |
+| Skill          | Purpose                                                                                                       | Trigger                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `synap`        | Core data operations — read, write, link, search, remember                                                    | "Save this", "Find my X", "Who is Y", "Remind me to Z"                       |
+| `synap-schema` | Extend the data model — new profiles, new properties                                                          | "I need a type for X", "Add a field to tasks"                                |
 | `surfaces`     | Make any UI on pod data: pick the body (View, Document, Bento, HTML artifact, Whiteboard, Cell) and anchor it | "Make me a dashboard", "Build a kanban", "Pitch deck for investors"          |
-| `synap-ui`     | Reference for view configs, bento layouts, workspaces                                      | "Which config does a calendar view take", "Create a CRM workspace"           |
-| `synap-design` | Design and build UI: principles, the component catalog and tokens, the design-to-code loop | "Design the proposal page", "Is this screen right?", "Implement this design" |
+| `synap-ui`     | Reference for view configs, bento layouts, workspaces                                                         | "Which config does a calendar view take", "Create a CRM workspace"           |
+| `synap-design` | Design and build UI: principles, the component catalog and tokens, the design-to-code loop                    | "Design the proposal page", "Is this screen right?", "Implement this design" |
 
 Each skill has its own SKILL.md with a trigger-first description. The harness loads only the skills whose descriptions match the user's intent — so a data-fetch turn doesn't load the UI skill, and vice versa.
 

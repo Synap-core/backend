@@ -18,7 +18,8 @@ metadata:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY
     homepage: https://synap.live
-    capabilities: [surfaces, views, documents, bento, html, whiteboard, cells, renderers]
+    capabilities:
+      [surfaces, views, documents, bento, html, whiteboard, cells, renderers]
     os: [macos, linux, windows]
     userInvocable: false
 ---
@@ -44,16 +45,16 @@ Every UI on a pod is a **Surface**: a body anchored to an object (an entity, a k
 
 ## Which body
 
-| The intent is to… | Body | Door | Not |
-| --- | --- | --- | --- |
-| see or edit many records of one kind | View | `synap_create_view` (type from `system/synap-ui/view-types`; a kind with a lifecycle → `pipeline` with `config.profileSlug`) | a bento or HTML that redraws a list |
-| write or read mostly text: spec, memo, brief, research, notes, a status read-out, a report's source | Document | `synap_create_document` (markdown; live embeds `:::synap-view`, `:::synap-entity`, `:::synap-cell`) | HTML |
-| monitor or operate something living: health, pipeline numbers, KPIs, a project cockpit, a radar | Bento | `synap_create_view` with `type: "bento"` and catalog cells; for one object, `attachTo` it (or `synap_create_surface` with `body: "bento"`) | a document full of embeds |
-| present, explain, pitch, announce, or share outside the pod with a custom design | HTML artifact | `synap_create_document` with `type: "html"` | a bento screenshot |
-| think, brainstorm, map ideas, work together live | Whiteboard | `synap_create_view` with `type: "whiteboard"`, then `synap_update_view_content` | a document |
-| make a kind look different everywhere | renderer binding (renders) | `synap_promote_cell_to_renderer` with `profileSlug` and `slot` | a per-object frame |
-| give ONE object an extra screen | attached surface | `synap_create_surface` with the object as `anchor`, or `synap_attach_surface` for one that exists | a kind default |
-| show a visual unit the catalog does not have | new Cell type | `synap_create_cell`, then place, embed or attach it | one-off HTML |
+| The intent is to…                                                                                   | Body                       | Door                                                                                                                                       | Not                                 |
+| --------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| see or edit many records of one kind                                                                | View                       | `synap_create_view` (type from `system/synap-ui/view-types`; a kind with a lifecycle → `pipeline` with `config.profileSlug`)               | a bento or HTML that redraws a list |
+| write or read mostly text: spec, memo, brief, research, notes, a status read-out, a report's source | Document                   | `synap_create_document` (markdown; live embeds `:::synap-view`, `:::synap-entity`, `:::synap-cell`)                                        | HTML                                |
+| monitor or operate something living: health, pipeline numbers, KPIs, a project cockpit, a radar     | Bento                      | `synap_create_view` with `type: "bento"` and catalog cells; for one object, `attachTo` it (or `synap_create_surface` with `body: "bento"`) | a document full of embeds           |
+| present, explain, pitch, announce, or share outside the pod with a custom design                    | HTML artifact              | `synap_create_document` with `type: "html"`                                                                                                | a bento screenshot                  |
+| think, brainstorm, map ideas, work together live                                                    | Whiteboard                 | `synap_create_view` with `type: "whiteboard"`, then `synap_update_view_content`                                                            | a document                          |
+| make a kind look different everywhere                                                               | renderer binding (renders) | `synap_promote_cell_to_renderer` with `profileSlug` and `slot`                                                                             | a per-object frame                  |
+| give ONE object an extra screen                                                                     | attached surface           | `synap_create_surface` with the object as `anchor`, or `synap_attach_surface` for one that exists                                          | a kind default                      |
+| show a visual unit the catalog does not have                                                        | new Cell type              | `synap_create_cell`, then place, embed or attach it                                                                                        | one-off HTML                        |
 
 **Tie-breakers.** Internal and mostly text → Document. Numbers that change → Bento. Audience outside the pod → HTML artifact. Unfinished thinking → Whiteboard. Read once → Document; watched every day → Bento. Who builds it (a person or you) never changes the body.
 
@@ -71,32 +72,32 @@ Stop at the first rung that serves the intent. A funnel, a stat, a list, a chart
 
 ## Examples
 
-| Prompt | Body | Why |
-| --- | --- | --- |
-| "Show all deals" | View (table on deal) | many records of one kind |
-| "Show my deals by stage" | View `pipeline` on deal | the kind declares a lifecycle |
-| "What's due this week?" | View (calendar, or a list filtered on the due date) | records with dates |
-| "A board of my tasks I can drag between columns" | View (kanban, or pipeline when the kind has a lifecycle) | edit many records |
-| "Make a dashboard for my sales" | Bento in the sales space | numbers that change |
-| "Make a dashboard for the Fundraising project" | Bento attached to the project | monitor; one object |
-| "I want to watch project X every morning" | Bento attached to project X | watched over time |
-| "Where do things stand on project X?" | Document (a status read-out with live embeds) | read once |
-| "Write a memo about the pricing change" | Document | internal text |
-| "Show me a summary comparing my top 5 leads" | Document (internal); an HTML artifact if it goes to a client | mostly text |
-| "Pitch deck for investors" | HTML artifact deck attached to the project | outside audience, custom design |
-| "A one-pager I can send to a prospect" | HTML artifact | outside audience |
-| "Write the Q3 report for the board" | Document, then its HTML artifact | report: markdown first |
-| "Brainstorm names with me" | Whiteboard | unfinished thinking |
-| "Map how our onboarding steps connect" | Whiteboard | mapping ideas, not records |
-| "Turn this whiteboard into slides for Monday" | the same Whiteboard, its artboards played by the presenter | the presenter is a mode, not a body |
-| "Make deals look different everywhere" | renderer binding on deal (slot card) | kind-wide look |
-| "Make the Posts kind's own dashboard" | renderer binding on post, slot `dashboard` | a kind's page, not one object |
-| "Make this deal's page show its email thread on top" | attached surface on that deal | one object, not the kind |
-| "Give the Fundraising project an investor radar" | attached Bento with a radar cell | one object, not the kind |
-| "Show deals as a funnel chart" | catalog cell `chart-funnel` on a bento or embedded in a document | the catalog has it |
-| "A cohort heatmap the catalog does not have" | new Cell type, then place it | new visual unit |
-| "Health of my pod: errors, queue, cost" | Bento | monitor and operate |
-| "Publish our roadmap on the website" | a Site or an external app over an exposed view | audience outside, live data |
+| Prompt                                               | Body                                                             | Why                                 |
+| ---------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------- |
+| "Show all deals"                                     | View (table on deal)                                             | many records of one kind            |
+| "Show my deals by stage"                             | View `pipeline` on deal                                          | the kind declares a lifecycle       |
+| "What's due this week?"                              | View (calendar, or a list filtered on the due date)              | records with dates                  |
+| "A board of my tasks I can drag between columns"     | View (kanban, or pipeline when the kind has a lifecycle)         | edit many records                   |
+| "Make a dashboard for my sales"                      | Bento in the sales space                                         | numbers that change                 |
+| "Make a dashboard for the Fundraising project"       | Bento attached to the project                                    | monitor; one object                 |
+| "I want to watch project X every morning"            | Bento attached to project X                                      | watched over time                   |
+| "Where do things stand on project X?"                | Document (a status read-out with live embeds)                    | read once                           |
+| "Write a memo about the pricing change"              | Document                                                         | internal text                       |
+| "Show me a summary comparing my top 5 leads"         | Document (internal); an HTML artifact if it goes to a client     | mostly text                         |
+| "Pitch deck for investors"                           | HTML artifact deck attached to the project                       | outside audience, custom design     |
+| "A one-pager I can send to a prospect"               | HTML artifact                                                    | outside audience                    |
+| "Write the Q3 report for the board"                  | Document, then its HTML artifact                                 | report: markdown first              |
+| "Brainstorm names with me"                           | Whiteboard                                                       | unfinished thinking                 |
+| "Map how our onboarding steps connect"               | Whiteboard                                                       | mapping ideas, not records          |
+| "Turn this whiteboard into slides for Monday"        | the same Whiteboard, its artboards played by the presenter       | the presenter is a mode, not a body |
+| "Make deals look different everywhere"               | renderer binding on deal (slot card)                             | kind-wide look                      |
+| "Make the Posts kind's own dashboard"                | renderer binding on post, slot `dashboard`                       | a kind's page, not one object       |
+| "Make this deal's page show its email thread on top" | attached surface on that deal                                    | one object, not the kind            |
+| "Give the Fundraising project an investor radar"     | attached Bento with a radar cell                                 | one object, not the kind            |
+| "Show deals as a funnel chart"                       | catalog cell `chart-funnel` on a bento or embedded in a document | the catalog has it                  |
+| "A cohort heatmap the catalog does not have"         | new Cell type, then place it                                     | new visual unit                     |
+| "Health of my pod: errors, queue, cost"              | Bento                                                            | monitor and operate                 |
+| "Publish our roadmap on the website"                 | a Site or an external app over an exposed view                   | audience outside, live data         |
 
 ---
 
