@@ -20,6 +20,10 @@ import {
 import { reportApproved } from "./shared.js";
 import { readCellPlacement } from "../../../services/cells/place-cell-on-view.js";
 import {
+  declaredFrameIoFields,
+  readDeclaredFrameIo,
+} from "../../../services/cells/declared-frame-io.js";
+import {
   cellInstallRefusal,
   cellRetireRefusal,
   installMarketplaceCell,
@@ -200,6 +204,11 @@ export async function applyCellDefineProposal(
     // view they may not write, or one that is gone, refuses the whole act and
     // the proposal stays pending. Re-validated, never trusted.
     placeOn: readCellPlacement(innerData.placeOn),
+    // What the frame declares it reads / writes, carried by the same two
+    // doors. Re-checked against the ceiling, never trusted: a payload that no
+    // longer parses is refused and the proposal stays pending. An agent's
+    // approved define stays `generated` (no `trustLevel`): its writes propose.
+    ...declaredFrameIoOf(innerData),
     userId,
   });
 
@@ -223,6 +232,23 @@ export async function applyCellDefineProposal(
     userId
   );
   return { success: true };
+}
+
+/** The declared reads / writes a `cell/define` payload carries, re-checked. */
+function declaredFrameIoOf(
+  innerData: Record<string, unknown>
+): ReturnType<typeof declaredFrameIoFields> {
+  const io = readDeclaredFrameIo({
+    reads: innerData.reads,
+    writes: innerData.writes,
+  });
+  if (!io.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `This cell proposal declares reads or writes outside what a frame may ask (${io.error}), and nothing was written.`,
+    });
+  }
+  return declaredFrameIoFields(io);
 }
 
 /** Register the cell/define approve executor. */

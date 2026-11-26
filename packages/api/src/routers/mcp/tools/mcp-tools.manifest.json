@@ -1012,6 +1012,10 @@
             "type": ["string", "null"],
             "description": "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual."
           },
+          "reads": {
+            "type": "array",
+            "description": "An html page's declared reads: [{op, params?}] of window.synap.query; \"*\" = any. Others are refused."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
@@ -3483,6 +3487,10 @@
             },
             "required": ["viewId"],
             "description": "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
+          },
+          "reads": {
+            "type": "array",
+            "description": "Reads its frame declares: [{op, params?}] of window.synap.query; param \"*\" = any. Others are refused."
           },
           "reasoning": {
             "type": "string",

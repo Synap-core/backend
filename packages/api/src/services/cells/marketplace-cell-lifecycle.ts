@@ -235,6 +235,9 @@ export async function installMarketplaceCell(input: {
     rendererType: isPackageCellRendererType(cell.rendererType)
       ? cell.rendererType
       : undefined,
+    // A person installs it (directly, or by approving `cell/install`):
+    // its frame writes directly (`resolveViewTrust`).
+    trustLevel: "installed",
     userId,
   });
   return { ok: true, typeKey };
