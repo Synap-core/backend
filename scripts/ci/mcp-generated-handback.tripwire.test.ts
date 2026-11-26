@@ -59,10 +59,8 @@ describe("ci.yml: the MCP generated files are handed back (F11)", () => {
     for (const f of FILES) {
       const dir = f === "door-tool-names.generated.ts" ? "" : "tools/";
       expect(
-        readFileSync(
-          join(REPO, "packages/api/src/routers/mcp", dir, f),
-          "utf8"
-        ).length,
+        readFileSync(join(REPO, "packages/api/src/routers/mcp", dir, f), "utf8")
+          .length,
         f
       ).toBeGreaterThan(0);
     }
@@ -73,7 +71,7 @@ describe("ci.yml: the MCP generated files are handed back (F11)", () => {
     expect(upload).toMatch(/^\s+name:\s*mcp-generated\s*$/m);
     expect(upload).toMatch(/if:\s*always\(\)/);
     expect(APPLY).toContain("grep -qx mcp-generated");
-    expect(APPLY).toContain('fetch mcp-generated');
+    expect(APPLY).toContain("fetch mcp-generated");
   });
 
   it("the apply script puts back every file the artifact holds", () => {
