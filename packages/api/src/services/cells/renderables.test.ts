@@ -38,7 +38,7 @@ describe("renderableArrangeError — the arrange gate reads the one catalog", ()
   it("refuses a key no catalog and no pod row knows", () => {
     expect(
       renderableArrangeError("entity-metric", { profileSlug: "app" }, NONE)
-    ).toMatch(/Unknown widget "entity-metric"/);
+    ).toMatch(/Unknown cell "entity-metric"/);
   });
 
   it("admits every chart — the 14 keys the old 18-key allowlist refused", () => {
@@ -113,7 +113,7 @@ describe("placeableInstalledKeys", () => {
   });
 });
 
-describe("discoverRenderables — synap_list_widgets", () => {
+describe("discoverRenderables — synap_list_cells", () => {
   const rows = [...builtinRenderableRows(), installed("cell:crm:pipeline")];
 
   it("document surface lists charts with the embed grammar", () => {
@@ -198,7 +198,7 @@ describe("app-surface widgets (generation contract rule 12)", () => {
     "ai-chat",
   ];
 
-  it("synap_list_widgets never offers them on a document", () => {
+  it("synap_list_cells never offers them on a document", () => {
     const doc = discoverRenderables(builtinRenderableRows(), "document").map(
       (e) => e.key
     );
@@ -215,7 +215,7 @@ describe("app-surface widgets (generation contract rule 12)", () => {
   });
 });
 
-describe("work-state widgets — what synap_list_widgets offers on a document", () => {
+describe("work-state cells — what synap_list_cells offers on a document", () => {
   const doc = discoverRenderables(builtinRenderableRows(), "document");
   const entry = (key: string) => doc.find((e) => e.key === key);
 

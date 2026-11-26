@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 127 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 128 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -111,7 +111,7 @@ The pod's MCP server lists 127 tools. A new agent key lists the `entry` tools; t
 | [`synap_update_view_content`](#synap_update_view_content)                 | Update whiteboard content         | build        | no        |
 | [`synap_update_view`](#synap_update_view)                                 | Edit view                         | build        | no        |
 | [`synap_list_views`](#synap_list_views)                                   | List views                        | build        | yes       |
-| [`synap_list_widgets`](#synap_list_widgets)                               | List compose widgets              | build        | yes       |
+| [`synap_list_cells`](#synap_list_cells)                                   | List cells                        | build        | yes       |
 | [`synap_get_channel`](#synap_get_channel)                                 | Get or create channel             | read         | no        |
 | [`synap_post_message`](#synap_post_message)                               | Post message                      | entry        | no        |
 | [`synap_revise_proposal`](#synap_revise_proposal)                         | Revise proposal                   | governance   | no        |
@@ -133,6 +133,7 @@ The pod's MCP server lists 127 tools. A new agent key lists the `entry` tools; t
 | [`synap_update_skill`](#synap_update_skill)                               | Update skill                      | build        | no        |
 | [`synap_load_skill`](#synap_load_skill)                                   | Load skill                        | entry        | yes       |
 | [`synap_call_tool`](#synap_call_tool)                                     | Call a tool                       | entry        | no        |
+| [`synap_list_widgets`](#synap_list_widgets)                               | List cells (old name)             | build        | yes       |
 
 ## synap_ask
 
@@ -973,7 +974,7 @@ Who can take the person's work, and on which COMPUTER — read-only. `computers[
 
 **Define cell** · Group: `build` · readOnlyHint: false · destructiveHint: true · openWorldHint: false
 
-Define (create or update) a Cell type from raw renderer source, only when synap_list_widgets lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).
+Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).
 
 | Parameter        | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ---------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -981,7 +982,7 @@ Define (create or update) a Cell type from raw renderer source, only when synap_
 | `rendererSource` | string        | yes      | The cell's renderer source (HTML/JS frame source).                                                                                                                                                                                                                                                                                                                                                                                    |
 | `workspaceId`    | string        | no       | Optional workspace UUID. Omit for a pod-global cell (visible in all workspaces).                                                                                                                                                                                                                                                                                                                                                      |
 | `description`    | string        | no       | Optional short description of the cell.                                                                                                                                                                                                                                                                                                                                                                                               |
-| `viewTypes`      | array<string> | no       | Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain widget and views fall back to the built-in adapter.                                                                                                                                                                                                             |
+| `viewTypes`      | array<string> | no       | Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain cell (placed, never a renderer) and views fall back to the built-in adapter.                                                                                                                                                                                    |
 | `contentKind`    | enum          | no       | Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer. One of: `entity-detail`, `entity-card`, `entity-profile`, `collection`, `widget`. |
 | `placeOn`        | object        | no       | Bento view (synap_list_views) to add the cell to as a tile, in the same act.                                                                                                                                                                                                                                                                                                                                                          |
 | `reads`          | array         | no       | Reads its frame declares: [{op, params?}] of window.synap.query; param "*" = any. Others are refused.                                                                                                                                                                                                                                                                                                                                 |
@@ -1828,18 +1829,19 @@ List the Views and boards you can see (not only your own), narrowed by workspace
 | `limit`       | number | no       | Page size, default 50                                                                                                                                                                            |
 | `offset`      | number | no       | From nextOffset                                                                                                                                                                                  |
 
-## synap_list_widgets
+## synap_list_cells
 
-**List compose widgets** · Group: `build` · readOnlyHint: true · openWorldHint: false
+**List cells** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-Live list of what you may place: in a bento (surface "bento", default) or embedded in a document (surface "document"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card. With surface "document" it also returns fences: content languages written as a fenced block (`mermaid diagrams, `math equations, code), each with its aiHint.
+List the Cells you may place: in a bento (placement "bento", default) or embedded in a document (placement "document"). Call it before arranging a bento or embedding a cell; never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) and the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. A view block needs a saved view id (viewId), not a profileSlug. Counts use stat-card. With placement "document" it also returns fences: content languages written as a fenced block (`mermaid diagrams, `math equations, code), each with its aiHint. (`surface` is still accepted as the old name of `placement`.)
 
-| Parameter     | Type   | Required | Description                                                                                                                      |
-| ------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `surface`     | enum   | no       | Where you will place it: bento (dashboard block, default) or document (an embed inside a document). One of: `bento`, `document`. |
-| `workspaceId` | string | no       | Optional workspace UUID. Include it so workspace-scoped generated cells appear.                                                  |
-| `limit`       | number | no       | Page size, default 15                                                                                                            |
-| `offset`      | number | no       | From nextOffset                                                                                                                  |
+| Parameter     | Type   | Required | Description                                                                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `placement`   | enum   | no       | Where you will place it: bento (a dashboard block, default) or document (an embed inside a document). One of: `bento`, `document`. |
+| `surface`     | enum   | no       | Old name of placement. One of: `bento`, `document`.                                                                                |
+| `workspaceId` | string | no       | Optional workspace UUID. Include it so workspace-scoped generated cells appear.                                                    |
+| `limit`       | number | no       | Page size, default 15                                                                                                              |
+| `offset`      | number | no       | From nextOffset                                                                                                                    |
 
 ## synap_get_channel
 
@@ -2210,3 +2212,17 @@ Run a tool this key has unlocked but your client does not list yet, in this turn
 | `tool`      | string | yes      | The tool to run, e.g. 'synap_create_document'.                                  |
 | `arguments` | object | no       | The tool's input. Omit it to get the tool's input schema instead of running it. |
 | `sessionId` | string | no       | Optional: passed to the tool as its `sessionId` when `arguments` has none.      |
+
+## synap_list_widgets
+
+**List cells (old name)** · Group: `build` · readOnlyHint: true · openWorldHint: false
+
+Old name of synap_list_cells, kept so existing clients keep working: same parameters, same answer. Call synap_list_cells.
+
+| Parameter     | Type   | Required | Description                                                                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `placement`   | enum   | no       | Where you will place it: bento (a dashboard block, default) or document (an embed inside a document). One of: `bento`, `document`. |
+| `surface`     | enum   | no       | Old name of placement. One of: `bento`, `document`.                                                                                |
+| `workspaceId` | string | no       | Optional workspace UUID. Include it so workspace-scoped generated cells appear.                                                    |
+| `limit`       | number | no       | Page size, default 15                                                                                                              |
+| `offset`      | number | no       | From nextOffset                                                                                                                    |

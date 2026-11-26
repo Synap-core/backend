@@ -90,7 +90,7 @@ async function assertViewConfigPlaceable(
     if (errors.length > 0) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `Bento update rejected unknown or under-specified widgets (keys come from synap_list_widgets):\n- ${errors.join("\n- ")}`,
+        message: `Bento update rejected unknown or under-specified cells (keys come from synap_list_cells):\n- ${errors.join("\n- ")}`,
       });
     }
   }
@@ -452,7 +452,7 @@ export const hubViewsRouter = router({
       if (invalid.length > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Bento arrange rejected unknown or under-specified widgets:\n- ${invalid.join("\n- ")}`,
+          message: `Bento arrange rejected unknown or under-specified cells:\n- ${invalid.join("\n- ")}`,
         });
       }
 

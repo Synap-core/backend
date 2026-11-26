@@ -235,7 +235,7 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
   missing_attr:
     "Name what the embed shows: `id` (synap-entity), `viewId` (synap-view), `cellKey` or `instanceId` (synap-cell), `sessionId` and `slot` (synap-ask: an existing question; a new one is a ```json block with `ask`).",
   unknown_key:
-    'Call synap_list_widgets({ surface: "document" }) for the keys a document can embed.',
+    'Call synap_list_cells({ placement: "document" }) for the keys a document can embed.',
   not_found:
     "Search with synap_find (entities) or synap_list_views (views) and use an id it returns.",
   not_visible:
@@ -248,7 +248,7 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
     "Write it as markdown or a Synap directive; HTML belongs only inside an `html-embed` cell's props.",
   banned_phrase:
     'Say what happened and what to do next, plainly ("Couldn’t …"), without "Oops", "Sorry" or "Something went wrong".',
-  over_cap: `Lower the limit to the cap and let "Show all" open the full list (synap_list_widgets({ surface: "document" }) shows each cell's props).`,
+  over_cap: `Lower the limit to the cap and let "Show all" open the full list (synap_list_cells({ placement: "document" }) shows each cell's props).`,
   chart_no_finding:
     "Write one sentence after the chart's ```json block saying what it shows; the phone and exports read that sentence.",
   freeze_failed:
@@ -355,7 +355,7 @@ function designOfCell(
 const LENS_SECTION_KEY = "lens-section";
 
 /** The one fix for a `lens-section` whose props cannot be drawn as written. */
-const LENS_SECTION_FIX = `Set \`section\` to one of ${ATTENTION_CLASSES.join(", ")}; \`empty\` to one of ${LENS_SECTION_EMPTY_ANSWERS.join(", ")}; \`limit\` to a number from ${LENS_SECTION_LIMIT_MIN} to ${LENS_SECTION_LIMIT_MAX} (synap_list_widgets({ surface: "document" }) shows the props).`;
+const LENS_SECTION_FIX = `Set \`section\` to one of ${ATTENTION_CLASSES.join(", ")}; \`empty\` to one of ${LENS_SECTION_EMPTY_ANSWERS.join(", ")}; \`limit\` to a number from ${LENS_SECTION_LIMIT_MIN} to ${LENS_SECTION_LIMIT_MAX} (synap_list_cells({ placement: "document" }) shows the props).`;
 
 /** What readers see of a `lens-section` problem, said to its author. */
 function lensSectionMessage(problem: LensSectionBlockProblem): {
@@ -491,7 +491,7 @@ export async function diagnoseDocument(
           code: "bad_props",
           severity: "error",
           message: `"${key}" needs props.${missing.join(", props.")}; without ${missing.length === 1 ? "it" : "them"} the cell renders empty.`,
-          fix: `Add ${missing.map((k) => `"${k}"`).join(", ")} to the embed's \`\`\`json block (synap_list_widgets({ surface: "document" }) shows each key's props).`,
+          fix: `Add ${missing.map((k) => `"${k}"`).join(", ")} to the embed's \`\`\`json block (synap_list_cells({ placement: "document" }) shows each key's props).`,
           ...at,
         });
       }

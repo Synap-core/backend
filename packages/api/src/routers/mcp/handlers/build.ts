@@ -1117,7 +1117,9 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  // `synap_list_widgets` is its old name and answers through this same
+  // handler (`tool-aliases.ts`).
+  synap_list_cells: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { discoverRenderables, discoverFences } =
@@ -1125,25 +1127,27 @@ export const buildHandlers: McpHandlerMap = {
     const workspaceId =
       confinedWorkspaceId ??
       (typeof args.workspaceId === "string" ? args.workspaceId : null);
-    const surface = args.surface === "document" ? "document" : "bento";
+    // `placement` is the parameter; `surface` its old name, still accepted.
+    const placement =
+      (args.placement ?? args.surface) === "document" ? "document" : "bento";
     // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
     // pod's installed / AI-defined cells (services/cells/renderables.ts).
     const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
-    const { page: widgetPage, paging: widgetPaging } = pageSlice(
-      discoverRenderables(rows, surface),
+    const { page: cellPage, paging: cellPaging } = pageSlice(
+      discoverRenderables(rows, placement),
       args,
       WIDGETS_PAGE_DEFAULT,
       LIST_PAGE_MAX
     );
     return ok({
-      surface,
-      widgets: widgetPage,
-      ...widgetPaging,
+      placement,
+      cells: cellPage,
+      ...cellPaging,
       // Content languages (```mermaid, ```math, code) are fences, not
       // directives — the catalog's fence rows, a document-only answer.
-      ...(surface === "document" ? { fences: discoverFences() } : {}),
+      ...(placement === "document" ? { fences: discoverFences() } : {}),
       notes:
-        surface === "document"
+        placement === "document"
           ? [
               "Never guess a key — use this list.",
               "exampleDirective is the document embed grammar: attributes carry ONLY the cellKey, props go in a ```json block, and the paragraph after it is the fallback shown where the live cell cannot render.",
@@ -1151,7 +1155,7 @@ export const buildHandlers: McpHandlerMap = {
               "binding.default says how the data travels: query = live from the pod.",
             ]
           : [
-              "Never guess a widget key — use this list.",
+              "Never guess a cell key — use this list.",
               "view requires config.viewId (a saved view UUID). A profileSlug is not enough — use entity-list for that.",
               "Counts: stat-card + profileSlug. Legacy aliases (view-*, entity-count) still render but are not listed — never write them.",
             ],

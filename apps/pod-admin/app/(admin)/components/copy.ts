@@ -27,6 +27,13 @@ export const en = {
   "nav.label": "Console",
   "nav.allTools": "All tools",
   "nav.allTools.hint": "Every operator page: jobs, data, keys, server",
+  "nav.memberPreview": "Preview member menu",
+  "nav.memberPreview.hint":
+    "See the menu and Home a member sees. Your access does not change.",
+  "memberPreview.title": "Preview of the member’s menu",
+  "memberPreview.body":
+    "Everything shown is your own data, never a member’s. Your access is unchanged.",
+  "memberPreview.stop": "Stop preview",
   "nav.collapse": "Collapse",
   "nav.collapse.aria": "Collapse navigation",
   "nav.expand.aria": "Expand navigation",
@@ -89,6 +96,13 @@ export const fr: Catalog<typeof en> = {
   "nav.allTools": "Outils avancés",
   "nav.allTools.hint":
     "Toutes les pages de l’opérateur : travaux, données, clés, serveur",
+  "nav.memberPreview": "Aperçu du menu membre",
+  "nav.memberPreview.hint":
+    "Voyez le menu et l’accueil d’un membre. Vos accès ne changent pas.",
+  "memberPreview.title": "Aperçu du menu d’un membre",
+  "memberPreview.body":
+    "Tout ce qui s’affiche est à vous, jamais à un membre. Vos accès ne changent pas.",
+  "memberPreview.stop": "Quitter l’aperçu",
   "nav.collapse": "Réduire",
   "nav.collapse.aria": "Réduire la navigation",
   "nav.expand.aria": "Déployer la navigation",

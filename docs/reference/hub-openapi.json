@@ -34832,8 +34832,8 @@
     },
     "/widget-definitions": {
       "get": {
-        "tags": ["Widgets"],
-        "summary": "List widget definitions",
+        "tags": ["Cells"],
+        "summary": "List cell types (the cell catalog)",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -34845,7 +34845,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Widget definitions",
+            "description": "Cell types",
             "content": {
               "application/json": {
                 "schema": {
@@ -34874,8 +34874,8 @@
         }
       },
       "post": {
-        "tags": ["Widgets"],
-        "summary": "Register or update a widget definition",
+        "tags": ["Cells"],
+        "summary": "Register or update a cell type",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -34888,7 +34888,7 @@
         },
         "responses": {
           "200": {
-            "description": "Upserted widget definition",
+            "description": "Upserted cell type",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/WidgetDefinition" }

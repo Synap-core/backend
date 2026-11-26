@@ -44,6 +44,7 @@ import {
   bundleFromStorybook,
   describeProblems,
   parseStorybookBundle,
+  stableStringify,
   type StorybookBundle,
   type StorybookProblem,
 } from "@synap-core/types/storybook";
@@ -356,6 +357,7 @@ export const SYNC_OWNED_PROPERTIES: Readonly<
     "design-app",
   ],
   [UI_PAGE_PROFILE]: [
+    "source-path",
     "surface",
     "page-template",
     "page-layout",
@@ -377,8 +379,13 @@ export const SYNC_OWNED_PROPERTIES: Readonly<
   ],
 };
 
+/**
+ * Equal data, whatever the key order: Postgres jsonb hands object keys back
+ * reordered (shorter keys first), so a plain `JSON.stringify` compare would
+ * rewrite every `props-summary` on every run.
+ */
 const same = (a: unknown, b: unknown) =>
-  JSON.stringify(a) === JSON.stringify(b);
+  stableStringify(a) === stableStringify(b);
 
 /**
  * Pure: what a refresh writes on an existing record. `patch` = owned facts that
