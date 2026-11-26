@@ -1,5 +1,5 @@
 /**
- * THE frame read door enforces declared reads on the SERVER (Surfaces P6a).
+ * THE frame read door enforces declared reads on the SERVER.
  *
  * Driven through the REAL Hub route `POST /frame/read`, the REAL `frameRead`
  * (surface load, declaration check, log), and the REAL read procedures it
@@ -31,7 +31,13 @@
  *    still reads (rules out "a draft id is anyone's" and "a refused claim
  *    steals it"); a draft in a space the viewer cannot read: 403;
  *  - an op outside the ceiling: 400; an unknown cell or a page the viewer
- *    cannot read: 404, nothing answered.
+ *    cannot read: 404, nothing answered; a declared op missing its required
+ *    param: 400 (rules out "a frame's bad call is a server error");
+ *  - a key bound to one space (`keyWorkspaceId`) naming a page of ANOTHER
+ *    space its person reads: 403 FRAME_SPACE_FORBIDDEN, nothing logged or
+ *    answered (rules out "a page reads in its own space whatever the key's
+ *    binding"); the same page with no binding is answered (the person reads
+ *    it), and a page of the key's own space is answered.
  *
  * NOT COVERED: the tRPC twin `surfaces.frameRead` (a thin wrapper over the
  * same `frameRead`), every op of the table (only `entities.list` runs; the
@@ -117,6 +123,7 @@ const A = randomUUID(); // the viewer
 const B = randomUUID(); // another person
 const WA = randomUUID(); // A's space
 const WB = randomUUID(); // B's space, A is not a member
+const WC = randomUUID(); // A's second space
 const DEAL = randomUUID(); // kind
 const PERSON = randomUUID(); // kind
 const D_A = randomUUID(); // a deal A sees
@@ -127,17 +134,21 @@ const B_PAGE = randomUUID(); // B's html page, A cannot read it
 const EMBED = randomUUID(); // A's html-embed source: text + text/html
 const NOTE = randomUUID(); // A's markdown document: not a page
 const PLAIN = randomUUID(); // A's plain-text document: not a page
+const C_PAGE = randomUUID(); // A's html page in A's second space
+const D_C = randomUUID(); // a deal in A's second space
 
 const DECLARED = [{ op: "entities.list", params: { profileSlug: "deal" } }];
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-function read(body: unknown, asUser = A) {
+function read(body: unknown, asUser = A, keyWorkspaceId?: string) {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("userId", asUser);
     c.set("scopes", ["hub-protocol.read"]);
+    // What the hub auth middleware sets for a key bound to one space.
+    if (keyWorkspaceId) c.set("keyWorkspaceId", keyWorkspaceId);
     await next();
   });
   registerFrameReadRoutes(app);
@@ -188,13 +199,14 @@ beforeAll(async () => {
     [A, `${A}@x.test`, B, `${B}@x.test`]
   );
   await q(
-    `insert into workspaces (id, name, owner_id, settings) values ($1,'A space',$2,'{}'::jsonb), ($3,'B space',$4,'{}'::jsonb)`,
-    [WA, A, WB, B]
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'A space',$2,'{}'::jsonb), ($3,'B space',$4,'{}'::jsonb), ($5,'A second space',$2,'{}'::jsonb)`,
+    [WA, A, WB, B, WC]
   );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values
-       (gen_random_uuid(), $1, $2, 'owner'), (gen_random_uuid(), $3, $4, 'owner')`,
-    [WA, A, WB, B]
+       (gen_random_uuid(), $1, $2, 'owner'), (gen_random_uuid(), $3, $4, 'owner'),
+       (gen_random_uuid(), $5, $2, 'owner')`,
+    [WA, A, WB, B, WC]
   );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id)
@@ -206,6 +218,7 @@ beforeAll(async () => {
     [D_A, A, WA, DEAL, "deal"],
     [D_B, B, WB, DEAL, "deal"],
     [P_A, A, WA, PERSON, "person"],
+    [D_C, A, WC, DEAL, "deal"],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
@@ -235,6 +248,12 @@ beforeAll(async () => {
             ($4,$2,$3,'Notes','text','','',0,'text/markdown','{}'::jsonb),
             ($5,$2,$3,'Plain','text','','',0,'text/plain','{}'::jsonb)`,
     [EMBED, A, WA, NOTE, PLAIN]
+  );
+  // A's page in A's second space: it declares nothing.
+  await q(
+    `insert into documents (id, user_id, workspace_id, title, type, storage_url, storage_key, size, mime_type, metadata)
+     values ($1,$2,$3,'C page','html','','',0,'text/html','{}'::jsonb)`,
+    [C_PAGE, A, WC]
   );
 }, 120_000);
 
@@ -476,5 +495,55 @@ describe("refusals before any read", () => {
     });
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({ code: "FRAME_SPACE_FORBIDDEN" });
+  });
+});
+
+describe("a key bound to one space (the key's confinement)", () => {
+  const body = {
+    surface: { kind: "document", id: C_PAGE },
+    op: "entities.list",
+    params: { profileSlug: "deal" },
+  };
+
+  it("its person, signed in, reads the page of the second space", async () => {
+    const res = await read(body);
+    expect(res.status).toBe(200);
+    expect(idsOf(await res.json())).toEqual([D_C]);
+  });
+
+  it("a key bound to A's first space naming that page: 403 FRAME_SPACE_FORBIDDEN, nothing logged or answered", async () => {
+    const before = await logCount();
+    const res = await read(body, A, WA);
+    expect(res.status).toBe(403);
+    const answer = await res.json();
+    expect(answer).toMatchObject({ code: "FRAME_SPACE_FORBIDDEN" });
+    expect(JSON.stringify(answer)).not.toContain(D_C);
+    expect(await logCount()).toBe(before);
+  });
+
+  it("the same key reads a page of its own space", async () => {
+    const res = await read(
+      {
+        surface: { kind: "document", id: PAGE },
+        op: "entities.list",
+        params: { profileSlug: "deal" },
+      },
+      A,
+      WA
+    );
+    expect(res.status).toBe(200);
+    expect(idsOf(await res.json())).toEqual([D_A]);
+  });
+});
+
+describe("a declared op missing its required param", () => {
+  it("entities.get with no id: 400, not a server error", async () => {
+    const res = await read({
+      surface: { kind: "cell", typeKey: "cell:pkg:open" },
+      op: "entities.get",
+      params: {},
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("needs an id");
   });
 });

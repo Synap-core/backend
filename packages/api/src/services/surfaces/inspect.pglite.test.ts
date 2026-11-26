@@ -1,5 +1,5 @@
 /**
- * THE surface inspect (Surfaces P7), driven through the REAL Hub route
+ * THE surface inspect, driven through the REAL Hub route
  * `GET /surfaces/inspect`, the REAL `inspectSurface` (surface load as the
  * caller, the read log query, the static lint) on PGlite with every
  * @synap/database table. Only the storage of a page's body is faked.
@@ -18,7 +18,12 @@
  *  - a built-in cell type alone: reads and lint `unavailable`, never `ok`
  *    with nothing in it;
  *  - render is always `unavailable` (no browser on the pod);
- *  - another person's page: 404; a markdown document: 400 (not a page).
+ *  - another person's page: 404; a markdown document: 400 (not a page);
+ *  - a key bound to one space: a page of another space its person reads is
+ *    a 403 (rules out "inspect floors on the person only"), and a cell's
+ *    read log counts the rows of the key's space only (rules out "the log is
+ *    floored on every space the person reads"): a page moved between
+ *    spaces keeps rows of both.
  *
  * NOT COVERED: the tRPC twin `surfaces.inspect` and the MCP handler (thin
  * wrappers over the same `inspectSurface`), every lint rule (the unit test
@@ -116,6 +121,9 @@ const A = randomUUID(); // the caller
 const B = randomUUID(); // another person
 const WA = randomUUID(); // A's space
 const WB = randomUUID(); // B's space, A is not a member
+const WC = randomUUID(); // A's second space
+const C_PAGE = randomUUID(); // A's page in A's second space
+const MOVED = randomUUID(); // A's page in A's first space, read in both
 const PAGE = randomUUID(); // A's html page, declares entities.list
 const BROKEN = randomUUID(); // A's html page whose body cannot be read
 const B_PAGE = randomUUID(); // B's page
@@ -140,11 +148,17 @@ const PAGE_HTML = [
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-async function inspect(query: Record<string, string>, asUser = A) {
+async function inspect(
+  query: Record<string, string>,
+  asUser = A,
+  keyWorkspaceId?: string
+) {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("userId", asUser);
     c.set("scopes", ["hub-protocol.read"]);
+    // What the hub auth middleware sets for a key bound to one space.
+    if (keyWorkspaceId) c.set("keyWorkspaceId", keyWorkspaceId);
     await next();
   });
   registerSurfacesRoutes(app);
@@ -191,13 +205,14 @@ beforeAll(async () => {
     [A, `${A}@x.test`, B, `${B}@x.test`]
   );
   await q(
-    `insert into workspaces (id, name, owner_id, settings) values ($1,'A space',$2,'{}'::jsonb), ($3,'B space',$4,'{}'::jsonb)`,
-    [WA, A, WB, B]
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'A space',$2,'{}'::jsonb), ($3,'B space',$4,'{}'::jsonb), ($5,'A second space',$2,'{}'::jsonb)`,
+    [WA, A, WB, B, WC]
   );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values
-       (gen_random_uuid(), $1, $2, 'owner'), (gen_random_uuid(), $3, $4, 'owner')`,
-    [WA, A, WB, B]
+       (gen_random_uuid(), $1, $2, 'owner'), (gen_random_uuid(), $3, $4, 'owner'),
+       (gen_random_uuid(), $5, $2, 'owner')`,
+    [WA, A, WB, B, WC]
   );
   await q(
     `insert into widget_definitions (type_key, workspace_id, name, renderer_type, renderer_source, is_active, reads)
@@ -262,6 +277,18 @@ beforeAll(async () => {
   await log("cell", RADAR, "sessions.list", true, { daysAgo: 45 });
   // The page, in its own space.
   await log("document", PAGE, "entities.list", true);
+
+  // A's page in A's second space; a page now in A's first space that was
+  // read in both (it moved).
+  await q(
+    `insert into documents (id, user_id, workspace_id, title, type, storage_url, storage_key, size, mime_type, metadata)
+     values ($1,$2,$3,'C page','html','','k/c',10,'text/html','{}'::jsonb),
+            ($4,$2,$5,'Moved','html','','k/c',10,'text/html','{}'::jsonb)`,
+    [C_PAGE, A, WC, MOVED, WA]
+  );
+  h.bodies.set("k/c", "<p>C</p>");
+  await log("document", MOVED, "entities.list", true);
+  await log("document", MOVED, "views.list", true, { ws: WC });
 }, 120_000);
 
 describe("GET /surfaces/inspect", () => {
@@ -380,5 +407,25 @@ describe("GET /surfaces/inspect", () => {
     expect((await inspect({ kind: "document", id: B_PAGE }, B)).status).toBe(
       200
     );
+  });
+});
+
+describe("a key bound to one space", () => {
+  it("a page of another space its person reads: 403; with no binding: 200", async () => {
+    expect((await inspect({ kind: "document", id: C_PAGE })).status).toBe(200);
+    const bound = await inspect({ kind: "document", id: C_PAGE }, A, WA);
+    expect(bound.status).toBe(403);
+    expect(bound.body.error).toContain("bound to");
+  });
+
+  it("a page's read log: the rows of the key's space only", async () => {
+    const opsOf = (body: any) =>
+      body.reads.surfaces[0].used.map((u: any) => u.op).sort();
+    const person = await inspect({ kind: "document", id: MOVED });
+    expect(person.status).toBe(200);
+    expect(opsOf(person.body)).toEqual(["entities.list", "views.list"]);
+    const bound = await inspect({ kind: "document", id: MOVED }, A, WA);
+    expect(bound.status).toBe(200);
+    expect(opsOf(bound.body)).toEqual(["entities.list"]);
   });
 });

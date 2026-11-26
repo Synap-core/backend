@@ -20,6 +20,10 @@
  * open-kinds.lock.tripwire.test.ts).
  */
 
+import {
+  OPENABLE_ANCHOR_KINDS,
+  type OpenableAnchorKind,
+} from "@synap-core/types/surfaces";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { isUuid } from "../../lib/format";
 import { agentHref } from "../../lib/console-nav";
@@ -91,7 +95,7 @@ function isBounceType(type: string): type is BounceType {
 }
 
 /**
- * The `?surface=` of an object link (Surfaces P3,
+ * The `?surface=` of an object link (
  * `/open/<kind>/<id>?surface=<surfaceId>`, built by the pod's `openLink` and
  * hub-rest-client's `openUrl`): the id of ONE surface attached to the object,
  * which the page opens on. Anything but a uuid is dropped (null), never
@@ -104,13 +108,17 @@ export function parseOpenSurfaceParam(value: unknown): string | null {
   return isUuid(id) ? id : null;
 }
 
-/** The kinds whose page can open on an attached surface (anchor kinds hosted here). */
-export const SURFACE_ANCHOR_HOST_TYPES = [
-  "entity",
-  "session",
-  "playbook",
-  "track",
-] as const satisfies readonly HostType[];
+/**
+ * The kinds whose page can open on an attached surface here: the anchor
+ * kinds the typed open route serves (`OPENABLE_ANCHOR_KINDS`, the one list)
+ * that this page hosts. A served kind it bounces (a space, a project) opens
+ * in the app.
+ */
+export type SurfaceAnchorHostType = Extract<OpenableAnchorKind, HostType>;
+export const SURFACE_ANCHOR_HOST_TYPES: readonly SurfaceAnchorHostType[] =
+  OPENABLE_ANCHOR_KINDS.filter((k): k is SurfaceAnchorHostType =>
+    isHostType(k)
+  );
 
 export function parseOpenParams(type: string, id: string): ParsedOpen {
   const kind = type.trim().toLowerCase();

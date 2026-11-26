@@ -26326,7 +26326,11 @@ export interface SurfaceRow {
 	cellKey?: string;
 	/** For a renders row: the renderer slot (list, detail, card, dashboard). */
 	slot?: string;
-	/** Today the existing `/open/<id>` link of the body. */
+	/**
+	 * Where it opens: an attached surface on its object's page
+	 * (`/open/<kind>/<id>?surface=<id>`, `OPENABLE_ANCHOR_KINDS`), any other
+	 * row the `/open/…` link of its own body.
+	 */
 	openUrl: string;
 	/** True when the surface cannot be edited through it (an HTML artifact). */
 	readOnly: boolean;
@@ -61622,6 +61626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					config?: Record<string, unknown> | undefined;
 					content?: string | undefined;
 					props?: Record<string, unknown> | undefined;
+					reads?: unknown[] | null | undefined;
 					url?: string | undefined;
 					viewType?: string | undefined;
 					workspaceId?: string | undefined;

@@ -1,21 +1,21 @@
 /**
- * SURFACES router — the read side of the Surfaces plane (renderers, interfaces,
- * apps). Two doors: `surfaces.usageHealth` (which renderer keys are bound,
- * and are they healthy) and `surfaces.forObject` (which surfaces ONE object
- * carries, the find door MCP `synap_find_surfaces` and Hub REST
- * `GET /surfaces` share).
+ * SURFACES router: UI anchored to an object, on tRPC.
+ *
+ * Reads: `surfaces.usageHealth` (which renderer keys are bound, and are they
+ * healthy), `surfaces.forObject` (which surfaces ONE object carries, the find
+ * door MCP `synap_find_surfaces` and Hub REST `GET /surfaces` share),
+ * `surfaces.inspect` (what one framed surface does before it is handed over:
+ * its frame reads, hard-coded colours and fonts, static accessibility; MCP
+ * `synap_inspect_surface` and Hub REST `GET /surfaces/inspect` share it) and
+ * `surfaces.frameRead` (merged in from `surface-frame-read.ts`).
  *
  * ALTITUDE: `protectedProcedure` with an OPTIONAL `workspaceId`, exactly like
- * `capabilities.compositions` — the Surfaces app is a pod-altitude plane and
- * must not 400 when no workspace is selected. `workspaceId` NARROWS (pod-wide
+ * `capabilities.compositions`: the Surfaces plane is pod-altitude and must not
+ * 400 when no workspace is selected. `workspaceId` NARROWS (pod-wide
  * NULL-workspace rows are always included); omitted ⇒ the pod-wide user floor.
- * `surfaces.inspect` (Surfaces P7) reads what one framed surface does before
- * it is handed over: its frame reads, hard-coded colours and fonts, static
- * accessibility (the door MCP `synap_inspect_surface` and Hub REST
- * `GET /surfaces/inspect` share).
  *
- * Writes (Surfaces P3): `surfaces.create | attach | detach` put a surface ON
- * one object (links `attaches`), through the ONE governed service
+ * Writes: `surfaces.create | attach | detach` put a surface ON one object
+ * (links `attaches`), through the ONE governed service
  * (`services/surfaces/attach.ts`, `create.ts`) that MCP and Hub REST call too.
  * Kind-level renderer bindings keep flowing through `profiles.setRenderer`.
  */
@@ -30,6 +30,7 @@ import { TRPCError } from "@trpc/server";
 import {
   ANCHOR_KINDS,
   ATTACHABLE_SURFACE_TYPES,
+  ATTACHMENT_LABEL_MAX,
   CREATABLE_SURFACE_BODIES,
 } from "@synap-core/types/surfaces";
 import {
@@ -55,7 +56,7 @@ const SurfaceRefSchema = z.object({
 });
 const MetaFields = {
   slot: z.string().max(40).optional(),
-  label: z.string().max(200).optional(),
+  label: z.string().max(ATTACHMENT_LABEL_MAX).optional(),
 };
 
 /** A refusal or a denial is an error on tRPC; everything else is the answer. */
@@ -176,7 +177,15 @@ export const surfacesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return inspectSurface({ userId, access: AccessContext.from(ctx) }, input);
+      return inspectSurface(
+        {
+          userId,
+          access: AccessContext.from(ctx),
+          agentUserId: ctx.agentUserId,
+          keyWorkspaceId: ctx.keyWorkspaceId,
+        },
+        input
+      );
     }),
 
   /**
@@ -199,6 +208,8 @@ export const surfacesRouter = router({
             url: z.string().url().optional(),
             cellKey: z.string().max(200).optional(),
             props: z.record(z.string(), z.unknown()).optional(),
+            // html only: what its frame reads (`readDeclaredFrameIo` checks it).
+            reads: z.array(z.unknown()).nullable().optional(),
             workspaceId: z.string().uuid().optional(),
           })
           .optional(),

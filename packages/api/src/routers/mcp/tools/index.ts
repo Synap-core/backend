@@ -4145,7 +4145,7 @@ export const tools = {
             spec: {
               type: "object",
               description:
-                "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's).",
+                "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), reads (html: what its frame reads, as synap_create_document takes it), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's).",
             },
             slot: {
               type: "string",
