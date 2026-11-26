@@ -55,6 +55,7 @@ import {
   MessageAuthorType,
   proposals,
   focusSessions,
+  sessionAgentEventClocks,
   sessionLastAgentWorkSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -146,6 +147,11 @@ export async function loadSessionLiveness(
       sessions.map((s) => s.channelId).filter((c): c is string => !!c)
     ),
   ];
+
+  // The agent's own clock reads the page's agent events and room posts in ONE
+  // grouped pass, joined in: per row it decompressed the events hypertable,
+  // and walked a room many sessions share, once per session each.
+  const clocks = sessionAgentEventClocks("focus_sessions", ids);
 
   try {
     const [turnRows, runningRows, eventRows, proposalRows, noteRows, workRows] =
@@ -247,9 +253,10 @@ export async function loadSessionLiveness(
             sessionId: focusSessions.id,
             at: sql<
               Date | string | null
-            >`${sessionLastAgentWorkSql("focus_sessions")}`,
+            >`${sessionLastAgentWorkSql("focus_sessions", clocks)}`,
           })
           .from(focusSessions)
+          .leftJoin(clocks.table, clocks.on)
           .where(inArray(focusSessions.id, ids)),
       ]);
 

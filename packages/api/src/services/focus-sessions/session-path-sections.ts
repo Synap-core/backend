@@ -52,6 +52,7 @@ import {
   lte,
   drizzleSql,
   ProposalStatus,
+  sessionAgentEventClocks,
   sessionLastAgentActivitySql,
   sessionLastAgentWorkSql,
   sessionTurnInFlightSql,
@@ -419,6 +420,10 @@ async function readPageNeedsYou<R extends PathSourceRow>(
 ): Promise<PageNeedsYou> {
   const { userId } = reader;
   const ids = rows.map((r) => r.id);
+  // The page's agent events and room posts, read in ONE grouped pass and
+  // joined in: read per row they decompressed the events hypertable, and
+  // walked a room many sessions share, once per session each.
+  const clocks = sessionAgentEventClocks("focus_sessions", ids);
   const [facts, pending, blocking] = await Promise.all([
     database
       .select({
@@ -427,12 +432,13 @@ async function readPageNeedsYou<R extends PathSourceRow>(
         turnInFlight: drizzleSql<boolean>`${sessionTurnInFlightSql("focus_sessions")}`,
         lastAgentActivityAt: drizzleSql<
           Date | string | null
-        >`${sessionLastAgentActivitySql("focus_sessions")}`,
+        >`${sessionLastAgentActivitySql("focus_sessions", clocks)}`,
         lastAgentWorkAt: drizzleSql<
           Date | string | null
-        >`${sessionLastAgentWorkSql("focus_sessions")}`,
+        >`${sessionLastAgentWorkSql("focus_sessions", clocks)}`,
       })
       .from(focusSessions)
+      .leftJoin(clocks.table, clocks.on)
       .where(inArray(focusSessions.id, ids)),
     database
       .select({
