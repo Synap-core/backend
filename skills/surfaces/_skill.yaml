@@ -1,0 +1,22 @@
+name: surfaces
+description: >-
+  Use this skill whenever you make, change, find or suggest UI over the user's Synap pod data:
+  a dashboard, a list or board of records, a page, a report to share, a pitch deck, a one-pager,
+  a brainstorm, a way a kind of thing looks, or an extra screen on one project, deal, person or goal.
+  Triggers: "build me a dashboard for X", "show all my deals", "make a kanban of tasks",
+  "write a memo / spec / brief", "make a report for the board", "pitch deck for investors",
+  "a one-pager I can send", "brainstorm Y with me", "map how these connect",
+  "make deals look different", "give the Fundraising project an investor radar",
+  "a chart the catalog does not have", "what UI does this project have". It picks the one
+  right body (View, Document, Bento, HTML artifact, Whiteboard, renderer binding, attached
+  surface, new Cell), anchors it, and hands it over. For view configs and bento
+  layouts it points to synap-ui's references; for the design of a screen, to synap-design.
+metadata:
+  synap:
+    requires:
+      env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
+    primaryEnv: SYNAP_HUB_API_KEY
+    homepage: https://synap.live
+    capabilities: [surfaces, views, documents, bento, html, whiteboard, cells, renderers]
+    os: [macos, linux, windows]
+    userInvocable: false

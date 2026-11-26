@@ -71,7 +71,7 @@ export function doorToolName(podName: string, door: SkillDoor): string {
  * grounding floor, so a clause naming two refs does not fit either.
  */
 export const BUILD_SKILLS = {
-  ui: "system/synap-ui/skill",
+  ui: "system/surfaces/skill",
   app: "system/synap-app/overview",
 } as const;
 
@@ -91,7 +91,7 @@ export function yourToolsBlock(
   const toolName = (podName: string) => doorToolName(podName, door);
   const ask = `${toolName("synap_ask")} ${ASK_PURPOSE}.`;
   const loadSkill = toolName("synap_load_skill");
-  const build = `Before building UI in the pod (views, bento, cells): ${loadSkill}({ref: "${BUILD_SKILLS.ui}"}); before an app on it: ${loadSkill}({ref: "${BUILD_SKILLS.app}"}).`;
+  const build = `Before making UI in the pod (views, bento, documents, HTML pages, cells): ${loadSkill}({ref: "${BUILD_SKILLS.ui}"}); before an app on it: ${loadSkill}({ref: "${BUILD_SKILLS.app}"}).`;
   if (access?.profile !== "entry") {
     return {
       profile: access?.profile ?? "all",

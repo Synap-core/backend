@@ -66,7 +66,6 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 | `synap:capture`           | User pastes multi-entity text (email, transcript, bio) |
 | `synap:governance`        | Write was proposed or denied; need to explain policy   |
 | `synap:linking`           | Custom relation types, auto-sync edge cases            |
-| `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
+| `surfaces:SKILL`          | Making any UI on an object (picks the body)            |
 | `synap-ui:view-types`     | Specific view type config shapes                       |
-| `synap-ui:widget-catalog` | Available cell kinds and their configSchema            |
 | `synap-schema:SKILL`      | Creating custom profiles or property definitions       |

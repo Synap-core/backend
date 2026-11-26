@@ -1831,7 +1831,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
+      "description": "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`, on the ops it declares in `reads`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown): attach it with `attachTo`. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
       "parameters": [
         {
           "name": "attachTo",
@@ -5880,7 +5880,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).",
+      "description": "Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit; configure a catalog cell first. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Declare its `reads`: the frame may query nothing else. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded, attached to one object (synap_attach_surface) or bound (synap_promote_cell_to_renderer).",
       "parameters": [
         {
           "name": "name",
@@ -6017,7 +6017,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Escalation L4: make a proven Cell a KIND's look (profileSlug; slots list|detail|card|dashboard), bound per kind, never as every kind's default. A report, cockpit or page for one object is a document, bento or HTML artifact, not a renderer. ONE capability, playbook or view: target {kind,id} (slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
+      "description": "Escalation L4: make a proven Cell a KIND's look (profileSlug; slots list|detail|card|dashboard), bound per kind, never as every kind's default. A report, cockpit or page for one object is a document, bento or HTML artifact attached to it (synap_attach_surface), not a renderer. Still accepted: ONE capability, playbook or view as target {kind,id} (slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/surfaces/cell-authoring.",
       "parameters": [
         {
           "name": "profileSlug",
@@ -6172,7 +6172,7 @@
           "name": "spec",
           "type": "object",
           "required": false,
-          "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+          "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's)."
         },
         {
           "name": "slot",
@@ -6230,7 +6230,7 @@
           "title": { "type": "string", "description": "Its name." },
           "spec": {
             "type": "object",
-            "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+            "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_cells), workspaceId (the space it is stored in; default the object's)."
           },
           "slot": {
             "type": "string",
@@ -11208,7 +11208,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a Space opens on: a cell (cellKey, from synap_list_widgets for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
+      "description": "Set what a Space opens on: a cell (cellKey, from synap_list_cells for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
       "parameters": [
         {
           "name": "workspaceId",

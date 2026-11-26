@@ -33,7 +33,6 @@ diagnostics.md
 workspace-design.md
 workspace-edges.md
 more.md
-viewframe-cells.md
 authentication.md
 response-style.md
 recap.md

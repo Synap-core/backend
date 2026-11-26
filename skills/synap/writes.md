@@ -172,31 +172,10 @@ awaiting review. Other optional fields: `url` (an https link — creates a refer
 document with no stored bytes), `idempotencyKey` (a retry with the same key returns
 the prior document), `expectedLabel` (the session-output slot it fulfils).
 
-`type: "html"` stores self-contained HTML. The browser renders it via the `html-doc` cell in a sandboxed iframe. Use for AI-generated reports, rich visualisations, custom charts, or anything beyond markdown.
-
-**HTML document workflow:**
-
-```json
-// 1. Create the HTML document
-POST /api/hub/documents
-{ "userId": "{userId}", "workspaceId": "{workspaceId}",
-  "title": "Q2 Revenue Report", "type": "html",
-  "content": "<!DOCTYPE html><html>…</html>",
-  "entityId": "ent_project_..." }
-// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", ... }
-
-// 2. Replace the HTML (read it first: GET → `revision`)
-PATCH /api/hub/documents/doc_abc
-{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>", "baseRevision": 3 }
-// → a pending proposal; readers see the new HTML only once it is approved
-```
-
-`html-doc` is **not** an agent-placeable bento cell: `arrange` rejects it. The
-document renders where it is opened (the Files app, or the entity it is attached
-to). For HTML you want to embed elsewhere, create an HTML cell instance
-(`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
-
-The iframe uses `sandbox="allow-scripts"` — scripts run but have no same-origin access to the parent app. The HTML is fully isolated.
+`type: "html"` makes an HTML artifact: a designed page or deck to present or share
+outside the pod, never an entity's body (`entityId` is refused for it). How to
+create, attach, edit and feed one (declared reads, context, brand): skill `surfaces`,
+"HTML artifacts" (`synap_load_skill("system/surfaces/html")`).
 
 ### Update a document's content (a patch, reviewed)
 
