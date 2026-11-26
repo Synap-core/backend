@@ -46,6 +46,8 @@ import {
   skills,
   projectTracks,
   profiles,
+  views,
+  cellInstances,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -250,6 +252,19 @@ async function endpointVisible(
     // workspace rows in visible workspaces, user rows the caller's own.
     case "profile":
       return rowVisible(profiles, profiles.id, id, visibleProfileWhere(userId));
+    // The SURFACE ends of an `attaches` edge (Surfaces P3), each through its
+    // registered rule: a view is readable by its owner, its space's members
+    // and, when exposed, its project's members (`viewReadableWhere`); a cell
+    // instance follows its space.
+    case "view":
+      return rowVisible(views, views.id, id, access.predicate(views));
+    case "cell_instance":
+      return rowVisible(
+        cellInstances,
+        cellInstances.id,
+        id,
+        access.predicate(cellInstances)
+      );
     // `participant` (a users-table id) has no "users visible to me" predicate
     // anywhere in the codebase, and `source` has no table at all. Refused
     // rather than allowed by default.

@@ -713,6 +713,8 @@ function applyOpenDispatch(
     view: c.req.query("view"),
     // `?flowType=` addresses a RUN (`{flowType, id}`); kept only on a run link.
     flowType: c.req.query("flowType"),
+    // `?surface=` opens the object's page on one attached surface (P3).
+    surface: c.req.query("surface"),
   });
   // Same URL 302s or 200s by User-Agent — never let a CDN cache the bot bounce
   // for a human (or the reverse). `?client=` is part of the URL, so it varies

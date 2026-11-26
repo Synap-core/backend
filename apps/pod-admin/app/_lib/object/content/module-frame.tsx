@@ -15,14 +15,16 @@
  *
  * Never `allow-same-origin`, never a `src` URL, never a token, pod URL or
  * key inside. A message is handled only from THIS frame's window with the
- * opaque origin "null" (`createCellFrameHost`). Reads go through the same
- * console reads a stored page uses (`readForPage`), stamped with the host's
- * lens; writes go through the pod's governed doors (`writeForFrame`),
- * stamped with the frame's type and view: the pod answers approved,
- * proposed or denied. A proposed write gets a receipt with its Review door,
- * a denied or failed one a failure receipt, and an approved one refreshes
- * the page's own reads of what it touched. A frame that navigates away (a
- * second `load`) is torn down; the reader can run it again.
+ * opaque origin "null" (`createCellFrameHost`). Reads go through THE frame
+ * read door (`surfaces.frameRead`, `frame-read-door.ts`) as the cell's type,
+ * in the host's lens: the pod checks them against what the cell declares; a
+ * frame with no type reads nothing. Writes go through the pod's governed
+ * doors (`writeForFrame`), stamped with the frame's type and view: the pod
+ * answers approved, proposed or denied. A proposed write gets a receipt
+ * with its Review door, a denied or failed one a failure receipt, and an
+ * approved one refreshes the page's own reads of what it touched. A frame
+ * that navigates away (a second `load`) is torn down; the reader can run it
+ * again.
  *
  * A frame carries megabytes of srcdoc, so it mounts only when it nears the
  * viewport (`observeNear`), and starts hidden under its cover (a skeleton of
@@ -75,7 +77,8 @@ import {
   UNREAD_WRITE_ANSWER,
   writeForFrame,
 } from "./bridge-writes";
-import { readForPage, type BridgeClient } from "./html-bridge-reads";
+import type { BridgeClient } from "./html-bridge-reads";
+import { frameReadFor } from "./frame-read-door";
 import {
   browserFrameLinkEnv,
   handleFrameLink,
@@ -162,8 +165,12 @@ export function createModuleFrameHost(options: {
         : {}),
     }),
     ...(options.context?.answer ? { context: options.context.answer } : {}),
-    read: (op, params) =>
-      readForPage(client, op, params, { workspaceId: lens.workspaceId }),
+    // THE frame read door, as this cell's type in the host's lens.
+    read: frameReadFor(
+      client,
+      identity.typeKey ? { kind: "cell", typeKey: identity.typeKey } : null,
+      { workspaceId: lens.workspaceId }
+    ),
     write: async (request) => {
       let result: CellBridgeMutateResult;
       try {

@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 129,
+  "toolCount": 130,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -42,7 +42,6 @@
       "synap_diagnose",
       "synap_template_health",
       "synap_get_flow",
-      "synap_get_home",
       "synap_read_board"
     ],
     "data": [
@@ -133,6 +132,8 @@
       "synap_create_view",
       "synap_list_views",
       "synap_find_surfaces",
+      "synap_create_surface",
+      "synap_attach_surface",
       "synap_update_view_content",
       "synap_update_view",
       "synap_set_start_page",
@@ -554,19 +555,31 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+      "description": "A thread's newest messages plus linked entities and documents; read it before posting. threadId: from synap_post_message or the personal channel. Or `object`: its comment threads (anchor with a pin's locator, resolvedAt); the person resolves, you reply (synap_post_message comment.replyTo).",
       "parameters": [
         {
           "name": "threadId",
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "Channel/thread UUID"
+        },
+        {
+          "name": "object",
+          "type": "object",
+          "required": false,
+          "description": "Instead of threadId: {type:'entity'|'document', id}."
+        },
+        {
+          "name": "state",
+          "type": "enum",
+          "required": false,
+          "enum": ["open", "resolved"]
         },
         {
           "name": "limit",
           "type": "number",
           "required": false,
-          "description": "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn."
+          "description": "Newest messages, 1-100 (default 50)."
         },
         {
           "name": "cursor",
@@ -582,16 +595,21 @@
             "type": "string",
             "description": "Channel/thread UUID"
           },
+          "object": {
+            "type": "object",
+            "description": "Instead of threadId: {type:'entity'|'document', id}."
+          },
+          "state": { "type": "string", "enum": ["open", "resolved"] },
           "limit": {
             "type": "number",
-            "description": "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn."
+            "description": "Newest messages, 1-100 (default 50)."
           },
           "cursor": {
             "type": "string",
             "description": "Older messages: the last reply's `nextCursor`."
           }
         },
-        "required": ["threadId"]
+        "required": []
       }
     },
     {
@@ -1816,6 +1834,12 @@
       "description": "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
       "parameters": [
         {
+          "name": "attachTo",
+          "type": "object",
+          "required": false,
+          "description": "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface."
+        },
+        {
           "name": "idempotencyKey",
           "type": "string",
           "required": false,
@@ -1879,6 +1903,12 @@
           "description": "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual."
         },
         {
+          "name": "reads",
+          "type": "array",
+          "required": false,
+          "description": "An html page's declared reads: [{op, params?}] of window.synap.query; \"*\" = any. Others are refused."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -1888,6 +1918,26 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "attachTo": {
+            "type": "object",
+            "description": "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entity",
+                  "profile",
+                  "workspace",
+                  "project",
+                  "track",
+                  "playbook",
+                  "session"
+                ]
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["kind", "id"]
+          },
           "idempotencyKey": {
             "type": "string",
             "description": "Optional: a stable key so a retry returns the PRIOR write, not a duplicate. Omit and identical content is deduped automatically; pass one to make a retry idempotent even if its content changed trivially."
@@ -1930,6 +1980,10 @@
           "refreshAutomationId": {
             "type": ["string", "null"],
             "description": "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual."
+          },
+          "reads": {
+            "type": "array",
+            "description": "An html page's declared reads: [{op, params?}] of window.synap.query; \"*\" = any. Others are refused."
           },
           "reasoning": {
             "type": "string",
@@ -5295,66 +5349,6 @@
       }
     },
     {
-      "name": "synap_get_home",
-      "title": "Get Home or Moving now",
-      "group": "read",
-      "annotations": {
-        "title": "Get Home or Moving now",
-        "readOnlyHint": true,
-        "openWorldHint": false
-      },
-      "description": "Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.",
-      "parameters": [
-        {
-          "name": "view",
-          "type": "enum",
-          "required": false,
-          "description": "home (default) or moving.",
-          "enum": ["home", "moving"]
-        },
-        {
-          "name": "projectId",
-          "type": "string",
-          "required": false,
-          "description": "Optional: only this project's spaces and things."
-        },
-        {
-          "name": "workspaceId",
-          "type": "string",
-          "required": false,
-          "description": "moving only, optional: only this space."
-        },
-        {
-          "name": "limit",
-          "type": "number",
-          "required": false,
-          "description": "moving only: things (default 30, max 100)."
-        }
-      ],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "view": {
-            "type": "string",
-            "enum": ["home", "moving"],
-            "description": "home (default) or moving."
-          },
-          "projectId": {
-            "type": "string",
-            "description": "Optional: only this project's spaces and things."
-          },
-          "workspaceId": {
-            "type": "string",
-            "description": "moving only, optional: only this space."
-          },
-          "limit": {
-            "type": "number",
-            "description": "moving only: things (default 30, max 100)."
-          }
-        }
-      }
-    },
-    {
       "name": "synap_read_board",
       "title": "Read a whiteboard",
       "group": "read",
@@ -5938,6 +5932,12 @@
           "description": "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
         },
         {
+          "name": "reads",
+          "type": "array",
+          "required": false,
+          "description": "Reads its frame declares: [{op, params?}] of window.synap.query; param \"*\" = any. Others are refused."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -5990,6 +5990,10 @@
             "properties": { "viewId": { "type": "string" } },
             "required": ["viewId"],
             "description": "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
+          },
+          "reads": {
+            "type": "array",
+            "description": "Reads its frame declares: [{op, params?}] of window.synap.query; param \"*\" = any. Others are refused."
           },
           "reasoning": {
             "type": "string",
@@ -6131,6 +6135,245 @@
           }
         },
         "required": ["slot"]
+      }
+    },
+    {
+      "name": "synap_create_surface",
+      "title": "Create a surface for an object",
+      "group": "build",
+      "annotations": {
+        "title": "Create a surface for an object",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Create UI for ONE object, anchored to it, in the body the choice rule picks (rules/surfaces): view, bento, whiteboard, document, html or cell. Pass the anchor {kind, id}, the body, a title and the body's spec (viewType/config for a view or bento, content or url for a document, content for html, cellKey/props for a cell). Call synap_find_surfaces first; never twin. Governed: may propose; `proposed` is success. Returns the open link /open/<kind>/<id>?surface=<id>.",
+      "parameters": [
+        {
+          "name": "anchor",
+          "type": "object",
+          "required": true,
+          "description": "The object the surface is for: {kind, id}, kind one of entity, profile, workspace, project, track (a goal), playbook, session."
+        },
+        {
+          "name": "body",
+          "type": "enum",
+          "required": true,
+          "description": "View (records of one kind), bento (monitor), whiteboard (think), document (text), html (present outside the pod; read-only), cell (one catalog cell).",
+          "enum": ["view", "bento", "whiteboard", "document", "html", "cell"]
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Its name."
+        },
+        {
+          "name": "spec",
+          "type": "object",
+          "required": false,
+          "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+        },
+        {
+          "name": "slot",
+          "type": "string",
+          "required": false,
+          "description": "Optional renderer slot it fills on the object's page (detail)."
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "required": false,
+          "description": "Optional name shown in the object's Surfaces list."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "anchor": {
+            "type": "object",
+            "description": "The object the surface is for: {kind, id}, kind one of entity, profile, workspace, project, track (a goal), playbook, session.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entity",
+                  "profile",
+                  "workspace",
+                  "project",
+                  "track",
+                  "playbook",
+                  "session"
+                ]
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["kind", "id"]
+          },
+          "body": {
+            "type": "string",
+            "enum": ["view", "bento", "whiteboard", "document", "html", "cell"],
+            "description": "View (records of one kind), bento (monitor), whiteboard (think), document (text), html (present outside the pod; read-only), cell (one catalog cell)."
+          },
+          "title": { "type": "string", "description": "Its name." },
+          "spec": {
+            "type": "object",
+            "description": "What it holds: viewType + config (view; a bento's config.blocks), content (document markdown or html page, at most 2 MB) or url (a reference document), cellKey + props (cell, a key from synap_list_widgets), workspaceId (the space it is stored in; default the object's)."
+          },
+          "slot": {
+            "type": "string",
+            "description": "Optional renderer slot it fills on the object's page (detail)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional name shown in the object's Surfaces list."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["anchor", "body", "title"]
+      }
+    },
+    {
+      "name": "synap_attach_surface",
+      "title": "Attach a surface to an object",
+      "group": "build",
+      "annotations": {
+        "title": "Attach a surface to an object",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Put an existing surface (a view, a bento, a document, an HTML artifact, a cell) on one more object, or take it off (`detach: true`). Use it for \"give this project an investor radar\" when the radar exists, and instead of a per-object renderer. Governed: may propose.",
+      "parameters": [
+        {
+          "name": "anchor",
+          "type": "object",
+          "required": true,
+          "description": "The object: {kind, id}, kind one of entity, profile, workspace, project, track, playbook, session."
+        },
+        {
+          "name": "surface",
+          "type": "object",
+          "required": true,
+          "description": "The surface: {type, id}, type view (a view, bento or whiteboard), document (a document or HTML artifact) or cell_instance."
+        },
+        {
+          "name": "detach",
+          "type": "boolean",
+          "required": false,
+          "description": "Take it off the object (the surface stays)."
+        },
+        {
+          "name": "slot",
+          "type": "string",
+          "required": false,
+          "description": "Optional renderer slot it fills (detail)."
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "required": false,
+          "description": "Optional name shown in the object's Surfaces list."
+        },
+        {
+          "name": "position",
+          "type": "number",
+          "required": false,
+          "description": "Optional order (0 first; default last)."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "anchor": {
+            "type": "object",
+            "description": "The object: {kind, id}, kind one of entity, profile, workspace, project, track, playbook, session.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entity",
+                  "profile",
+                  "workspace",
+                  "project",
+                  "track",
+                  "playbook",
+                  "session"
+                ]
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["kind", "id"]
+          },
+          "surface": {
+            "type": "object",
+            "description": "The surface: {type, id}, type view (a view, bento or whiteboard), document (a document or HTML artifact) or cell_instance.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["view", "document", "cell_instance"]
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["type", "id"]
+          },
+          "detach": {
+            "type": "boolean",
+            "description": "Take it off the object (the surface stays)."
+          },
+          "slot": {
+            "type": "string",
+            "description": "Optional renderer slot it fills (detail)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional name shown in the object's Surfaces list."
+          },
+          "position": {
+            "type": "number",
+            "description": "Optional order (0 first; default last)."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["anchor", "surface"]
       }
     },
     {
@@ -11640,6 +11883,12 @@
           ]
         },
         {
+          "name": "attachTo",
+          "type": "object",
+          "required": false,
+          "description": "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface."
+        },
+        {
           "name": "workspaceId",
           "type": "string",
           "required": false,
@@ -11712,6 +11961,26 @@
               "whiteboard",
               "pipeline"
             ]
+          },
+          "attachTo": {
+            "type": "object",
+            "description": "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entity",
+                  "profile",
+                  "workspace",
+                  "project",
+                  "track",
+                  "playbook",
+                  "session"
+                ]
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["kind", "id"]
           },
           "workspaceId": {
             "type": "string",
@@ -12376,7 +12645,7 @@
             "properties": {
               "anchor": {
                 "type": "object",
-                "description": "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?}."
+                "description": "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}; locator: {surface:'design', frameId, blockId?} | {surface:'story', storyId}, + viewport, point {x,y} 0-1, contentVersion, screenshot?."
               },
               "replyTo": {
                 "type": "string",

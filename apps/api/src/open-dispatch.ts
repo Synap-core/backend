@@ -286,15 +286,23 @@ export function isOpenFlowTypeValue(
 
 /**
  * The address query a typed link keeps on its way on — `flowType` for a run,
- * nothing for any other kind (a `?flowType=` on an entity link is noise).
+ * and `surface` (Surfaces P3: the object's page opened on one surface
+ * attached to it, `/open/<kind>/<id>?surface=<id>`) for any typed kind.
+ * Anything else (a `?flowType=` on an entity link, a surface that is not one
+ * uuid) is noise, dropped.
  */
 function addressQuery(
   type: string | undefined,
-  flowType: string | undefined | null
+  flowType: string | undefined | null,
+  surface?: string | undefined | null
 ): string | undefined {
-  return type === "run" && isOpenFlowTypeValue(flowType)
-    ? `flowType=${flowType}`
-    : undefined;
+  const parts = [
+    ...(type === "run" && isOpenFlowTypeValue(flowType)
+      ? [`flowType=${flowType}`]
+      : []),
+    ...(type && surface && isUuid(surface) ? [`surface=${surface}`] : []),
+  ];
+  return parts.length ? parts.join("&") : undefined;
 }
 
 // Proposal is web-first (review already lives on pod-admin, even for bots).
@@ -320,9 +328,12 @@ export function dispatchOpen(opts: {
   view?: string | undefined | null;
   /** Raw `?flowType=` value off the request. Kept only on a run link. */
   flowType?: string | undefined | null;
+  /** Raw `?surface=` value off the request. Kept on a typed link, one uuid. */
+  surface?: string | undefined | null;
 }): OpenDispatch {
-  const { type, id, userAgent, adminBase, client, view, flowType } = opts;
-  const address = addressQuery(type, flowType);
+  const { type, id, userAgent, adminBase, client, view, flowType, surface } =
+    opts;
+  const address = addressQuery(type, flowType, surface);
 
   const bot = isUnfurlBot(userAgent);
   const mobile = !bot && isMobileClient(client);

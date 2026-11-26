@@ -49,6 +49,12 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_create_view: ["create_view"],
   synap_list_views: ["list_views", "synap_list_views"],
   synap_find_surfaces: ["find_surfaces", "synap_find_surfaces"],
+  synap_create_surface: ["create_surface", "synap_create_surface"],
+  synap_attach_surface: [
+    "attach_surface",
+    "detach_surface",
+    "synap_attach_surface",
+  ],
   synap_read_board: ["get_whiteboard_state", "synap_read_board"],
   synap_list_cells: ["list_cells", "list_widgets", "synap_list_cells"],
   synap_list_widgets: ["list_widgets", "synap_list_widgets"],

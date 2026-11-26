@@ -23,7 +23,9 @@ vi.mock("./proposal-visibility.js", async (importOriginal) => {
 const {
   assertMessageAnchorAllowed,
   ChannelMessageMetadataInputSchema,
+  EntityAnchorSchema,
   MessageAnchorSchema,
+  ObjectCommentAnchorSchema,
 } = await import("./message-anchor.js");
 
 const USER = "0aaaaaaa-0000-4000-8000-000000000001";
@@ -96,6 +98,146 @@ describe("anchor shape", () => {
       MessageAnchorSchema.safeParse({ contentVersion: 0, proposalId: "nope" })
         .success
     ).toBe(false);
+  });
+});
+
+describe("entity comment locator (a pin's exact place, §10.1)", () => {
+  const ENTITY = "0fffffff-0000-4000-8000-000000000006";
+  const FILE = "0abcdef0-0000-4000-8000-000000000007";
+  const designPin = {
+    surface: "design",
+    frameId: "frame-home",
+    blockId: "block-hero",
+    viewport: "desktop",
+    point: { x: 0.25, y: 0.75 },
+    contentVersion: "rev-12",
+    screenshot: FILE,
+  };
+  const storyPin = {
+    surface: "story",
+    storyId: "components-button--primary",
+    viewport: "phone",
+    point: { x: 0, y: 1 },
+    contentVersion: "sha256:abc123",
+  };
+  const anchor = (locator: unknown) => ({
+    kind: "entity",
+    entityId: ENTITY,
+    locator,
+  });
+  /** Every refusal as `path: message` — what the doors hand back. */
+  const refusal = (locator: unknown): string[] => {
+    const parsed = ObjectCommentAnchorSchema.safeParse(anchor(locator));
+    if (parsed.success) return [];
+    return parsed.error.issues.map(
+      (i) => `${i.path.map(String).join(".")}: ${i.message}`
+    );
+  };
+
+  it("accepts a design pin and a story pin, and reads them back unchanged", () => {
+    for (const locator of [designPin, storyPin]) {
+      const parsed = ObjectCommentAnchorSchema.safeParse(anchor(locator));
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual(anchor(locator));
+    }
+    // A frame with no block is a pin on the frame itself.
+    const { blockId: _b, screenshot: _s, ...framePin } = designPin;
+    expect(EntityAnchorSchema.safeParse(anchor(framePin)).success).toBe(true);
+    // No locator stays the whole-entity / one-field comment it always was.
+    expect(
+      EntityAnchorSchema.safeParse({
+        kind: "entity",
+        entityId: ENTITY,
+        field: "title",
+      }).success
+    ).toBe(true);
+  });
+
+  it("refuses a point outside the frame (each axis a fraction 0..1)", () => {
+    for (const point of [
+      { x: -0.01, y: 0.5 },
+      { x: 0.5, y: 1.01 },
+      { x: 2, y: 2 },
+    ]) {
+      const issues = refusal({ ...designPin, point });
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.every((i) => i.startsWith("locator.point."))).toBe(true);
+      expect(issues.join()).toMatch(/fraction of the frame, from 0 to 1/);
+    }
+    expect(refusal({ ...designPin, point: { x: 0.5 } })).toEqual([
+      expect.stringMatching(/^locator\.point\.y: /),
+    ]);
+    expect(
+      refusal({ ...designPin, point: { x: Number.POSITIVE_INFINITY, y: 0 } })
+    ).toEqual([expect.stringMatching(/^locator\.point\.x: /)]);
+  });
+
+  it("refuses an unknown key in the locator and in its point", () => {
+    expect(refusal({ ...designPin, zoom: 2 })).toEqual([
+      expect.stringMatching(/^locator: .*zoom/),
+    ]);
+    expect(refusal({ ...designPin, point: { x: 0, y: 0, z: 0 } })).toEqual([
+      expect.stringMatching(/^locator\.point: .*z/),
+    ]);
+  });
+
+  it("refuses a pin on BOTH a frame and a story", () => {
+    expect(
+      refusal({ ...designPin, storyId: "components-button--primary" })
+    ).toEqual([expect.stringMatching(/^locator: .*storyId/)]);
+    expect(refusal({ ...storyPin, frameId: "frame-home" })).toEqual([
+      expect.stringMatching(/^locator: .*frameId/),
+    ]);
+    // …and a pin on neither: a design names its frame, a story its story.
+    const { frameId: _f, ...noFrame } = designPin;
+    expect(refusal(noFrame)).toEqual([
+      expect.stringMatching(/^locator\.frameId: /),
+    ]);
+    const { storyId: _st, ...noStory } = storyPin;
+    expect(refusal(noStory)).toEqual([
+      expect.stringMatching(/^locator\.storyId: /),
+    ]);
+  });
+
+  it("refuses oversized or empty strings, and every bounded field by name", () => {
+    const long = "x".repeat(201);
+    expect(refusal({ ...designPin, frameId: long })).toEqual([
+      "locator.frameId: frameId is longer than 200 characters",
+    ]);
+    expect(refusal({ ...designPin, blockId: long })).toEqual([
+      "locator.blockId: blockId is longer than 200 characters",
+    ]);
+    expect(refusal({ ...storyPin, storyId: long })).toEqual([
+      "locator.storyId: storyId is longer than 200 characters",
+    ]);
+    expect(refusal({ ...designPin, contentVersion: long })).toEqual([
+      "locator.contentVersion: contentVersion is longer than 200 characters",
+    ]);
+    expect(refusal({ ...designPin, frameId: "   " })).toEqual([
+      "locator.frameId: frameId is empty",
+    ]);
+    // 200 is the bound, not 199.
+    expect(refusal({ ...designPin, frameId: "x".repeat(200) })).toEqual([]);
+  });
+
+  it("refuses an unknown surface or viewport, a missing place, and a screenshot that is not a file id", () => {
+    expect(refusal({ ...designPin, surface: "whiteboard" })).toEqual([
+      expect.stringMatching(/^locator\.surface: /),
+    ]);
+    expect(refusal({ ...designPin, viewport: "watch" })).toEqual([
+      expect.stringMatching(/^locator\.viewport: /),
+    ]);
+    const { contentVersion: _c, ...noVersion } = designPin;
+    expect(refusal(noVersion)).toEqual([
+      expect.stringMatching(/^locator\.contentVersion: /),
+    ]);
+    const { point: _p, ...noPoint } = designPin;
+    expect(refusal(noPoint)).toEqual([
+      expect.stringMatching(/^locator\.point: /),
+    ]);
+    expect(refusal({ ...designPin, screenshot: "crop.png" })).toEqual([
+      "locator.screenshot: screenshot is a pod file id (a uuid)",
+    ]);
   });
 });
 

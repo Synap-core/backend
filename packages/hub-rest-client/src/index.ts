@@ -105,6 +105,13 @@ export type {
   HubSurfaceAnchorKind,
   HubSurfaceRow,
   HubSurfacesForObject,
+  HubSurfaceRef,
+  HubSurfaceProposed,
+  HubCreateSurfaceInput,
+  HubCreateSurfaceResult,
+  HubAttachSurfaceInput,
+  HubAttachSurfaceResult,
+  HubDetachSurfaceResult,
   HubBentoArrangementResult,
   HubWidgetDefinition,
   // Search

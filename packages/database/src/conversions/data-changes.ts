@@ -105,6 +105,8 @@ const OP_PROFILE_SLUGS: {
   rekindByStatus: (op) => [op.slug, op.toSlug],
   // The reserved `project` kinds it retires.
   retireProjectTwins: () => reservedProfileSlugs(),
+  // Writes links and cell instances, no kind's records.
+  foldAnchorsIntoAttachments: () => [],
 };
 
 export function opProfileSlugs(op: ConversionOp): OpProfileSlugs {
@@ -172,6 +174,8 @@ const CHANGED_COUNTERS = [
   "entitiesRekinded",
   "projectTwinsRetired",
   "entityVectorsDropped",
+  "attachmentsCreated",
+  "cellInstancesCreated",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 const _LEFT_ALONE_COUNTERS = [
@@ -191,6 +195,9 @@ const _LEFT_ALONE_COUNTERS = [
   "entitiesKeptNoTarget",
   // renameProfile (fromTemplate): a row whose new-slug twin already exists.
   "profilesKeptTwin",
+  // foldAnchorsIntoAttachments: legacy anchors that cannot become an
+  // attachment (no space for a cell, a view's own binding, a dangling id).
+  "anchorsKept",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 type _CountersClassified =
@@ -308,6 +315,8 @@ export function describeConversionOp(
     }
     case "retireProjectTwins":
       return "Retire the leftover copies of your projects stored as things, keeping everything filed into each project.";
+    case "foldAnchorsIntoAttachments":
+      return "Show each screen put on one record, playbook or space in that object's Surfaces list, keeping where it was stored before.";
     default: {
       const unhandled: never = op;
       return unhandled;

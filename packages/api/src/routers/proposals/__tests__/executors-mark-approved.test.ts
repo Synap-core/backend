@@ -47,6 +47,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
   };
 });
+// `entity/renderer.set` also writes the entity's detail attachment (Surfaces
+// P3); that write is its own suite's (`services/surfaces/attach.pglite.test.ts`).
+vi.mock("../../../services/surfaces/attach.js", () => ({
+  replaceDetailCellLook: vi.fn(async () => ({ attached: false, removed: 0 })),
+}));
 vi.mock("../../../utils/push-providers-to-is.js", () => ({
   pushProvidersToIS: vi.fn(async () => undefined),
 }));
