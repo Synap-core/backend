@@ -206,8 +206,30 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     return out;
   }
 
+  /**
+   * Top-level functions of the router files that apply through
+   * `applyProposalApproval` (a per-item door several procedures share): a
+   * procedure calling one applies through it too. Derived, never listed.
+   */
+  function applyingHelpers(): string[] {
+    const names: string[] = [];
+    for (const f of FILES.filter((x) => x.path.startsWith("routers/"))) {
+      for (const m of f.src.matchAll(/^async function ([A-Za-z]+)\(/gm)) {
+        const end = f.src.indexOf("\n}\n", m.index);
+        const body = f.src.slice(m.index, end === -1 ? undefined : end);
+        if (/\bapplyProposalApproval\(/.test(body)) names.push(m[1]!);
+      }
+    }
+    return names;
+  }
+
   it("every approve/decide mutation gates with a proof, applies through applyProposalApproval, or is listed as everyday", () => {
     const procs = decisionProcedures();
+    const helpers = applyingHelpers();
+    // Non-vacuity: the many-proposal approve door is seen as one.
+    expect(helpers).toContain("approveOneOfMany");
+    const callsHelper = (body: string) =>
+      helpers.some((name) => new RegExp(`\\b${name}\\(`).test(body));
     expect(procs.map((p) => p.key)).toEqual(
       expect.arrayContaining([
         "routers/proposals.ts approve",
@@ -220,7 +242,9 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
         (p) =>
           !/\bassertPresenceFor(?:Request|Approval)\(|\bapplyProposalApproval\(|\bdecideOAuthAuthorization\(|\bsetSkillApproved\(/.test(
             p.body
-          ) && !(p.key in EVERYDAY_DECISIONS)
+          ) &&
+          !callsHelper(p.body) &&
+          !(p.key in EVERYDAY_DECISIONS)
       )
       .map((p) => p.key);
     expect(

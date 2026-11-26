@@ -417,8 +417,11 @@ export function processHealthOf(input: {
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-/** A session list WHERE for the reader's own sessions of any kind (the owner floor). */
-function sessionsWhere(
+/**
+ * A session list WHERE for the reader's own sessions of any kind (the owner
+ * floor). Also the runs digest's floor (`runs-digest.ts`).
+ */
+export function sessionsWhere(
   reader: ProcessReader,
   extra: Partial<Parameters<typeof sessionListConditions>[0]>
 ) {

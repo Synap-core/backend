@@ -25,6 +25,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   h.db = drizzle(client, { schema });
   return { ...actual, db: h.db, getDb: async () => h.db };
 });
+// The cell door's own write is its tests'; here only what it reports matters.
+const defined = vi.hoisted(() => ({
+  next: { id: "", changeType: "created" as "created" | "updated" },
+}));
+vi.mock("../cells/define-cell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cells/define-cell.js")>()),
+  defineCell: async () => defined.next,
+}));
 vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/events")>()),
   emitSideEffects: () => undefined,
@@ -33,6 +41,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import { proposalExecRegistry } from "../../routers/proposals/execution-registry.js";
 import { registerAutomationExecutors } from "../../routers/proposals/executors/automation.js";
+import { registerCellExecutors } from "../../routers/proposals/executors/cell.js";
 import { proposalLanded } from "@synap-core/types/proposals/landed";
 import { stampLanded } from "./stamp-landed.js";
 
@@ -125,6 +134,7 @@ async function landedOf(
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
   registerAutomationExecutors();
+  registerCellExecutors();
 }, 120_000);
 
 beforeEach(async () => {
@@ -265,5 +275,56 @@ describe("stampLanded — what an approval made, written once", () => {
     });
     await stampLanded(id, { primaryId: randomUUID() });
     expect(await landedOf(id)).toEqual({ stamp: undefined, landed: [] });
+  });
+
+  it("a defined cell lands as a cell, with the role its door reports", async () => {
+    const approveDefine = async (changeType: "created" | "updated") => {
+      const cellId = randomUUID();
+      defined.next = { id: cellId, changeType };
+      const data = {
+        data: { name: "Win rate", rendererSource: "<div>win rate</div>" },
+      };
+      const proposalId = await insertProposal({
+        status: "pending",
+        proposalType: "define",
+        targetType: "cell",
+        data,
+      });
+      const result = await proposalExecRegistry
+        .resolveExact("cell/define")!
+        .execute({
+          proposal: {
+            id: proposalId,
+            targetType: "cell",
+            targetId: randomUUID(),
+            proposalType: "define",
+            workspaceId: WS,
+            sessionId: null,
+            projectId: null,
+            agentUserId: null,
+            createdBy: PERSON,
+            subjectUserId: PERSON,
+            sourceMessageId: null,
+            data,
+          },
+          payload: data.data,
+          userId: PERSON,
+          input: { proposalId },
+          ctx: {} as never,
+          deps: {
+            reportProposalOutcome: () => undefined,
+            emitProposalReviewed: () => undefined,
+          },
+        } as never);
+      await stampLanded(proposalId, result);
+      return { cellId, landed: await landedOf(proposalId) };
+    };
+    // `define` is no create verb: the role is the door's, not the verb's.
+    const made = await approveDefine("created");
+    const cells = [{ kind: "cell", id: made.cellId, role: "created" }];
+    expect(made.landed).toEqual({ stamp: cells, landed: cells });
+    const redefined = await approveDefine("updated");
+    const again = [{ kind: "cell", id: redefined.cellId, role: "updated" }];
+    expect(redefined.landed).toEqual({ stamp: again, landed: again });
   });
 });

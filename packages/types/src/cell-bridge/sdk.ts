@@ -22,6 +22,13 @@
  * `surface-context.ts`): its anchor, space, project, goal, filters, brand,
  * locale and theme. Rejects when the host gives no context.
  *
+ * A page that marks slides (`data-slide`, `slides.ts`) can be presented:
+ * the host posts `synap:slide:goto` and the SDK shows that slide alone
+ * (`html[data-synap-presenting]`), scrolls to it and answers
+ * `synap:slide:changed`; the arrow keys, Space and Page Up/Down move it while
+ * focus is in the frame, reported the same way. Printing shows every slide,
+ * one per page.
+ *
  * It only accepts answers from `window.parent` — the host — and only for an
  * id it sent. It holds no token and no pod address: there is none to hold.
  *
@@ -31,6 +38,19 @@
 
 import { CELL_BRIDGE_READ_OP_NAMES } from "./read-ops.js";
 import { FRAME_OPEN_KINDS, FRAME_SURFACE_OPEN_TYPE } from "./frame-links.js";
+import {
+  FRAME_SLIDE_ATTRIBUTE,
+  FRAME_SLIDE_CHANGED_TYPE,
+  FRAME_SLIDE_GOTO_TYPE,
+} from "./slides.js";
+
+/**
+ * While presenting, every slide but the current one is hidden on screen; a
+ * print shows them all, one per page.
+ */
+const SLIDE_CSS =
+  `@media screen{html[data-synap-presenting] [${FRAME_SLIDE_ATTRIBUTE}]:not([data-synap-slide-current]){display:none !important}}` +
+  `@media print{[${FRAME_SLIDE_ATTRIBUTE}]{break-after:page;page-break-after:always}}`;
 
 export const CELL_BRIDGE_SDK = `(function () {
   "use strict";
@@ -39,9 +59,78 @@ export const CELL_BRIDGE_SDK = `(function () {
   var pending = Object.create(null);
   var seq = 0;
   var TIMEOUT_MS = 30000;
+  var doc = window.document;
+  var SLIDE = ${JSON.stringify(FRAME_SLIDE_ATTRIBUTE)};
+  var slideAt = -1;
+  function slideList() {
+    if (!doc || !doc.querySelectorAll) return [];
+    return Array.prototype.slice.call(doc.querySelectorAll("[" + SLIDE + "]"));
+  }
+  function slideIdOf(el, n) {
+    var block = String(el.getAttribute("data-block-id") || "").trim();
+    if (block) return block;
+    var named = String(el.getAttribute(SLIDE) || "").trim();
+    return named || "slide-" + n;
+  }
+  function showSlide(slides, index) {
+    if (!doc.getElementById("synap-slide-style")) {
+      var style = doc.createElement("style");
+      style.id = "synap-slide-style";
+      style.textContent = ${JSON.stringify(SLIDE_CSS)};
+      (doc.head || doc.documentElement).appendChild(style);
+    }
+    doc.documentElement.setAttribute("data-synap-presenting", "");
+    for (var i = 0; i < slides.length; i++) {
+      if (i === index) slides[i].setAttribute("data-synap-slide-current", "");
+      else slides[i].removeAttribute("data-synap-slide-current");
+    }
+    slideAt = index;
+    if (slides[index].scrollIntoView) slides[index].scrollIntoView({ block: "start" });
+    parentWindow.postMessage(
+      {
+        type: ${JSON.stringify(FRAME_SLIDE_CHANGED_TYPE)},
+        slideId: slideIdOf(slides[index], index + 1),
+        index: index,
+        total: slides.length
+      },
+      "*"
+    );
+  }
+  function gotoSlide(msg) {
+    var slides = slideList();
+    if (!slides.length) return;
+    var at = -1;
+    if (typeof msg.slideId === "string") {
+      for (var i = 0; i < slides.length; i++) {
+        if (slideIdOf(slides[i], i + 1) === msg.slideId) { at = i; break; }
+      }
+    }
+    if (at < 0 && typeof msg.index === "number" && msg.index >= 0 && msg.index < slides.length) {
+      at = Math.floor(msg.index);
+    }
+    if (at >= 0) showSlide(slides, at);
+  }
+  window.addEventListener("keydown", function (event) {
+    if (slideAt < 0 || event.defaultPrevented) return;
+    var t = event.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+    var step = 0;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown" || event.key === "PageDown" || event.key === " ") step = 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key === "PageUp") step = -1;
+    if (!step) return;
+    var slides = slideList();
+    var next = slideAt + step;
+    event.preventDefault();
+    if (next < 0 || next >= slides.length) return;
+    showSlide(slides, next);
+  });
   window.addEventListener("message", function (event) {
     if (event.source !== parentWindow) return;
     var msg = event.data;
+    if (msg && msg.type === ${JSON.stringify(FRAME_SLIDE_GOTO_TYPE)}) {
+      gotoSlide(msg);
+      return;
+    }
     if (!msg || typeof msg !== "object" || typeof msg.id !== "string") return;
     if (
       msg.type !== "synap:query:result" &&

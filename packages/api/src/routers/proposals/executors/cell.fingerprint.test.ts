@@ -90,7 +90,9 @@ beforeEach(() => {
 
 describe("cell/define executor — approval per fingerprint", () => {
   it("applies a payload that holds the content it was stamped with", async () => {
-    await expect(approve(withCellContentFingerprint(FILED))).resolves.toEqual({
+    await expect(
+      approve(withCellContentFingerprint(FILED))
+    ).resolves.toMatchObject({
       success: true,
     });
     expect(h.defineCalls).toHaveLength(1);
@@ -130,7 +132,7 @@ describe("cell/define executor — approval per fingerprint", () => {
     };
     await expect(
       approve(withCellContentFingerprint(FILED, h.stored))
-    ).resolves.toEqual({ success: true });
+    ).resolves.toMatchObject({ success: true });
     expect(h.defineCalls).toHaveLength(1);
     // Read at the scope the proposal was reviewed at, where it writes.
     expect(h.storedReads).toEqual([WS]);

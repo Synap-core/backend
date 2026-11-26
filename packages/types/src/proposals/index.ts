@@ -44,6 +44,8 @@ export * from "./reach.js";
 export * from "./requester.js";
 // What an approval landed, and the one answer for the objects a proposal names.
 export * from "./landed.js";
+// The order a whole session's proposals are approved in (`approveSession`).
+export * from "./session-approval.js";
 export type {
   ProposalToolRun,
   ProposalToolRunParameter,
@@ -1369,12 +1371,12 @@ export interface CompositeCreateDocumentOp {
 export interface PlanProjectEvidence {
   /** In-plan entity refs + existing, caller-visible evidence entities. */
   counted: number;
-  /** The agent floor a direct `projects.create` enforces. */
+  /** The pod's evidence count (`governance.project_evidence_min`, 5 by default). */
   minimum: number;
   /**
-   * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
-   * visible to the reviewer with this marker, and an agent-mode plan carrying
-   * it can never auto-apply.
+   * True when `counted < minimum`. NOT a refusal, in a plan or on a direct
+   * `projects.create`: the step stays visible to the reviewer with this
+   * marker, and an agent's create carrying it can never auto-apply.
    */
   belowAgentFloor: boolean;
 }

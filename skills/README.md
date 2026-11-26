@@ -1,15 +1,16 @@
 # Synap Skills
 
-Four baseline skills make up the Synap agent surface (`manifest.json` is the list). Install all of them for the full experience; they are designed to be used together.
+Five baseline skills make up the Synap agent surface (`manifest.json` is the list). Install all of them for the full experience; they are designed to be used together.
 
 ## The baseline skills
 
-| Skill          | Purpose                                                                                    | Trigger                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `synap`        | Core data operations — read, write, link, search, remember                                 | "Save this", "Find my X", "Who is Y", "Remind me to Z"                       |
-| `synap-schema` | Extend the data model — new profiles, new properties                                       | "I need a type for X", "Add a field to tasks"                                |
-| `synap-ui`     | Build views, dashboards, workspaces, bento layouts                                         | "Make me a dashboard", "Build a kanban", "Create a CRM workspace"            |
-| `synap-design` | Design and build UI: principles, the component catalog and tokens, the design-to-code loop | "Design the proposal page", "Is this screen right?", "Implement this design" |
+| Skill          | Purpose                                                                                                       | Trigger                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `synap`        | Core data operations — read, write, link, search, remember                                                    | "Save this", "Find my X", "Who is Y", "Remind me to Z"                       |
+| `synap-schema` | Extend the data model — new profiles, new properties                                                          | "I need a type for X", "Add a field to tasks"                                |
+| `surfaces`     | Make any UI on pod data: pick the body (View, Document, Bento, HTML artifact, Whiteboard, Cell) and anchor it | "Make me a dashboard", "Build a kanban", "Pitch deck for investors"          |
+| `synap-ui`     | Reference for view configs, bento layouts, workspaces                                                         | "Which config does a calendar view take", "Create a CRM workspace"           |
+| `synap-design` | Design and build UI: principles, the component catalog and tokens, the design-to-code loop                    | "Design the proposal page", "Is this screen right?", "Implement this design" |
 
 Each skill has its own SKILL.md with a trigger-first description. The harness loads only the skills whose descriptions match the user's intent — so a data-fetch turn doesn't load the UI skill, and vice versa.
 
@@ -29,7 +30,8 @@ skills/
 │   ├── SKILL.md
 │   └── property-types.md     ← valueType reference + constraints + uiHints + scope
 │
-├── synap-ui/                 ← build interface over data
+├── surfaces/                 ← make UI on pod data: which body, anchored (eval/ = the choice-rule eval)
+├── synap-ui/                 ← view configs, bento layouts, workspaces (reference)
 ├── synap-design/             ← design principles, design system, design loop
 │   ├── SKILL.md
 │   ├── view-types.md         ← the 12 implemented view types + configs
@@ -80,7 +82,7 @@ The install metadata (required env, capabilities) is namespaced under `metadata.
 - **Read-only memory agent** (just wants to recall facts) → `synap`
 - **General-purpose assistant** (reads + writes + captures) → `synap`
 - **Data model architect** (user asked to design a new schema) → `synap` + `synap-schema`
-- **Interface builder** (user wants dashboards and views) → `synap` + `synap-ui`
+- **Interface builder** (user wants dashboards, views, pages, decks) → `synap` + `surfaces` (+ `synap-ui` for configs)
 - **Full co-founder agent** → all three
 
 Installing a skill the user doesn't need costs ~100 tokens of always-on metadata. Installing all three by default is fine; being selective is an optimization.

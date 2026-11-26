@@ -1765,6 +1765,21 @@ export interface BrokenConnectionSignalInput {
   brokenAt: Date;
 }
 
+/**
+ * An object a recent approval landed whose next step only the person takes,
+ * as `listLandedNeedsPerson` reads it (`landed-needs.ts`).
+ */
+export interface LandedNeedSignalInput {
+  kind: "automation" | "playbook";
+  id: string;
+  /** The object's own name; "" when it has none. */
+  name: string;
+  /** Its next step (`objectNextOf`): turn it on, or enable what it uses. */
+  action: "turn_on" | "enable";
+  /** When the approval that landed it was applied. */
+  landedAt: Date;
+}
+
 /** The access-request half of the union. Absent ⇒ none (not an admin, or a lens). */
 export interface AccessRequestsInput {
   issuers: readonly PendingIssuerSignalInput[];
@@ -1773,6 +1788,8 @@ export interface AccessRequestsInput {
   keys?: readonly PendingKeyRequestSignalInput[];
   /** The viewer's own broken tool connections (absent = none read). */
   connections?: readonly BrokenConnectionSignalInput[];
+  /** What the viewer's recent approvals landed that only they can take on (absent = none read). */
+  landed?: readonly LandedNeedSignalInput[];
 }
 
 /**
@@ -1914,7 +1931,28 @@ export function signalFromBrokenConnection(
   };
 }
 
-/** Every access-request row, issuers, apps, keys, then broken connections (the union orders them). */
+/**
+ * A landed object whose next step is the person's → one row: "Turn on
+ * Automation "Weekly digest"". Its door is the object, where that step is
+ * taken; it stays while the step does (the read derives it each time), with
+ * no lifetime.
+ */
+export function signalFromLandedNeed(
+  row: LandedNeedSignalInput,
+  now: Date = new Date()
+): Signal {
+  return accessRequestSignal({
+    id: `access:landed:${row.kind}:${row.id}`,
+    target: { kind: row.kind, id: row.id },
+    access: { subject: row.kind, name: row.name, from: "" },
+    occurredAt: row.landedAt,
+    lifetimeHours: null,
+    now,
+    action: row.action,
+  });
+}
+
+/** Every access-request row, issuers, apps, keys, broken connections, then landed objects (the union orders them). */
 export function signalsFromAccessRequests(
   input: AccessRequestsInput | undefined,
   now: Date = new Date()
@@ -1925,6 +1963,7 @@ export function signalsFromAccessRequests(
     ...input.applications.map((r) => signalFromAppRequest(r, now)),
     ...(input.keys ?? []).map((r) => signalFromKeyRequest(r, now)),
     ...(input.connections ?? []).map((r) => signalFromBrokenConnection(r, now)),
+    ...(input.landed ?? []).map((r) => signalFromLandedNeed(r, now)),
   ];
 }
 

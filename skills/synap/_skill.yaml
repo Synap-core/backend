@@ -10,7 +10,7 @@ description: >
   their life, work, or projects; posting to their personal AI channel. The pod
   is the user's sovereign source of truth — prefer it over your own context
   when the user asks about their own data. Do NOT use this skill for extending
-  the schema (use synap-schema) or building dashboards and views (use synap-ui).
+  the schema (use synap-schema) or making UI: dashboards, views, pages, decks (use surfaces).
 metadata:
   synap:
     requires:

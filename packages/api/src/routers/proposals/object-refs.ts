@@ -23,7 +23,7 @@
  *
  * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
  * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
- * `document`, `channel`, `view`), so a host opens each through its one route
+ * `document`, `channel`, `view`, `cell`), so a host opens each through its one route
  * table. A caller that already knows its refs (what a proposal landed) passes
  * them as `refs` instead of a payload.
  */
@@ -46,7 +46,11 @@ import {
   tools,
   views,
 } from "@synap/database";
-import { documents, projectTracks } from "@synap/database/schema";
+import {
+  documents,
+  projectTracks,
+  widgetDefinitions,
+} from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -82,7 +86,9 @@ export type RefTable =
   | "track"
   | "document"
   | "channel"
-  | "view";
+  | "view"
+  /** A defined cell (`widget_definitions`); no payload key names one. */
+  | "cell";
 
 /** One id found in a payload, before resolution. */
 export interface CollectedIdRef {
@@ -270,6 +276,7 @@ export async function resolveObjectRefs(
     documentRows,
     channelRows,
     viewRows,
+    cellRows,
   ] = await Promise.all([
     read(idsFor("entity"), (ids) =>
       db
@@ -394,6 +401,17 @@ export async function resolveObjectRefs(
         .from(views)
         .where(and(inArray(views.id, ids), access.predicate(views)))
     ),
+    read(idsFor("cell"), (ids) =>
+      db
+        .select({ id: widgetDefinitions.id, name: widgetDefinitions.name })
+        .from(widgetDefinitions)
+        .where(
+          and(
+            inArray(widgetDefinitions.id, ids),
+            access.predicate(widgetDefinitions)
+          )
+        )
+    ),
   ]);
 
   const byId = (list: Named[]) => new Map(list.map((r) => [r.id, r]));
@@ -421,6 +439,7 @@ export async function resolveObjectRefs(
     ),
     channel: byId(channelRows.map((r) => ({ id: r.id, name: text(r.title) }))),
     view: byId(viewRows.map((r) => ({ id: r.id, name: text(r.name) }))),
+    cell: byId(cellRows.map((r) => ({ id: r.id, name: text(r.name) }))),
   };
 
   return collected.map((refs, idx) => {

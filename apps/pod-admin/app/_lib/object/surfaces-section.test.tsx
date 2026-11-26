@@ -1,5 +1,5 @@
 /**
- * The Surfaces list on an object's page (Surfaces P3), rendered from the wire
+ * The Surfaces list on an object's page, rendered from the wire
  * shape `surfaces.forObject` answers: each row a door (an attached surface
  * opens this page on it, `?surface=`), the body and the detail look not
  * listed again, a failed read said with its retry, a partial read said, and
@@ -84,6 +84,14 @@ describe("SurfacesSection", () => {
             relation: "renders",
             title: "Kind look",
           }),
+          // The page's own look, attached in the detail slot: worn, not listed.
+          row({
+            id: "44444444-2222-4333-8444-555555555555",
+            body: "cell",
+            relation: "attached",
+            slot: "detail",
+            title: "Its own look",
+          }),
         ],
         unavailable: [],
       },
@@ -101,6 +109,10 @@ describe("SurfacesSection", () => {
     );
     expect(html).not.toContain("The body");
     expect(html).not.toContain("Kind look");
+    expect(html).not.toContain("Its own look");
+    // Each body named through the vocabulary door.
+    expect(html).toContain(">HTML artifact<");
+    expect(html).toContain(">View<");
   });
 
   it("caps the list and offers Show all", () => {
@@ -131,7 +143,11 @@ describe("SurfacesSection", () => {
     read = {
       data: { rows: [], unavailable: [{ source: "views", error: "boom" }] },
     };
-    expect(draw()).toContain("Some places couldn’t be read");
+    const html = draw();
+    expect(html).toContain("Some places couldn’t be read");
+    // The shared error row, with its retry.
+    expect(html).toContain("text-status-down");
+    expect(html).toMatch(/<button[^>]*>[^<]*Retry/);
   });
 
   it("draws nothing when the object carries nothing", () => {

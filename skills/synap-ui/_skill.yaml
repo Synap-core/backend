@@ -1,17 +1,16 @@
 name: synap-ui
 description: >
-  Use this skill when the user wants to BUILD interface in Synap — creating views,
-  dashboards, bento layouts, or whole workspaces over their data. Triggers:
-  "build me a dashboard for tracking X", "create a kanban for my projects",
-  "make a CRM workspace", "I want a feed view of my articles", "design a home
-  dashboard", "show my reading list as a gallery", "turn this into a
-  timeline/calendar/matrix", "generate a workspace for content creation /
-  sales / research / project management / fitness tracking", "arrange cells
-  on my bento", "create a command / automation trigger". This skill PRESENTS
-  data — the underlying entities must already exist (use core `synap`) and
-  schema extensions happen via `synap-schema`. Always propose workspace creation
-  to the user before committing — workspaces are lenses on data, not silos,
-  and the user decides when a new lens is warranted.
+  Reference for Synap views, bento layouts and workspaces: per-view-type config
+  shapes, the cell catalog, bento recipes and layouts, generating a whole
+  workspace. Load it AFTER the `surfaces` skill has picked the body (a dashboard,
+  a board, a list, a page: `surfaces` decides), when you need the exact config:
+  "which config does a calendar view take", "lay out this bento", "arrange cells
+  on my bento", "generate a workspace for content creation / sales / research",
+  "create a command / automation trigger". This skill PRESENTS data — the
+  underlying entities must already exist (use core `synap`) and schema extensions
+  happen via `synap-schema`. Always propose workspace creation to the user before
+  committing — workspaces are lenses on data, not silos, and the user decides
+  when a new lens is warranted.
 metadata:
   synap:
     requires:

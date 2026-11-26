@@ -8,10 +8,8 @@
 
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import {
-  parseDeclaredReads,
-  type CellBridgeDeclaredReads,
-} from "@synap-core/types/cell-bridge";
+import type { CellBridgeDeclaredReads } from "@synap-core/types/cell-bridge";
+import { readDeclaredFrameIo } from "../../services/cells/declared-frame-io.js";
 import { randomUUID } from "crypto";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -177,11 +175,13 @@ export const documentsRouter = router({
               '`reads` declares what an html page reads: only a `type: "html"` document takes it.',
           });
         }
-        const parsed = parseDeclaredReads(input.reads);
+        // The one parser of a framed surface's declaration (the cell door's,
+        // `surfaces.create`'s, this proposal's approval).
+        const parsed = readDeclaredFrameIo({ reads: input.reads });
         if (!parsed.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
         }
-        declaredReads = parsed.value;
+        declaredReads = parsed.reads ?? undefined;
       }
       // Decode an agent's XML-escaped title once, at the one door both MCP
       // (synap_create_document) and Hub REST call through — see

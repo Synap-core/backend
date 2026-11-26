@@ -13,6 +13,9 @@
 
 // The Surface model (UI anchored to an object) and its find contract.
 export * from "./model.js";
+// The rules of an object's Surfaces list (listed rows, cap, body noun, the
+// anchor kinds the typed open route serves).
+export * from "./listing.js";
 
 import {
   DEPRECATED_IN_HOSTS,

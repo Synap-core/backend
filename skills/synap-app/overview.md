@@ -8,7 +8,7 @@ Model first, UI second. An app built on the pod never hard-codes a status, a sta
 
 A tailored UI over the person's pod is built IN the pod first: views, bento
 dashboards, cells, and HTML pages bound as a kind's renderer, shown on the
-desktop (load `system/synap-ui/skill`; cells: `system/synap/viewframe-cells`).
+desktop (load `system/surfaces/skill`; cells: `system/surfaces/cells`).
 Build a standalone site or app only when the person asks for one.
 
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
@@ -19,7 +19,7 @@ pod, and **every write is governed** (see `governance.md`).
 
 | The user has… | Do this | Read |
 |---|---|---|
-| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod | `system/synap-ui/skill` |
+| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod | `system/surfaces/skill` |
 | an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
 | a server app people sign in to with their own pod | `@synap-core/sdk/connect` (`createPodAppAuth`, SDK 1.3+) | the SDK's own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`) |
 | an app on their own pod, with its own key | `synap app init`, then `synap app connect` | `install-commands.md` |

@@ -93,6 +93,11 @@ const cellsIn = async (ws: string) =>
 
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
+  // The edge `link` writes beside the relation (`attaches`) lands on this
+  // unique index (the DDL helper carries no unique indexes).
+  await h.client!.exec(
+    `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
+  );
   for (const [ws, owner] of [
     [WA, ALICE],
     [WB, BOB],
@@ -193,5 +198,14 @@ describe("cellInstances — the input workspace is gated, not only the header (F
       relationType: "embedded_in",
     });
     expect(linked.status).toBe("created");
+    // The door also ATTACHES the cell to the entity (links `attaches`, the
+    // store an object's Surfaces list reads), in the entity's space.
+    const { rows } = await q<{ workspace_id: string; created_by: string }>(
+      `select workspace_id, created_by from links
+        where link_type = 'attaches' and from_type = 'entity' and from_id = $1
+          and to_type = 'cell_instance' and to_id = $2`,
+      [E, C]
+    );
+    expect(rows).toEqual([{ workspace_id: WA, created_by: ALICE }]);
   });
 });

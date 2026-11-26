@@ -26,7 +26,7 @@ import {
   focusSessions,
   projects,
   projectTracks,
-  MIN_EVIDENCE_ENTITIES,
+  readPodNumberSetting,
   type db,
 } from "@synap/database";
 import {
@@ -315,6 +315,9 @@ export async function preflightPlanOperations(
 
   // ── Project evidence: stamped, never waived silently ───────────────────
   const kinds = planRefKinds(operations);
+  const minimum = operations.some((op) => op.op === "create_project")
+    ? await readPodNumberSetting(database, "governance.project_evidence_min")
+    : 0;
   const stamped = operations.map((op): CompositeProposalOperation => {
     if (op.op !== "create_project") return op;
     const inPlan = new Set(
@@ -326,8 +329,8 @@ export async function preflightPlanOperations(
     const counted = inPlan.size + existing.size;
     const evidence: PlanProjectEvidence = {
       counted,
-      minimum: MIN_EVIDENCE_ENTITIES,
-      belowAgentFloor: counted < MIN_EVIDENCE_ENTITIES,
+      minimum,
+      belowAgentFloor: counted < minimum,
     };
     return { ...op, evidence };
   });

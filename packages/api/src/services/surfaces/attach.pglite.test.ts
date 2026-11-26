@@ -351,6 +351,43 @@ describe("surfaces.create (one act: the body and its edge)", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.permCalls).toHaveLength(0);
   });
+
+  it("an HTML artifact takes the reads its frame declares, through the one parser", async () => {
+    const page = "<!doctype html><p>Deals</p>";
+    // A read outside the ceiling: refused before governance, with its reason.
+    await expect(
+      caller(ALICE, true).create({
+        anchor: { kind: "entity", id: E },
+        body: "html",
+        title: "Deck",
+        spec: { content: page, reads: [{ op: "users.list" }] },
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("spec.reads"),
+    });
+    // Reads on a body that is not a page: refused.
+    await expect(
+      caller(ALICE, true).create({
+        anchor: { kind: "entity", id: E },
+        body: "document",
+        title: "Notes",
+        spec: { content: "# Notes", reads: [{ op: "entities.list" }] },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.permCalls).toHaveLength(0);
+    // A declaration inside the ceiling rides the proposal the person approves.
+    const declared = [{ op: "entities.list", params: { profileSlug: "deal" } }];
+    const res = await caller(ALICE, true).create({
+      anchor: { kind: "entity", id: E },
+      body: "html",
+      title: "Deck",
+      spec: { content: page, reads: declared },
+    });
+    expect(res).toMatchObject({ status: "proposed" });
+    const data = h.permCalls[0]!.data as { spec?: { reads?: unknown } };
+    expect(data.spec?.reads).toEqual(declared);
+  });
 });
 
 describe("entities.setEntityRenderer (aliased onto the attach door)", () => {

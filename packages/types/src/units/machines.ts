@@ -62,16 +62,20 @@ export const AUTOMATION_TRANSITIONS = {
  *   - A person approved this definition: it keeps the status it asked for,
  *     `active` when it asked none (an approval activates).
  *   - An agent wrote it and no person approved it: `draft` (activating an
- *     agent's automation is floored to a person, `automation/activate`).
+ *     agent's automation is floored to a person, `automation/activate`),
+ *     unless its activation would itself apply without a person
+ *     (`agentMayActivate`: the pod's structure switch is on AND the ladder
+ *     auto-approves `automation.activate` for it): then like anyone else's.
  *   - Anyone else's own create keeps its status, `draft` when it asked none.
  */
 export function statusAtCreate<S extends string>(input: {
   requested: S | undefined;
   personApproved: boolean;
   actorIsAgent: boolean;
+  agentMayActivate?: boolean;
 }): S | "active" | "draft" {
   if (input.personApproved) return input.requested ?? "active";
-  if (input.actorIsAgent) return "draft";
+  if (input.actorIsAgent && input.agentMayActivate !== true) return "draft";
   return input.requested ?? "draft";
 }
 

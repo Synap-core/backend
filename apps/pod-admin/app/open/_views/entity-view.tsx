@@ -285,11 +285,7 @@ export function EntityView({ id }: { id: string }) {
           </>
         }
       />
-      {/* The screens this record carries (Surfaces P3), under its detail:
-          each opens its own page, or this page on it. Omitted when none. */}
-      <SurfacesSection anchor={{ kind: "entity", id }} />
       <RulesAroundSection thingId={id} />
-      {!hasBody && connected}
       {hasBody && (
         <DocumentContentSection
           title="Content"
@@ -298,7 +294,11 @@ export function EntityView({ id }: { id: string }) {
           onRetry={body.retry}
         />
       )}
-      {hasBody && connected}
+      {/* The screens this record carries, after its own content and before
+          what it is connected to: each opens its own page, or this page on
+          it. Omitted when none. */}
+      <SurfacesSection anchor={{ kind: "entity", id }} />
+      {connected}
     </OpenObject>
   );
 }

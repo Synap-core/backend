@@ -1,17 +1,21 @@
 /**
- * SURFACES router — the read side of the Surfaces plane (renderers, interfaces,
- * apps). Two doors: `surfaces.usageHealth` (which renderer keys are bound,
- * and are they healthy) and `surfaces.forObject` (which surfaces ONE object
- * carries, the find door MCP `synap_find_surfaces` and Hub REST
- * `GET /surfaces` share).
+ * SURFACES router: UI anchored to an object, on tRPC.
+ *
+ * Reads: `surfaces.usageHealth` (which renderer keys are bound, and are they
+ * healthy), `surfaces.forObject` (which surfaces ONE object carries, the find
+ * door MCP `synap_find_surfaces` and Hub REST `GET /surfaces` share),
+ * `surfaces.inspect` (what one framed surface does before it is handed over:
+ * its frame reads, hard-coded colours and fonts, static accessibility; MCP
+ * `synap_inspect_surface` and Hub REST `GET /surfaces/inspect` share it) and
+ * `surfaces.frameRead` (merged in from `surface-frame-read.ts`).
  *
  * ALTITUDE: `protectedProcedure` with an OPTIONAL `workspaceId`, exactly like
- * `capabilities.compositions` — the Surfaces app is a pod-altitude plane and
- * must not 400 when no workspace is selected. `workspaceId` NARROWS (pod-wide
+ * `capabilities.compositions`: the Surfaces plane is pod-altitude and must not
+ * 400 when no workspace is selected. `workspaceId` NARROWS (pod-wide
  * NULL-workspace rows are always included); omitted ⇒ the pod-wide user floor.
  *
- * Writes (Surfaces P3): `surfaces.create | attach | detach` put a surface ON
- * one object (links `attaches`), through the ONE governed service
+ * Writes: `surfaces.create | attach | detach` put a surface ON one object
+ * (links `attaches`), through the ONE governed service
  * (`services/surfaces/attach.ts`, `create.ts`) that MCP and Hub REST call too.
  * Kind-level renderer bindings keep flowing through `profiles.setRenderer`.
  */
@@ -26,6 +30,7 @@ import { TRPCError } from "@trpc/server";
 import {
   ANCHOR_KINDS,
   ATTACHABLE_SURFACE_TYPES,
+  ATTACHMENT_LABEL_MAX,
   CREATABLE_SURFACE_BODIES,
 } from "@synap-core/types/surfaces";
 import {
@@ -36,6 +41,10 @@ import {
   type SurfaceRefusal,
 } from "../services/surfaces/attach.js";
 import { createSurface } from "../services/surfaces/create.js";
+import {
+  INSPECT_SURFACE_KINDS,
+  inspectSurface,
+} from "../services/surfaces/inspect.js";
 
 const AnchorSchema = z.object({
   kind: z.enum(ANCHOR_KINDS),
@@ -47,7 +56,7 @@ const SurfaceRefSchema = z.object({
 });
 const MetaFields = {
   slot: z.string().max(40).optional(),
-  label: z.string().max(200).optional(),
+  label: z.string().max(ATTACHMENT_LABEL_MAX).optional(),
 };
 
 /** A refusal or a denial is an error on tRPC; everything else is the answer. */
@@ -145,6 +154,41 @@ export const surfacesRouter = router({
     }),
 
   /**
+   * Inspect ONE framed surface (a cell, an HTML page, a view's cells): its
+   * frame reads (used, refused, declared vs used), hard-coded colours and
+   * fonts, static accessibility. Each section is `ok` or `unavailable` with
+   * its reason; `render` is always unavailable on the pod (no browser).
+   */
+  inspect: protectedProcedure
+    .input(
+      z.object({
+        surface: z
+          .object({
+            kind: z.enum(INSPECT_SURFACE_KINDS),
+            id: z.string().uuid().optional(),
+            typeKey: z.string().min(1).max(200).optional(),
+          })
+          .refine((s) => !!s.id || (s.kind === "cell" && !!s.typeKey), {
+            message: "Pass the surface's id (or a cell's typeKey).",
+          }),
+        workspaceId: z.string().uuid().nullish(),
+        days: z.number().int().min(1).max(30).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return inspectSurface(
+        {
+          userId,
+          access: AccessContext.from(ctx),
+          agentUserId: ctx.agentUserId,
+          keyWorkspaceId: ctx.keyWorkspaceId,
+        },
+        input
+      );
+    }),
+
+  /**
    * Make a surface FOR one object: the body (view, bento, whiteboard,
    * document, html, cell) and its `attaches` edge, one governed act
    * (`surface/create`). `{status:'created', surface, openUrl}` or
@@ -164,6 +208,8 @@ export const surfacesRouter = router({
             url: z.string().url().optional(),
             cellKey: z.string().max(200).optional(),
             props: z.record(z.string(), z.unknown()).optional(),
+            // html only: what its frame reads (`readDeclaredFrameIo` checks it).
+            reads: z.array(z.unknown()).nullable().optional(),
             workspaceId: z.string().uuid().optional(),
           })
           .optional(),
