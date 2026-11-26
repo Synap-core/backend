@@ -284,10 +284,6 @@ export function isOpenFlowTypeValue(
   );
 }
 
-/** A `?surface=` value: one uuid (the id of a surface attached to the object). */
-const SURFACE_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The address query a typed link keeps on its way on — `flowType` for a run,
  * and `surface` (Surfaces P3: the object's page opened on one surface
@@ -304,7 +300,7 @@ function addressQuery(
     ...(type === "run" && isOpenFlowTypeValue(flowType)
       ? [`flowType=${flowType}`]
       : []),
-    ...(type && surface && SURFACE_ID_RE.test(surface)
+    ...(type && surface && isUuid(surface)
       ? [`surface=${surface}`]
       : []),
   ];

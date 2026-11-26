@@ -141,7 +141,7 @@ describe("openRedirect", () => {
 describe("parseOpenSurfaceParam (?surface=, Surfaces P3)", () => {
   // The shape the pod's `openLink(id, {kind, surface})` and hub-rest-client's
   // `openUrl(pod, id, {kind, surface})` build (their parity is pinned by
-  // packages/api/src/utils/deep-links.surface.test.ts).
+  // the api package's `deep-links.surface.test.ts`).
   const SURFACE = "11111111-2222-4333-8444-555555555555";
   const link = `https://pod.example.com/open/entity/${UUID}?surface=${encodeURIComponent(SURFACE)}`;
 

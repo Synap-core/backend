@@ -258,7 +258,7 @@ describe("synap_create_document — type html makes a page", () => {
         entityId: randomUUID(),
       })
     ).rejects.toThrow(
-      /not attached with `entityId`.*create the page without `entityId`; it opens at \/open\/<id>/
+      /is not an entity's body.*pass `attachTo: \{kind: "entity", id\}` to attach the page to the entity/
     );
     expect(await documentCount()).toBe(before);
   });

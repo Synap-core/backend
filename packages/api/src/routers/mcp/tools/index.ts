@@ -1886,7 +1886,7 @@ export const tools = {
             attachTo: {
               type: "object",
               description:
-                "Make it FOR one object and attach it there (an extra surface on that object, governed as one act; the reply's link opens the object on it): {kind, id}, kind one of entity, profile, workspace, project, track, playbook, session. Same as synap_create_surface.",
+                "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
               properties: {
                 kind: { type: "string", enum: [...ANCHOR_KINDS] },
                 id: { type: "string" },
@@ -6506,7 +6506,7 @@ export const tools = {
             attachTo: {
               type: "object",
               description:
-                "Make it FOR one object and attach it there (an extra surface on that object, governed as one act; the reply's link opens the object on it): {kind, id}, kind one of entity, profile, workspace, project, track, playbook, session. Same as synap_create_surface.",
+                "Make it FOR one object and attach it there, in one governed act (the reply's link opens the object on it). Same as synap_create_surface.",
               properties: {
                 kind: { type: "string", enum: [...ANCHOR_KINDS] },
                 id: { type: "string" },

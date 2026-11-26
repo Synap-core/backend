@@ -308,8 +308,19 @@ export function registerSurfacesRoutes(app: HubHono): void {
     try {
       return answer(c, await createSurface(who.actor, parsed.data));
     } catch (err) {
-      logger.error({ err }, "POST /surfaces failed");
-      return c.json({ error: "Could not make the surface" }, 500);
+      // A refusal the caller can act on (not found, forbidden, conflict)
+      // keeps its status and words; only an unknown error is a 500.
+      const status = httpStatusForTrpcError(err);
+      if (status >= 500) logger.error({ err }, "POST /surfaces failed");
+      return c.json(
+        {
+          error:
+            status >= 500 || !(err instanceof Error)
+              ? "Could not make the surface"
+              : err.message,
+        },
+        status
+      );
     }
   });
 
@@ -343,8 +354,19 @@ export function registerSurfacesRoutes(app: HubHono): void {
     try {
       return answer(c, await attachSurface(who.actor, parsed.data));
     } catch (err) {
-      logger.error({ err }, "POST /surfaces/attach failed");
-      return c.json({ error: "Could not attach the surface" }, 500);
+      // A refusal the caller can act on (not found, forbidden, conflict)
+      // keeps its status and words; only an unknown error is a 500.
+      const status = httpStatusForTrpcError(err);
+      if (status >= 500) logger.error({ err }, "POST /surfaces/attach failed");
+      return c.json(
+        {
+          error:
+            status >= 500 || !(err instanceof Error)
+              ? "Could not attach the surface"
+              : err.message,
+        },
+        status
+      );
     }
   });
 
@@ -374,8 +396,19 @@ export function registerSurfacesRoutes(app: HubHono): void {
     try {
       return answer(c, await detachSurface(who.actor, parsed.data));
     } catch (err) {
-      logger.error({ err }, "DELETE /surfaces/attach failed");
-      return c.json({ error: "Could not detach the surface" }, 500);
+      // A refusal the caller can act on (not found, forbidden, conflict)
+      // keeps its status and words; only an unknown error is a 500.
+      const status = httpStatusForTrpcError(err);
+      if (status >= 500) logger.error({ err }, "DELETE /surfaces/attach failed");
+      return c.json(
+        {
+          error:
+            status >= 500 || !(err instanceof Error)
+              ? "Could not detach the surface"
+              : err.message,
+        },
+        status
+      );
     }
   });
 }

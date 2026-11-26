@@ -8,7 +8,9 @@
  *
  * What it cannot see, stated: a client that builds the same URL some other
  * way (a hand-concatenated `?surface=`) is not compared; the pod admin parser
- * has its own round-trip test (`apps/pod-admin/app/open/open-params.test.ts`).
+ * has its own round-trip test (pod admin's `open-params.test.ts`). No path
+ * to another package is written here: CI's test selection reads one as an
+ * edge to that whole package.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
