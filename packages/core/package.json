@@ -50,7 +50,7 @@
     "config",
     "logging"
   ],
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "Apache-2.0",
   "description": "Core utilities for Synap (config, logging, telemetry)",
   "repository": {
     "type": "git",

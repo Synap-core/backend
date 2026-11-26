@@ -186,7 +186,10 @@ import {
   readNextMovePicks,
   writeNextMoveSkip,
 } from "../services/signals/next-moves.js";
-import { sessionIdsBlockingOpenPr } from "../services/dev-loop/open-pr-blocking.js";
+import {
+  sharedOpenPrRead,
+  type OpenPrBlockingRead,
+} from "../services/dev-loop/open-pr-blocking.js";
 
 const logger = createLogger({ module: "signals" });
 
@@ -442,6 +445,21 @@ async function readAttention(
     settle(name, empty, withheld.has(name) ? async () => empty : read);
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
+  // ONE open-PR read for the whole needs-you read: the owed half and the
+  // decisions half each register as a consumer when they start (a withheld
+  // or unread half never does), and the read runs once both asked or ended,
+  // over every session they asked; the clusters' order below reuses it.
+  const openPr = sharedOpenPrRead(reader);
+  const withOpenPr =
+    <T>(run: (read: OpenPrBlockingRead) => Promise<T>) =>
+    async (): Promise<T> => {
+      const consumer = openPr.consumer();
+      try {
+        return await run(consumer.read);
+      } finally {
+        consumer.leave();
+      }
+    };
   const follows = followsScope(input);
   const notifsFollow = notificationsFollow(input);
   const container = containerLensOf(input);
@@ -504,8 +522,8 @@ async function readAttention(
         scanTruncated: false,
         scanned: 0,
       },
-      () =>
-        proposalsRouter.createCaller(ctx).groups({
+      withOpenPr((openPrRead) =>
+        proposalsRouter.createCaller({ ...ctx, openPrRead }).groups({
           workspaceId: input.workspaceId,
           sessionId: input.sessionId,
           projectId: input.projectId,
@@ -519,6 +537,7 @@ async function readAttention(
           // THE needs-you rule over proposals (decision E6).
           classifyNeedsYou: true,
         })
+      )
     ),
     // Under a container lens the door narrows IN SQL, before its limit
     // (`container`); the resolved containers below stay the authority.
@@ -555,8 +574,10 @@ async function readAttention(
       ? half(
           "owed",
           [] as AttentionOwed[],
-          async (): Promise<AttentionOwed[]> =>
-            await listNeedsYouOwed(owedScope)
+          withOpenPr(
+            async (openPrRead): Promise<AttentionOwed[]> =>
+              await listNeedsYouOwed({ ...owedScope, openPrRead })
+          )
         )
       : half("owed", [] as AttentionOwed[], async () => []),
     // The DRAFT half — owed slots on undecided agent drafts, folded into one
@@ -706,10 +727,11 @@ async function readAttention(
   ]);
 
   // Sessions that hold an open PR: a cluster filed in one blocks it (owed
-  // slots carry the fact from their own read). Unmeasured stays `undefined`.
+  // slots carry the fact from the same read). Answered by the one read above
+  // (the clusters' sessions are the classified rows'). Unmeasured stays
+  // `undefined`, and a failed read is a named failure, never "no open PR".
   const openPrSessions = await settle("proposals", new Set<string>(), () =>
-    sessionIdsBlockingOpenPr(
-      { userId },
+    openPr.read(
       groups.value.groups.flatMap((g) => (g.sessionId ? [g.sessionId] : []))
     )
   );
@@ -774,7 +796,8 @@ async function readAttention(
         containers,
         clusterSessions,
         openQuestions,
-        owedPointers
+        owedPointers,
+        openPrSessions
       ),
       proposed: failuresOf(drafts, notifs, containers),
       status: failuresOf(health ?? notifs),

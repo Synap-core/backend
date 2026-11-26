@@ -4,8 +4,8 @@ A Synap pod is a personal data server with a governed agent runtime on it. It
 stores your records in your own PostgreSQL database, lets AI agents work on
 them under rules you set, and records every change on an append-only event
 chain. This repository is the pod: its API, workers, realtime server, operator
-console, and the files and CLI that deploy and operate it. It is source-available
-(PolyForm Noncommercial 1.0.0; commercial use needs a license) and self-hostable. The
+console, and the files and CLI that deploy and operate it. It is open source
+(Apache-2.0) and self-hostable. The
 SDK and contract packages (`@synap-core/sdk`, types, API types, markdown core, hub
 protocol and REST client) remain MIT.
 
@@ -150,7 +150,6 @@ described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE): free for personal and non-commercial use;
-commercial use needs a license. The SDK and contract packages
+[Apache License 2.0](LICENSE). The SDK and contract packages
 (`@synap-core/types`, `api-types`, `markdown-core`, `hub-protocol`,
 `hub-rest-client`) are MIT, each with its own `LICENSE` file.

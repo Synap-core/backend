@@ -38,7 +38,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { DEV_LOOP_EVENT_TYPES as T } from "@synap-core/types";
-import { pullRequestKey, readPullRequestStates } from "../pr-state.js";
+import { db } from "@synap/database";
+import {
+  FOLLOW_UP_LEAD_MS,
+  pullRequestKey,
+  readPullRequestStates,
+} from "../pr-state.js";
 import {
   withPullRequestStates,
   type PacketWorkUnitItem,
@@ -227,6 +232,124 @@ describe("readPullRequestStates — the recorded dev facts, under the reader's f
       state: "merged",
       at: at(8),
     });
+  });
+});
+
+describe("readPullRequestStates — the load it puts on the events hypertable", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const OPENED = Date.UTC(2026, 10, 20, 12, 0);
+  const BRANCH_HEAD = "9".repeat(40);
+  async function eventAt(
+    type: string,
+    when: number,
+    data: Record<string, unknown>
+  ) {
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, workspace_id)
+       values ($1, $2, $3, $4, 'pull_request', $5::jsonb, $6, $7)`,
+      [
+        randomUUID(),
+        new Date(when).toISOString(),
+        type,
+        randomUUID(),
+        JSON.stringify(data),
+        OWNER,
+        WS,
+      ]
+    );
+  }
+
+  it("reads CI runs from FOLLOW_UP_LEAD_MS before the PR's first fact: a branch run 6 days before counts, one 8 days before is never read", async () => {
+    await eventAt(T.prOpened, OPENED, prData(290, { sha: BRANCH_HEAD }));
+    // The branch's own CI on the head sha, before the PR was opened.
+    await eventAt(T.ciFinished, OPENED - 6 * DAY, {
+      repo: REPO,
+      sha: BRANCH_HEAD,
+      status: "success",
+      workflow: "Branch CI",
+    });
+    // Older than the bound: an unbounded read would fold its failure in.
+    await eventAt(T.ciFinished, OPENED - 8 * DAY, {
+      repo: REPO,
+      sha: BRANCH_HEAD,
+      status: "failure",
+      workflow: "Stale CI",
+    });
+    const states = await readPullRequestStates(
+      [{ repo: REPO, number: 290 }],
+      reader
+    );
+    expect(states.get(pullRequestKey({ repo: REPO, number: 290 }))).toEqual({
+      state: "open",
+      checks: "passed",
+      checksOn: BRANCH_HEAD,
+      at: new Date(OPENED).toISOString(),
+    });
+    // The fixture's 6 and 8 days straddle the bound.
+    expect(FOLLOW_UP_LEAD_MS).toBe(7 * DAY);
+  });
+
+  it("identical reads in flight at once share ONE pair of queries; a later read queries again", async () => {
+    let selects = 0;
+    const counted = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "select") {
+          return (...args: unknown[]) => {
+            selects += 1;
+            return Reflect.apply(target.select, target, args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const [a, b] = await Promise.all([
+      readPullRequestStates(
+        [
+          { repo: REPO, number: 285 },
+          { repo: REPO, number: 286 },
+        ],
+        reader,
+        counted
+      ),
+      // The same PRs, asked in another order and case.
+      readPullRequestStates(
+        [
+          { repo: "synap-core/BACKEND", number: 286 },
+          { repo: REPO, number: 285 },
+        ],
+        reader,
+        counted
+      ),
+    ]);
+    // One PR-facts query and one follow-up query, not two of each.
+    expect(selects).toBe(2);
+    expect(b).toEqual(a);
+    expect(b).not.toBe(a);
+    expect(a.get(pullRequestKey({ repo: REPO, number: 285 }))?.state).toBe(
+      "merged"
+    );
+
+    // A different reader floor is a different read.
+    await Promise.all([
+      readPullRequestStates([{ repo: REPO, number: 286 }], reader, counted),
+      readPullRequestStates(
+        [{ repo: REPO, number: 286 }],
+        { userId: STRANGER, roster: true },
+        counted
+      ),
+    ]);
+    expect(selects).toBe(6);
+
+    // Nothing is kept once a read settles.
+    await readPullRequestStates(
+      [
+        { repo: REPO, number: 285 },
+        { repo: REPO, number: 286 },
+      ],
+      reader,
+      counted
+    );
+    expect(selects).toBe(8);
   });
 });
 
