@@ -62,7 +62,7 @@ export const en = {
   "connected.untitled": "Untitled",
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Loading the surfaces on this…",
-  "surfaces.failed": "The surfaces on this couldn’t be read.",
+  "surfaces.failed": "Couldn’t load surfaces.",
   "surfaces.partial":
     "Some places couldn’t be read, so this list may be short.",
   "surfaces.untitled": "Untitled",
@@ -130,7 +130,7 @@ export const fr: Catalog<typeof en> = {
   "connected.untitled": "Sans titre",
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Chargement des surfaces…",
-  "surfaces.failed": "Les surfaces n’ont pas pu être lues.",
+  "surfaces.failed": "Impossible de charger les surfaces.",
   "surfaces.partial":
     "Certains endroits n’ont pas pu être lus : la liste peut être incomplète.",
   "surfaces.untitled": "Sans titre",
