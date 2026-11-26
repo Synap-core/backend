@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 128,
+  "toolCount": 129,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -42,6 +42,7 @@
       "synap_diagnose",
       "synap_template_health",
       "synap_get_flow",
+      "synap_get_home",
       "synap_read_board"
     ],
     "data": [
@@ -5291,6 +5292,66 @@
           }
         },
         "required": ["profileSlug"]
+      }
+    },
+    {
+      "name": "synap_get_home",
+      "title": "Get Home or Moving now",
+      "group": "read",
+      "annotations": {
+        "title": "Get Home or Moving now",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.",
+      "parameters": [
+        {
+          "name": "view",
+          "type": "enum",
+          "required": false,
+          "description": "home (default) or moving.",
+          "enum": ["home", "moving"]
+        },
+        {
+          "name": "projectId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: only this project's spaces and things."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "moving only, optional: only this space."
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "moving only: things (default 30, max 100)."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": ["home", "moving"],
+            "description": "home (default) or moving."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Optional: only this project's spaces and things."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "moving only, optional: only this space."
+          },
+          "limit": {
+            "type": "number",
+            "description": "moving only: things (default 30, max 100)."
+          }
+        }
       }
     },
     {
