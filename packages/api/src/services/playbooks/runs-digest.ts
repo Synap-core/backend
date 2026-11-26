@@ -1,3 +1,4 @@
+// SESSION-KIND-LENS-EXEMPT: an aggregate digest of a playbook's runs, not a page of session rows, so no kind/triage lens applies
 /**
  * THE RUNS DIGEST — how one playbook's runs went, in one small read (task
  * 4d23c009): per stage, how many runs reached it, the median time spent in
