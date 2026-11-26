@@ -137,7 +137,8 @@ export function locateHtmlBlocks(html: string): LocatedHtmlBlock[] {
         if (!open) return;
         if (open.titleFor && heading) {
           const title = normalizeTitle(heading.text);
-          if (title) for (const b of open.titleFor) if (!b.title) b.title = title;
+          if (title)
+            for (const b of open.titleFor) if (!b.title) b.title = title;
           heading = null;
         }
         const block = open.block;

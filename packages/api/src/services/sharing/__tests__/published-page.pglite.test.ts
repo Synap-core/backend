@@ -141,7 +141,11 @@ const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 const OPEN = { read: "direct" as const, create: "proposal" as const };
-const DENIED = { read: "denied" as const, create: "denied" as const, fields: [] };
+const DENIED = {
+  read: "denied" as const,
+  create: "denied" as const,
+  fields: [],
+};
 const KIND = { guest: OPEN, link: OPEN, public: DENIED };
 const POLICY = {
   exposurePolicy: {
@@ -303,7 +307,11 @@ describe("publishing an html page snapshots its declared reads as the publisher"
     expect(page).toContain("Alpha deal");
     expect(page).not.toContain("Zeta deal");
     // The policy first (no network), the brand, then the author's page.
-    expect(page.startsWith("<!doctype html><meta http-equiv=\"Content-Security-Policy\"")).toBe(true);
+    expect(
+      page.startsWith(
+        '<!doctype html><meta http-equiv="Content-Security-Policy"'
+      )
+    ).toBe(true);
     expect(page).toContain("connect-src 'none'");
     expect(page).toContain("--synap-accent:#e11d48");
     expect(page).toContain(PAGE_HTML.slice("<!doctype html>".length));

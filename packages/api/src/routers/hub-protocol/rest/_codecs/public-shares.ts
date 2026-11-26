@@ -35,7 +35,9 @@ export const PublicShareResponseSchema = z
   .object({
     resourceType: z
       .enum(["entity", "document"])
-      .describe("entity = a record; document = an HTML page published as itself."),
+      .describe(
+        "entity = a record; document = an HTML page published as itself."
+      ),
     title: z
       .string()
       .optional()

@@ -1,5 +1,5 @@
 {
-  "entryChars": 94265,
+  "entryChars": 94410,
   "tools": {
     "synap_add_track_stage": 1495,
     "synap_advance_track": 1779,
@@ -51,7 +51,7 @@
     "synap_get_proposal": 1607,
     "synap_get_relations": 743,
     "synap_get_session": 2696,
-    "synap_get_thread_context": 662,
+    "synap_get_thread_context": 786,
     "synap_get_timeline": 1268,
     "synap_get_work_graph": 2245,
     "synap_get_work_release": 960,
@@ -80,7 +80,7 @@
     "synap_organize_library": 2021,
     "synap_orient": 3369,
     "synap_pause_worker": 1341,
-    "synap_post_message": 6856,
+    "synap_post_message": 7001,
     "synap_project_use_workspace": 1348,
     "synap_promote_cell_to_renderer": 2094,
     "synap_promote_session_to_playbook": 772,
@@ -116,7 +116,7 @@
     "synap_store_file": 1983,
     "synap_template_health": 1836,
     "synap_trigger_automation": 1653,
-    "synap_update_document": 4672,
+    "synap_update_document": 5280,
     "synap_update_entities": 4257,
     "synap_update_entity": 5865,
     "synap_update_facet": 2244,

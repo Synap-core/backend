@@ -156,9 +156,7 @@ async function loadRecord(
         mimeType: documents.mimeType,
       })
       .from(documents)
-      .where(
-        and(eq(documents.id, req.resourceId), isNull(documents.deletedAt))
-      )
+      .where(and(eq(documents.id, req.resourceId), isNull(documents.deletedAt)))
       .limit(1);
     if (page && isFramePage(page)) {
       return {
@@ -259,10 +257,12 @@ export async function buildPublishedSnapshot(
           .from(entities)
           .where(eq(entities.id, plan.resourceId))
           .limit(1);
-  if (!row) throw notFound(plan.resourceType === "document" ? "Document" : "Entity");
-  const props = (
-    "properties" in row ? (row.properties ?? {}) : {}
-  ) as Record<string, unknown>;
+  if (!row)
+    throw notFound(plan.resourceType === "document" ? "Document" : "Entity");
+  const props = ("properties" in row ? (row.properties ?? {}) : {}) as Record<
+    string,
+    unknown
+  >;
   const raw: Record<string, unknown> = {};
   for (const key of plan.fields) {
     const v = scalar(key === "title" ? row.title : props[key]);

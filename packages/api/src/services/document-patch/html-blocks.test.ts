@@ -77,7 +77,9 @@ describe("replace_block — one block changes, nothing else", () => {
     const was = locateHtmlBlocks(DECK).find((b) => b.id === "pain")!;
     expect(next.slice(0, was.start)).toBe(DECK.slice(0, was.start));
     expect(next.endsWith(DECK.slice(was.end))).toBe(true);
-    expect(next).toContain(`<div data-block-id="pain"><p>Three &amp; four</p></div>`);
+    expect(next).toContain(
+      `<div data-block-id="pain"><p>Three &amp; four</p></div>`
+    );
     expect(next).not.toContain("<p>Two</p>");
   });
 
