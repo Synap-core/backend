@@ -871,10 +871,10 @@ export const inviteProcedures = {
     // 3. Deduplicate by userId. Compute the highest role across the
     //    user's memberships (operator's lens).
     const roleRank: Record<string, number> = {
-      owner: 4,
-      admin: 3,
-      editor: 2,
-      viewer: 1,
+      owner: 3,
+      admin: 2,
+      editor: 1,
+      viewer: 0,
     };
     type WorkspaceRef = {
       id: string;
