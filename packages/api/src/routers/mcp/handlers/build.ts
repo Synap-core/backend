@@ -1379,7 +1379,10 @@ export const buildHandlers: McpHandlerMap = {
           userId,
           agentUserId: agentUserId ?? null,
           confinedWorkspaceId: keyWorkspaceId ?? null,
-          request: parsed.data,
+          request: {
+            ...parsed.data,
+            ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+          },
         })
       );
     } catch (err) {

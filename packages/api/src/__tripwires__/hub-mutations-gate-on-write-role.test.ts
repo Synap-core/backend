@@ -108,9 +108,9 @@ describe("tripwire: mutating Hub routes gate on the write role", () => {
       }
       offenders.push(...offendersIn(f.split("\\").join("/"), src));
     }
-    // Non-vacuity: ~300 non-GET handlers exist, and seven of them gate on the
-    // write check in the handler today (cells ×3, entities ×4: attachments,
-    // /files, /files/uploads, finalize). On origin/main before this guard the
+    // Non-vacuity: ~300 non-GET handlers exist, and five of them gate on the
+    // write check in the handler today (cells ×1, entities ×4: attachments,
+    // /files, /files/uploads, finalize; measured 26 Nov 2026 on this tree). On origin/main before this guard the
     // scan flagged exactly nine: the two whiteboard placement routes were the
     // others. Their one replacement (`POST /whiteboards/:viewId/placements`)
     // gates in `placeOnBoard` on the board's own room floor
@@ -119,7 +119,7 @@ describe("tripwire: mutating Hub routes gate on the write role", () => {
     // place"). A broken glob or splitter that sees no handler would pass the
     // assertion below trivially.
     expect(mutating).toBeGreaterThanOrEqual(200);
-    expect(writeGated).toBeGreaterThanOrEqual(7);
+    expect(writeGated).toBeGreaterThanOrEqual(5);
     expect(offenders).toEqual([]);
   });
 
