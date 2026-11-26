@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 130,
+  "toolCount": 131,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -132,6 +132,7 @@
       "synap_create_view",
       "synap_list_views",
       "synap_find_surfaces",
+      "synap_inspect_surface",
       "synap_create_surface",
       "synap_attach_surface",
       "synap_update_view_content",
@@ -5472,6 +5473,77 @@
           }
         },
         "required": ["kind", "id"]
+      }
+    },
+    {
+      "name": "synap_inspect_surface",
+      "title": "Inspect a surface",
+      "group": "build",
+      "annotations": {
+        "title": "Inspect a surface",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Inspect a framed surface before you hand it over: a cell ({kind: cell, typeKey} or a cell instance id), an HTML page ({kind: document, id}) or a view ({kind: view, id}: the cells it places). Returns four sections, each {status: ok} or {status: unavailable, reason}: reads (what its frame read in the last `days` days: ops used, refused as undeclared, declared but unused, asked but undeclared), tokens (hard-coded colours and fonts, each with its line and the --synap-* token to use), a11y (images without alt, unnamed buttons and links, unlabelled fields, skipped heading levels) and render (no screenshot on the pod). `unavailable` means the check could not run, not that it passed. Read-only.",
+      "parameters": [
+        {
+          "name": "kind",
+          "type": "enum",
+          "required": true,
+          "description": "cell (a cell type or instance), document (an HTML page) or view (its cells).",
+          "enum": ["cell", "document", "view"]
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": false,
+          "description": "The page, view or cell instance id (a row id from synap_find_surfaces)."
+        },
+        {
+          "name": "typeKey",
+          "type": "string",
+          "required": false,
+          "description": "For a cell type: its key (a row's cellKey from synap_find_surfaces)."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the space a cell type is installed in (default: the pod-wide one)."
+        },
+        {
+          "name": "days",
+          "type": "number",
+          "required": false,
+          "description": "How many days of reads to show (1 to 30, default 30)."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["cell", "document", "view"],
+            "description": "cell (a cell type or instance), document (an HTML page) or view (its cells)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The page, view or cell instance id (a row id from synap_find_surfaces)."
+          },
+          "typeKey": {
+            "type": "string",
+            "description": "For a cell type: its key (a row's cellKey from synap_find_surfaces)."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional: the space a cell type is installed in (default: the pod-wide one)."
+          },
+          "days": {
+            "type": "number",
+            "description": "How many days of reads to show (1 to 30, default 30)."
+          }
+        },
+        "required": ["kind"]
       }
     },
     {

@@ -9,6 +9,10 @@
  * `capabilities.compositions` — the Surfaces app is a pod-altitude plane and
  * must not 400 when no workspace is selected. `workspaceId` NARROWS (pod-wide
  * NULL-workspace rows are always included); omitted ⇒ the pod-wide user floor.
+ * `surfaces.inspect` (Surfaces P7) reads what one framed surface does before
+ * it is handed over: its frame reads, hard-coded colours and fonts, static
+ * accessibility (the door MCP `synap_inspect_surface` and Hub REST
+ * `GET /surfaces/inspect` share).
  *
  * Writes (Surfaces P3): `surfaces.create | attach | detach` put a surface ON
  * one object (links `attaches`), through the ONE governed service
@@ -36,6 +40,10 @@ import {
   type SurfaceRefusal,
 } from "../services/surfaces/attach.js";
 import { createSurface } from "../services/surfaces/create.js";
+import {
+  INSPECT_SURFACE_KINDS,
+  inspectSurface,
+} from "../services/surfaces/inspect.js";
 
 const AnchorSchema = z.object({
   kind: z.enum(ANCHOR_KINDS),
@@ -142,6 +150,33 @@ export const surfacesRouter = router({
         { userId, access: AccessContext.from(ctx) },
         input
       );
+    }),
+
+  /**
+   * Inspect ONE framed surface (a cell, an HTML page, a view's cells): its
+   * frame reads (used, refused, declared vs used), hard-coded colours and
+   * fonts, static accessibility. Each section is `ok` or `unavailable` with
+   * its reason; `render` is always unavailable on the pod (no browser).
+   */
+  inspect: protectedProcedure
+    .input(
+      z.object({
+        surface: z
+          .object({
+            kind: z.enum(INSPECT_SURFACE_KINDS),
+            id: z.string().uuid().optional(),
+            typeKey: z.string().min(1).max(200).optional(),
+          })
+          .refine((s) => !!s.id || (s.kind === "cell" && !!s.typeKey), {
+            message: "Pass the surface's id (or a cell's typeKey).",
+          }),
+        workspaceId: z.string().uuid().nullish(),
+        days: z.number().int().min(1).max(30).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return inspectSurface({ userId, access: AccessContext.from(ctx) }, input);
     }),
 
   /**

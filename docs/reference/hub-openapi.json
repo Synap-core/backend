@@ -54496,6 +54496,164 @@
         }
       }
     },
+    "/surfaces/inspect": {
+      "get": {
+        "tags": ["Surfaces"],
+        "summary": "Inspect one framed surface",
+        "description": "Before you hand a surface over, read what it does: `kind` cell (by `typeKey`, or a cell instance `id`), document (an HTML page `id`) or view (`id`: the cells it places). Four sections, each `{status:'ok', …}` or `{status:'unavailable', reason}`: `reads` (what the frame read door logged in the last `days` days, at most 30: ops used, refused, declared but unused, asked but undeclared), `tokens` (hard-coded colours and fonts, each with its line and the token to use), `a11y` (static HTML accessibility lint) and `render` (always unavailable on the pod: no browser). 404 when the surface does not exist or you cannot see it.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["cell", "document", "view"]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "required": false,
+            "name": "typeKey",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "required": false,
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "surface": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["cell", "document", "view"]
+                        },
+                        "id": { "type": ["string", "null"] },
+                        "typeKey": { "type": ["string", "null"] },
+                        "title": { "type": "string" },
+                        "workspaceId": { "type": ["string", "null"] },
+                        "cellKeys": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id",
+                        "typeKey",
+                        "title",
+                        "workspaceId"
+                      ]
+                    },
+                    "reads": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "tokens": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "a11y": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ok", "unavailable"]
+                        },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status"],
+                      "additionalProperties": {}
+                    },
+                    "render": {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unavailable"] },
+                        "reason": { "type": "string" }
+                      },
+                      "required": ["status", "reason"]
+                    }
+                  },
+                  "required": ["surface", "reads", "tokens", "a11y", "render"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such surface",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/surfaces/attach": {
       "post": {
         "tags": ["Surfaces"],
