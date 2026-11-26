@@ -12,6 +12,19 @@ import type { EventRecord } from "@synap/database";
 import { validateEmitPayload } from "@synap/events/realtime-schemas";
 import { emitDomainEventToRealtime } from "./domain-event-bridge.js";
 
+// A pod-wide entity's readers come from the entity read floor (DB):
+// pinned on real SQL in domain-event-bridge.pod-wide.pglite.test.ts.
+const audience = vi.hoisted(() => ({
+  readers: ["user_1", "reader_2"] as string[],
+  fail: false,
+}));
+vi.mock("../services/status/status-floor.js", () => ({
+  entityAudience: vi.fn(async () => {
+    if (audience.fail) throw new Error("floor read failed");
+    return audience.readers;
+  }),
+}));
+
 /** The log row `emitLifecycleTransition` appends for a kind's move. */
 function transitionRow(overrides: Partial<EventRecord> = {}): EventRecord {
   return {
@@ -110,14 +123,22 @@ describe("domain-event-bridge — a status move", () => {
     expect(bodies()[1].data.updatedBy).toBe("u1");
   });
 
-  // A pod-wide entity's move fails the realtime schema (no workspace), so
-  // nothing is sent.
-  it("a pod-wide entity's move is not sent (the schema requires a workspace)", async () => {
-    emitDomainEventToRealtime(
+  // A pod-wide entity's move reaches each reader's room, the same readers
+  // as its `status:transition:completed` (status-realtime.ts).
+  it("a pod-wide entity's move is sent once to each reader's room", async () => {
+    await emitDomainEventToRealtime(
       transitionRow({ data: { ...transitionRow().data, workspaceId: null } })
     );
-    await Promise.resolve();
-    expect(fetchMock).not.toHaveBeenCalled();
+    const sent = bodies();
+    // Readers user_1 and reader_2, plus the mover u1.
+    expect(sent.map((b) => b.userId).sort()).toEqual(
+      ["reader_2", "u1", "user_1"].sort()
+    );
+    for (const body of sent) {
+      expect(body.event).toBe("entity:updated");
+      expect(body.workspaceId).toBeUndefined();
+      expect(validateEmitPayload(body.event, body.data)).toEqual({ ok: true });
+    }
   });
 
   it("a goal's or a session's transition is not bridged (no client listens)", async () => {

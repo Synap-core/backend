@@ -153,3 +153,58 @@ describe("status events — strict, so nothing beyond the move reaches a reader"
     ).toBe(false);
   });
 });
+
+// Most kinds are pod-wide (an entity row with no workspace). Their pushes go
+// to each reader's `user:<id>` room (`domain-event-bridge.ts`), so the
+// realtime server's own check must accept a payload that names no workspace:
+// before, it refused every one and an open page never heard the change.
+describe("entity events — a pod-wide entity (no workspace) is a valid push", () => {
+  const AT = "2026-11-26T10:00:00.000Z";
+  const PAYLOADS: Record<string, Record<string, unknown>> = {
+    "entity:created": {
+      entityId: "e1",
+      type: "task",
+      title: "Write the brief",
+      createdBy: "u1",
+      createdAt: AT,
+    },
+    "entity:updated": {
+      entityId: "e1",
+      changes: { title: "Write the brief" },
+      updatedBy: "u1",
+      updatedAt: AT,
+    },
+    "entity:deleted": { entityId: "e1", deletedBy: "u1", deletedAt: AT },
+  };
+
+  // Derived from the registry: an entity event added later joins by existing.
+  const ENTITY_EVENTS = Object.keys(EventSchemas).filter((e) =>
+    e.startsWith("entity:")
+  );
+
+  it("covers every entity event the registry locks down", () => {
+    expect(ENTITY_EVENTS.sort()).toEqual(Object.keys(PAYLOADS).sort());
+  });
+
+  for (const event of Object.keys(PAYLOADS)) {
+    it(`${event}: workspaceId null, absent or a space all validate`, () => {
+      const base = PAYLOADS[event]!;
+      expect(
+        validateEmitPayload(event, { ...base, workspaceId: null })
+      ).toEqual({ ok: true });
+      expect(validateEmitPayload(event, base)).toEqual({ ok: true });
+      expect(
+        validateEmitPayload(event, { ...base, workspaceId: "ws_1" })
+      ).toEqual({ ok: true });
+    });
+
+    it(`${event}: an empty workspace id or a missing entity id is still refused`, () => {
+      const base = PAYLOADS[event]!;
+      expect(validateEmitPayload(event, { ...base, workspaceId: "" }).ok).toBe(
+        false
+      );
+      const { entityId: _drop, ...noId } = base;
+      expect(validateEmitPayload(event, noId).ok).toBe(false);
+    });
+  }
+});

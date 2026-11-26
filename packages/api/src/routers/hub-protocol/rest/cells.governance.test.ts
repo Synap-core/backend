@@ -43,6 +43,13 @@ vi.mock("@synap/database", () => ({
   eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
   isNull: (a: unknown) => ({ op: "isNull", a }),
   or: (...c: unknown[]) => ({ op: "or", c }),
+  // The route's import chain now reaches `services/status/status-facts.ts`
+  // (domain-event-bridge → status-floor → status-facts), which names
+  // `drizzleSql` as a binding; a total mock must define it. Never called here.
+  drizzleSql: Object.assign(() => ({ op: "sql" }), {
+    join: () => ({ op: "sql" }),
+    raw: () => ({ op: "sql" }),
+  }),
 }));
 
 // PARTIAL mock: the route also reads `CONTENT_KINDS` (it builds its
