@@ -19,7 +19,7 @@ export type {
   DeliveryResult,
   DeliveryRequest,
   DeliveryContent,
-  DeliverySurface,
+  DeliveryChannelTarget,
 } from "../services/DeliveryService.js";
 
 // Deprecated legacy types - kept for backward compatibility

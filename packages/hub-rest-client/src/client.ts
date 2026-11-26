@@ -1730,11 +1730,12 @@ export class HubRestClient {
   }
 
   /**
-   * Compose widget catalog: curated builtins plus generated/frame DB rows.
-   * GET /widget-definitions already merges the built-in catalog (listRenderables) —
-   * do not copy the catalog into callers.
+   * The cell catalog: the cell types you may place (curated built-ins plus the
+   * generated / frame rows installed on the pod). GET /widget-definitions
+   * already merges the built-in catalog (listRenderables) — do not copy the
+   * catalog into callers.
    */
-  async listWidgetDefinitions(options?: {
+  async listCellTypes(options?: {
     workspaceId?: string;
   }): Promise<HubWidgetDefinition[]> {
     const params = new URLSearchParams();
@@ -1745,6 +1746,16 @@ export class HubRestClient {
       HubWidgetDefinition[] | HubListResponse<HubWidgetDefinition>
     >("GET", `/api/hub/widget-definitions${qs}`);
     return unwrapList(result, "widgets");
+  }
+
+  /**
+   * @deprecated The old name of {@link listCellTypes} (founder, 23 Nov 2026:
+   * the word is Cell). Same request, same answer.
+   */
+  async listWidgetDefinitions(options?: {
+    workspaceId?: string;
+  }): Promise<HubWidgetDefinition[]> {
+    return this.listCellTypes(options);
   }
 
   // ─── Documents ────────────────────────────────────────────────────────────

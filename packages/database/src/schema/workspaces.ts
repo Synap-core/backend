@@ -50,6 +50,7 @@ export type {
   ProactiveAiPreferences,
   ProactiveAiTriggers,
   SignalSurface,
+  ChannelTarget,
   SurfaceTarget,
   SignalDeliveryRule,
   DeliveryPreferences,

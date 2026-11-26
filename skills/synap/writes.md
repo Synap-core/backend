@@ -191,7 +191,7 @@ PATCH /api/hub/documents/doc_abc
 // → a pending proposal; readers see the new HTML only once it is approved
 ```
 
-`html-doc` is **not** an agent-placeable bento widget: `arrange` rejects it. The
+`html-doc` is **not** an agent-placeable bento cell: `arrange` rejects it. The
 document renders where it is opened (the Files app, or the entity it is attached
 to). For HTML you want to embed elsewhere, create an HTML cell instance
 (`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
