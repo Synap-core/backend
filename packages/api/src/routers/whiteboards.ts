@@ -11,6 +11,35 @@ import { db, eq, desc, and, readDocumentVersionContent } from "@synap/database";
 import { views, documents, documentVersions } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 
+/**
+ * Refuse a restore the open room will refuse: a room that failed to load the
+ * board (the realtime server's own flag, `YjsRoomStateReply.loadFailed`) or
+ * whose state cannot be decoded is a CONFLICT with the reason; a realtime
+ * server that does not answer is SERVICE_UNAVAILABLE. A closed room passes.
+ */
+async function assertRoomTakesRestore(
+  yjsRoomId: string,
+  documentId: string
+): Promise<void> {
+  const { readLiveRecords, BoardSceneReadError } =
+    await import("../services/whiteboards/read-board-scene.js");
+  try {
+    await readLiveRecords(yjsRoomId, documentId);
+  } catch (err) {
+    if (err instanceof BoardSceneReadError) {
+      throw new TRPCError({
+        code:
+          err.reason === "live_unavailable"
+            ? "SERVICE_UNAVAILABLE"
+            : "CONFLICT",
+        message: `The version was not restored: ${err.message}`,
+        cause: err,
+      });
+    }
+    throw err;
+  }
+}
+
 export const whiteboardsRouter = router({
   /**
    * Save current whiteboard state as a version
@@ -133,10 +162,13 @@ export const whiteboardsRouter = router({
 
       const yjsRoomId = view.yjsRoomId ?? `whiteboard-${view.documentId}`;
 
-      // Get version
-      const version = await db.query.documentVersions.findFirst({
+      // Get version: one OF THIS BOARD'S document (a version id of another
+      // document is "not found", never restored into this board).
+      const found = await db.query.documentVersions.findFirst({
         where: eq(documentVersions.id, input.versionId),
       });
+      const version =
+        found && found.documentId === view.documentId ? found : undefined;
 
       if (!version) {
         throw new TRPCError({
@@ -144,6 +176,12 @@ export const whiteboardsRouter = router({
           message: "Version not found",
         });
       }
+
+      // A room that failed to load its saved content refuses a restore (the
+      // realtime bridge answers 409 inside the job, where the person never
+      // sees it: their "Restoring…" never ended). Ask the room first and say
+      // why here; a realtime server that does not answer is a refusal too.
+      await assertRoomTakesRestore(yjsRoomId, view.documentId);
 
       // Publish restore job via pg-boss
       const { getBoss } = await import("@synap/jobs");

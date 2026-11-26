@@ -162,6 +162,9 @@ export const AI_GATE_VERBS: readonly string[] = [
   "proposal.reject",
   "view.update_content",
   "whiteboard.place",
+  // Change shapes already on a board (a proposal by default); removing them
+  // (`whiteboard.delete_shapes`) is excluded below.
+  "whiteboard.update_shapes",
   "widget.register",
 ];
 
@@ -171,6 +174,8 @@ export const AI_GATE_VERBS: readonly string[] = [
  * nothing real, and checks each one is refused.
  */
 export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
+  "whiteboard.delete_shapes":
+    "Destroy: removes shapes from a person's whiteboard (and what they hold).",
   "vault.read":
     "Secrets: an AI reads a secret only through an explicit vault grant.",
   "vault.grant": "Secrets: widens who may use a secret.",
