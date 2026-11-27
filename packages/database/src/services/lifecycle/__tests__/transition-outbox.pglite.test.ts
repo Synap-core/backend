@@ -205,3 +205,65 @@ describe("claim → settle", () => {
     expect(await listDueTransitions(db)).not.toContain(tid);
   });
 });
+
+describe("a failing row cannot block the sweep (finding 5226a61b)", () => {
+  async function owed(): Promise<string> {
+    const id = await deal();
+    const r = await applyStatusMove(db, {
+      target: await target(id),
+      to: "negotiating",
+      actor: AGENT,
+    });
+    if (r.status !== "moved") throw new Error(r.status);
+    return r.transition.transitionId;
+  }
+
+  it("a row past 31 attempts still backs off (no int overflow), capped at the max", async () => {
+    const tid = await owed();
+    await h.pg.query(
+      `UPDATE lifecycle_transition_outbox SET attempts = 40 WHERE transition_id = $1`,
+      [tid]
+    );
+    await settleTransitionOutbox(db, tid, {
+      eventId: null,
+      delivered: [],
+      complete: false,
+      error: "log append: invalid uuid",
+    });
+    const {
+      rows: [row],
+    } = await h.pg.query<{ secs: number; last_error: string }>(
+      `SELECT extract(epoch FROM claimed_until - now())::float AS secs, last_error
+         FROM lifecycle_transition_outbox WHERE transition_id = $1`,
+      [tid]
+    );
+    expect(row!.last_error).toBe("log append: invalid uuid");
+    expect(row!.secs).toBeGreaterThan(3500);
+    expect(row!.secs).toBeLessThanOrEqual(3600);
+  });
+
+  it("a fresh row is listed ahead of older rows that keep failing", async () => {
+    const poison = await owed();
+    const fresh = await owed();
+    await h.pg.query(
+      `UPDATE lifecycle_transition_outbox
+          SET attempts = 40, created_at = now() - interval '2 hours', claimed_until = now() - interval '1 second'
+        WHERE transition_id = $1`,
+      [poison]
+    );
+    await h.pg.query(
+      `UPDATE lifecycle_transition_outbox
+          SET created_at = now() - interval '1 hour', claimed_until = NULL
+        WHERE transition_id = $1`,
+      [fresh]
+    );
+    // Every other due row of this file is out of the way: only these two compete.
+    await h.pg.query(
+      `UPDATE lifecycle_transition_outbox SET emitted_at = now()
+        WHERE transition_id NOT IN ($1, $2) AND emitted_at IS NULL`,
+      [poison, fresh]
+    );
+    expect(await listDueTransitions(db, 1)).toEqual([fresh]);
+    expect(await listDueTransitions(db, 2)).toEqual([fresh, poison]);
+  });
+});
