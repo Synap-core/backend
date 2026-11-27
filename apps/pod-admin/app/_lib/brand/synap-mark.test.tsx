@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SynapLockup, SynapMark } from "./synap-mark";
-import {
-  ReceiverIdentityProvider,
-  ReceiverShell,
-} from "../receiver-shell";
+import { ReceiverIdentityProvider, ReceiverShell } from "../receiver-shell";
 import { opensHome } from "../../../lib/route-policy";
 
 /**

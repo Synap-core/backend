@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isReaderObject,
-  readerBodyClass,
-  readerLayout,
-} from "./reader-model";
+import { isReaderObject, readerBodyClass, readerLayout } from "./reader-model";
 
 /**
  * Which `/open` objects read in the full-window reader: decided once here,

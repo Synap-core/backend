@@ -37,9 +37,7 @@ describe("OpenObject: the card or the reader", () => {
     expect(out).not.toContain("min-h-screen");
     // The facts moved into ⋯ (mounted only when opened).
     expect(out).not.toContain("<dl");
-    expect(out.indexOf("the board")).toBeGreaterThan(
-      out.indexOf("</header>")
-    );
+    expect(out.indexOf("the board")).toBeGreaterThan(out.indexOf("</header>"));
   });
 
   it("the bar leads with the mark, then the title and its kind noun", () => {

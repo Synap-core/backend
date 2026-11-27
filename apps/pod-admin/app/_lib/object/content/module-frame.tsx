@@ -389,9 +389,7 @@ function useFillHeight(
       const el = ref.current;
       if (!el) return;
       const top = el.getBoundingClientRect().top + window.scrollY;
-      setHeight(
-        Math.max(FILL_MIN_HEIGHT, window.innerHeight - top - gap)
-      );
+      setHeight(Math.max(FILL_MIN_HEIGHT, window.innerHeight - top - gap));
     };
     measure();
     window.addEventListener("resize", measure);

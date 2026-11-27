@@ -161,7 +161,9 @@ export function isMemberConsolePath(path: string): boolean {
 export function opensHome(
   role: "admin" | "member" | "unavailable" | null
 ): boolean {
-  return (role === "admin" || role === "member") && isMemberConsolePath("/home");
+  return (
+    (role === "admin" || role === "member") && isMemberConsolePath("/home")
+  );
 }
 
 export type RouteAccess = "public" | "signed-in" | "admin";
