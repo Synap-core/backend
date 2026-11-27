@@ -698,6 +698,12 @@ export interface Hold {
 	until?: HoldUntil | null;
 	/** ISO date by which someone looks at it again (never a move). */
 	reviewBy?: string | null;
+	/**
+	 * Wake whoever holds the thing when this hold resumes (a session's pause
+	 * only: the agent working that session). The pauser ASKS for it; absent or
+	 * false wakes nobody, as before. See {@link HOLD_WAKE_HELP}.
+	 */
+	wake?: boolean | null;
 }
 /**
  * A hold as the transition records it: the mover's hold plus what the server
@@ -41891,6 +41897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				homeWorkspaceId?: string | null | undefined;
 				id: string;
@@ -41995,6 +42002,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				occurredAt?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
@@ -42082,6 +42090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								moves: string;
 								to?: string | undefined;
 							} | null | undefined;
+							wake?: boolean | null | undefined;
 						} | undefined;
 						occurredAt?: string | undefined;
 						properties?: Record<string, unknown> | undefined;
@@ -45397,6 +45406,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;
@@ -63651,6 +63661,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;

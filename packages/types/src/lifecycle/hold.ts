@@ -64,9 +64,11 @@ export interface Hold {
   wake?: boolean | null;
 }
 
-/** What `hold.wake` does, in one line: a tool's text and a refusal say it. */
-export const HOLD_WAKE_HELP =
-  "wake: true = on resume, wake this session's agent once, told what moved";
+/**
+ * What `hold.wake` does, in the fewest words (the session tool's text; the
+ * tool-definition token budget has no room for more).
+ */
+export const HOLD_WAKE_HELP = "wake: true = wake its agent on resume.";
 
 /** `hold.wake` on a pause of something that is not a session: nobody holds it to wake. */
 export const HOLD_WAKE_NOT_A_SESSION_MESSAGE =

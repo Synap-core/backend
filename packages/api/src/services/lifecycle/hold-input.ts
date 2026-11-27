@@ -92,7 +92,7 @@ export const SESSION_MOVE_HOLD_TOOL_PROPERTIES = {
   ...MOVE_HOLD_TOOL_PROPERTIES,
   hold: {
     ...MOVE_HOLD_TOOL_PROPERTIES.hold,
-    description: `${MOVE_HOLD_TOOL_PROPERTIES.hold.description} ${HOLD_WAKE_HELP}.`,
+    description: `${MOVE_HOLD_TOOL_PROPERTIES.hold.description} ${HOLD_WAKE_HELP}`,
     properties: {
       ...MOVE_HOLD_TOOL_PROPERTIES.hold.properties,
       wake: { type: ["boolean", "null"] },

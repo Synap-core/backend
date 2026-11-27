@@ -2030,7 +2030,8 @@
                   { "type": "null" }
                 ]
               },
-              "reviewBy": { "type": ["string", "null"] }
+              "reviewBy": { "type": ["string", "null"] },
+              "wake": { "type": ["boolean", "null"] }
             },
             "required": ["on"],
             "additionalProperties": false
@@ -12213,7 +12214,8 @@
                           { "type": "null" }
                         ]
                       },
-                      "reviewBy": { "type": ["string", "null"] }
+                      "reviewBy": { "type": ["string", "null"] },
+                      "wake": { "type": ["boolean", "null"] }
                     },
                     "required": ["on"],
                     "additionalProperties": false
@@ -46339,7 +46341,8 @@
                           { "type": "null" }
                         ]
                       },
-                      "reviewBy": { "type": ["string", "null"] }
+                      "reviewBy": { "type": ["string", "null"] },
+                      "wake": { "type": ["boolean", "null"] }
                     },
                     "required": ["on"],
                     "additionalProperties": false
