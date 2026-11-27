@@ -141,7 +141,6 @@ const NOT_A_STORED_TITLE: ReadonlyArray<{
       "synap-intelligence-service/apps/intelligence-hub/src/tools/registry.ts",
       "args.purpose.slice(0, 80)",
     ],
-    ["synap-cli/src/commands/observe.ts", "text.slice(0, 80)"],
   ].map(([file, includes]) => ({
     file: file!,
     includes: includes!,

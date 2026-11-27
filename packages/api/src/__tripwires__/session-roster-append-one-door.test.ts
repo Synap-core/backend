@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { wireTools } from "../routers/mcp/define-tool.js";
 
 /**
  * TRIPWIRE — `focus_sessions.agentIds` has ONE append door, reachable from
@@ -76,10 +77,13 @@ describe("tripwire: session roster append has one door, on every door", () => {
     expect(rest).toMatch(/addAgentId: z\.string\(\)/);
     expect(rest).toMatch(/attachSessionAgent\(\{/);
 
-    // MCP — `addAgentId` declared on the tool, threaded by the handler, applied
-    // by the shared service.
-    const tools = read("routers/mcp/tools/index.ts");
-    expect(tools).toMatch(/addAgentId: \{/);
+    // MCP — `addAgentId` advertised on the tool (its served schema, derived
+    // from the zod input), threaded by the handler, applied by the shared
+    // service.
+    const update = wireTools().find((t) => t.name === "synap_update_session");
+    expect(Object.keys(update?.inputSchema.properties ?? {})).toContain(
+      "addAgentId"
+    );
     const handler = read("routers/mcp/handlers/session.ts");
     expect(handler).toMatch(/addAgentId: args\.addAgentId/);
     const service = read("services/focus-sessions/update-session.ts");

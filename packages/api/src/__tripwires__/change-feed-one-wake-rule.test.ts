@@ -6,6 +6,7 @@ import {
   SESSION_CHANGE_WAKE,
 } from "@synap-core/types/focus-sessions";
 import { SESSION_CHANGE_KINDS } from "../services/focus-sessions/session-changes.js";
+import { wireTools } from "../routers/mcp/define-tool.js";
 
 /**
  * TRIPWIRE — the session change feed has ONE kind list and ONE wake rule
@@ -23,7 +24,11 @@ import { SESSION_CHANGE_KINDS } from "../services/focus-sessions/session-changes
  *  2. no other source file declares a copy of the list (a literal run of
  *     adjacent kind names);
  *  3. `listSessionChanges` stamps `wake` through `isWakeWorthy`, and the
- *     MCP wait tool's text names every kind and tells the agent to act on `wake`.
+ *     MCP wait tool's `events` input, AS ADVERTISED on `tools/list`
+ *     (`wireTools()`, derived from its zod input), names every kind, tells
+ *     the agent to act on `wake`, and offers exactly the kind list plus
+ *     "all" as its values (an enum spread from the list: a re-typed literal
+ *     copy in tools/index.ts is what check 2 refuses).
  */
 const API_SRC = join(__dirname, "..");
 const ROOTS = [
@@ -32,7 +37,6 @@ const ROOTS = [
   join(__dirname, "..", "..", "..", "database", "src"),
 ];
 const FEED = "services/focus-sessions/session-changes.ts";
-const TOOLS = "routers/mcp/tools/index.ts";
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -87,12 +91,26 @@ describe("the change feed's one kind list and one wake rule", () => {
   it("the feed stamps wake with the one rule, and the wait tool tells agents to act on it", () => {
     const feed = readFileSync(join(API_SRC, FEED), "utf8");
     expect(feed).toMatch(/wake:\s*isWakeWorthy\(e,\s*viewer\)/);
-    const tools = readFileSync(join(API_SRC, TOOLS), "utf8");
-    const at = tools.indexOf("Wait for session CHANGES");
-    expect(at).toBeGreaterThan(0);
-    const text = tools.slice(at, tools.indexOf("\n", at));
+    // The wire entry, not the source text: what an agent is actually shown.
+    const waits = wireTools().filter((t) =>
+      Object.values(
+        (t.inputSchema.properties ?? {}) as Record<
+          string,
+          { description?: string }
+        >
+      ).some((p) => p.description?.startsWith("Wait for session CHANGES"))
+    );
+    // The wait tool and nothing else (an old name of it would be listed too).
+    expect(waits.map((t) => t.name)).toEqual(["synap_wait_for_answer"]);
+    const events = (
+      waits[0]!.inputSchema.properties as Record<
+        string,
+        { description: string; items?: { enum?: string[] } }
+      >
+    ).events!;
+    const text = events.description;
     for (const kind of SESSION_CHANGE_KINDS) expect(text).toContain(kind);
     expect(text).toMatch(/EVERY event carries `wake`/);
-    expect(tools).toMatch(/enum: \[\.\.\.SESSION_CHANGE_KINDS, "all"\]/);
+    expect(events.items?.enum).toEqual([...SESSION_CHANGE_KINDS, "all"]);
   });
 });

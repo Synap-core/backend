@@ -243,6 +243,28 @@ function skipString(source: string, i: number): number {
       continue;
     }
     if (source[j] === quote) return j;
+    // A template's `${ … }` is CODE, and may hold a template of its own
+    // (`${keys.map((k) => `\`${k}\``).join(", ")}`): read as text, its inner
+    // backtick closed the outer template and flipped code and text for the
+    // rest of the file, so every door after it went undiscovered.
+    if (quote === "`" && source[j] === "$" && source[j + 1] === "{") {
+      j = skipInterpolation(source, j + 1);
+    }
+  }
+  return source.length;
+}
+
+/** From a template's `${` brace to its matching `}`. String-aware. */
+function skipInterpolation(source: string, open: number): number {
+  let depth = 0;
+  for (let k = open; k < source.length; k += 1) {
+    const ch = source[k]!;
+    if (isQuote(ch)) {
+      k = skipString(source, k);
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}" && --depth === 0) return k;
   }
   return source.length;
 }
@@ -990,6 +1012,13 @@ function auditOf(service: string): Audit | undefined {
 
 describe("tripwire (T5): every service parameter is reachable at every door, or acknowledged", () => {
   // RULE 2 — a moved/renamed root or service file fails loudly.
+  it("a template holding a template is ONE string (the scan does not flip code and text after it)", () => {
+    const src =
+      "`a ${xs.map((k) => `\\`${k}\\``).join(\", \")} b`; f({ x: 1 });";
+    const end = skipString(src, 0);
+    expect(src.slice(end + 1)).toBe("; f({ x: 1 });");
+  });
+
   it("the routers scan root and the published MCP manifest exist", () => {
     expect(
       existsSync(ROUTERS_DIR),

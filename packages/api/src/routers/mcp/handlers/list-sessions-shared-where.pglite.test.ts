@@ -70,6 +70,7 @@ import { runWithGrant, type KeyGrant } from "@synap/database";
 import type { McpToolContext } from "./shared.js";
 
 const { sessionHandlers } = await import("./session.js");
+const { parseToolArgs } = await import("../define-tool.js");
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -201,8 +202,23 @@ describe("synap_list_sessions — the door's own defaults survive the shared WHE
   });
 
   it("answers an off-vocabulary value with the vocabulary", async () => {
-    await expect(list({ status: "done" })).rejects.toThrow(/Valid values/);
-    await expect(list({ kind: "task" })).rejects.toThrow(/Valid values/);
+    // The enums are the tool's input: refused at the door (`parseToolArgs`,
+    // before any handler, as on the live call path), naming the values.
+    for (const [args, valid] of [
+      [{ status: "done" }, '"open"'],
+      [{ kind: "task" }, '"work"'],
+    ] as const) {
+      const r = parseToolArgs("synap_list_sessions", args);
+      expect(r.ok, JSON.stringify(args)).toBe(false);
+      const text = r.ok ? "" : (r.result.content[0] as { text: string }).text;
+      expect(text).toContain("NOTHING WAS CHANGED");
+      expect(text).toContain(Object.keys(args)[0]!);
+      expect(text).toContain(valid);
+    }
+    expect(parseToolArgs("synap_list_sessions", { status: "open" }).ok).toBe(
+      true
+    );
+    // A malformed id is the handler's, read against the shared predicate.
     await expect(list({ subjectEntityId: "nope" })).rejects.toThrow(
       /not a valid id/
     );

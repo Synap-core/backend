@@ -19,6 +19,7 @@ import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { ASK_INPUT } from "./ask-wire-schema.js";
 import { CAPTURE_TABLE_MAX_ROWS } from "../../../services/capture-agent/capture-table.js";
+import { SKILL_SCOPES } from "../../../services/capture-agent/capture-plan.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import {
@@ -111,6 +112,7 @@ import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-ans
 
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
+import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 import {
   ON_END_RETIRED_MESSAGE,
   humanOnlyStatusesSchema,
@@ -376,6 +378,14 @@ const outputSlotsInput = (description: string) =>
       })
     )
     .describe(description);
+
+/**
+ * The playbook DEFINITION fields the playbook tools take as they are, FROM the
+ * one schema (`schemas/playbook-definition.ts`), never re-declared (tripwire
+ * `playbook-definition-one-schema`): the door parses them with the
+ * definition's own bounds, advertised without them as before.
+ */
+const PLAYBOOK_DEFINITION = playbookDefinitionSchema.shape;
 
 const PLAYBOOK_PROCESS_INPUT = {
   stage: {
@@ -4359,21 +4369,21 @@ export function toolDefinitions() {
           .string()
           .optional()
           .describe("Why, shown to the reviewer."),
-        name: z.string().describe("Playbook display name."),
-        goalTemplate: z
-          .string()
-          .describe(
-            "The session goal this playbook instantiates (e.g. 'Analyze competitors for {market}', with market declared in params). Reference a param as {name}, never {{name}}."
-          ),
-        description: z
-          .string()
-          .optional()
-          .describe("What this playbook is for."),
+        name: withoutAdvertisedBounds(PLAYBOOK_DEFINITION.name).describe(
+          "Playbook display name."
+        ),
+        goalTemplate: withoutAdvertisedBounds(
+          PLAYBOOK_DEFINITION.goalTemplate
+        ).describe(
+          "The session goal this playbook instantiates (e.g. 'Analyze competitors for {market}', with market declared in params). Reference a param as {name}, never {{name}}."
+        ),
+        description: PLAYBOOK_DEFINITION.description.describe(
+          "What this playbook is for."
+        ),
         stages: PLAYBOOK_STAGES_INPUT.optional(),
-        status: z
-          .enum(["draft", "active", "paused", "archived"])
-          .optional()
-          .describe("Defaults to 'active' (immediately runnable)."),
+        status: PLAYBOOK_DEFINITION.status.describe(
+          "Defaults to 'active' (immediately runnable)."
+        ),
         workspaceId: z
           .string()
           .optional()
@@ -4390,12 +4400,9 @@ export function toolDefinitions() {
         activators: PLAYBOOK_PROCESS_INPUT.activators.optional(),
         humanOnlyStatuses: PLAYBOOK_PROCESS_INPUT.humanOnlyStatuses.optional(),
         expectedOutputs: PLAYBOOK_PROCESS_INPUT.expectedOutputs.optional(),
-        scope: z
-          .enum(["session", "project"])
-          .optional()
-          .describe(
-            "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session, which a session or a worker follows. 'project': LEGACY — a staged method a track runs (synap_start_track); a new track needs none."
-          ),
+        scope: PLAYBOOK_DEFINITION.scope.describe(
+          "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session, which a session or a worker follows. 'project': LEGACY — a staged method a track runs (synap_start_track); a new track needs none."
+        ),
         params: PLAYBOOK_PARAMS_INPUT.optional(),
         criteria: PLAYBOOK_CRITERIA_INPUT.optional(),
         guidance: PLAYBOOK_GUIDANCE_INPUT.optional(),
@@ -4428,17 +4435,17 @@ export function toolDefinitions() {
         playbookId: z
           .string()
           .describe("The playbook to edit (id from synap_list_playbooks)."),
-        name: z.string().optional().describe("New display name."),
-        goalTemplate: z
-          .string()
+        name: withoutAdvertisedBounds(PLAYBOOK_DEFINITION.name)
+          .optional()
+          .describe("New display name."),
+        goalTemplate: withoutAdvertisedBounds(PLAYBOOK_DEFINITION.goalTemplate)
           .optional()
           .describe(
             "New session goal. Reference a param as {name} (declared in params, the stored ones or the ones you pass), never {{name}}."
           ),
-        description: z
-          .string()
-          .optional()
-          .describe("What this playbook is for."),
+        description: PLAYBOOK_DEFINITION.description.describe(
+          "What this playbook is for."
+        ),
         stages: PLAYBOOK_STAGES_INPUT.optional(),
         stageEdits: z
           .array(z.record(z.string(), z.unknown()))
@@ -4467,16 +4474,12 @@ export function toolDefinitions() {
         activators: PLAYBOOK_PROCESS_INPUT.activators.optional(),
         humanOnlyStatuses: PLAYBOOK_PROCESS_INPUT.humanOnlyStatuses.optional(),
         expectedOutputs: PLAYBOOK_PROCESS_INPUT.expectedOutputs.optional(),
-        status: z
-          .enum(["draft", "active", "paused", "archived"])
-          .optional()
-          .describe("Lifecycle of the template itself (not of its subject)."),
-        scope: z
-          .enum(["session", "project"])
-          .optional()
-          .describe(
-            "'session': one focus session. 'project': LEGACY, a staged method a track runs."
-          ),
+        status: PLAYBOOK_DEFINITION.status.describe(
+          "Lifecycle of the template itself (not of its subject)."
+        ),
+        scope: PLAYBOOK_DEFINITION.scope.describe(
+          "'session': one focus session. 'project': LEGACY, a staged method a track runs."
+        ),
         reasoning: z
           .string()
           .optional()
@@ -4872,7 +4875,9 @@ export function toolDefinitions() {
               body: z
                 .string()
                 .describe("The instruction itself, markdown. REQUIRED."),
-              scope: z.enum(["pod", "user", "workspace"]),
+              // The capture plan's own skill-scope vocabulary (it refuses
+              // any other), not a renderer scope that happens to match.
+              scope: z.enum(SKILL_SCOPES),
               agentTypes: z
                 .array(z.string())
                 .optional()

@@ -180,6 +180,15 @@ describe("what is derived from the definitions", () => {
     }
   });
 
+  it("teaching keys: what a tool teaches, then its own name", () => {
+    expect(toolTeachingKeys().synap_create_entity).toEqual([
+      "entity.create",
+      "create_entity",
+      "synap_create_entity",
+    ]);
+    expect(toolTeachingKeys().synap_orient).toEqual(["synap_orient"]);
+  });
+
   it("an old name with its own argument shape advertises the OLD argument names, each with its tool's schema (the manifest is the connector's contract)", () => {
     const wire = new Map(wireTools().map((t) => [t.name, t]));
     const old = wire.get("synap_run_playbook")!.inputSchema.properties!;

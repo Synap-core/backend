@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname, resolve } from "path";
+import { wireTools } from "../routers/mcp/define-tool.js";
 
 /**
  * TRIPWIRE — every governed MCP write can state WHY, and forwards it.
@@ -51,7 +52,6 @@ import { join, dirname, resolve } from "path";
 const API_SRC = resolve(__dirname, "..");
 const HANDLERS = join(API_SRC, "routers/mcp/handlers");
 const HUB = join(API_SRC, "routers/hub-protocol");
-const TOOLS_INDEX = join(API_SRC, "routers/mcp/tools/index.ts");
 const MANIFEST = join(API_SRC, "routers/mcp/tools/mcp-tools.manifest.json");
 const PERMISSION_CHECK = join(API_SRC, "utils/permission-check.ts");
 
@@ -366,9 +366,13 @@ describe("tripwire: every governed MCP write carries a reason", () => {
     ).toEqual([]);
   });
 
-  it("every gated tool's input schema DECLARES `reasoning` (source and manifest)", () => {
-    const toolsSrc = readFileSync(TOOLS_INDEX, "utf8");
+  it("every gated tool's input schema DECLARES `reasoning` (live and manifest)", () => {
     const properties = manifestToolProperties();
+    // The schema the pod SERVES on `tools/list`, derived from each tool's zod
+    // input (`define-tool.ts`): a stale manifest cannot pass for it.
+    const live = new Map(
+      wireTools().map((t) => [t.name, t.inputSchema.properties ?? {}])
+    );
 
     const missing: string[] = [];
     for (const g of gated) {
@@ -381,21 +385,9 @@ describe("tripwire: every governed MCP write carries a reason", () => {
       ).toBeDefined();
       if (!props || !("reasoning" in props))
         missing.push(`${g.tool} (manifest)`);
-      // …and the source it is generated from, so a stale manifest cannot pass.
-      const declStart = toolsSrc.indexOf(`name: "${g.tool}",`);
-      const nextTool = toolsSrc.indexOf('name: "synap_', declStart + 1);
-      const decl = toolsSrc.slice(
-        declStart,
-        nextTool === -1 ? toolsSrc.length : nextTool
-      );
-      // A schema DERIVED from a shared contract (`*_JSON_SCHEMA`) has no literal
-      // `reasoning:`; the manifest assertion above proves what it emits.
-      if (
-        declStart === -1 ||
-        !(/\n\s*reasoning: \{/.test(decl) || /_JSON_SCHEMA\b/.test(decl))
-      ) {
-        missing.push(`${g.tool} (tools/index.ts)`);
-      }
+      // …and the live definition it is generated from.
+      if (!("reasoning" in (live.get(g.tool) ?? {})))
+        missing.push(`${g.tool} (served schema)`);
     }
     expect(
       missing,

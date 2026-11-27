@@ -118,7 +118,11 @@ import { dirname, join, relative } from "node:path";
 // gained `getRequestGrant` / `runWithoutGrant`).
 // 40 → 39 on 2026-11-18 (backend#1130): `hub-protocol/_middleware/session.test.ts`
 // converted — the session middleware now imports `runWithNamedSession`.
-const BASELINE = 39;
+// 39 → 38 on 2026-11-27 (backend#1352, one definition per MCP tool):
+// `services/capability-briefs/compose-capability-brief.test.ts` converted —
+// the composer now reads tool facts from `define-tool.ts`, whose modules need
+// the rest of the package.
+const BASELINE = 38;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

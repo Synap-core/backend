@@ -30,6 +30,7 @@ vi.mock("../../../services/profiles/change-kind-scope.js", () => ({
 }));
 
 import { workspaceHandlers } from "./workspace.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 const PROFILE = "88888888-8888-4888-8888-888888888888";
@@ -96,8 +97,20 @@ describe("synap_change_kind_scope", () => {
     expect(h.calls[0]!.input.scope).toBeUndefined();
   });
 
-  it("no profileId → an error answer, and the service is never called", async () => {
-    expect(parse(await run({ scope: "shared" })).error).toMatch(/profileId/);
+  it("no profileId → an error answer at the door, and the service is never called", () => {
+    // `profileId` is required by the tool's input: `parseToolArgs` refuses
+    // the call before any handler, as on the live call path.
+    const r = parseToolArgs("synap_change_kind_scope", { scope: "shared" });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? "" : (r.result.content[0] as { text: string }).text).toMatch(
+      /profileId/
+    );
+    expect(
+      parseToolArgs("synap_change_kind_scope", {
+        profileId: PROFILE,
+        scope: "shared",
+      }).ok
+    ).toBe(true);
     expect(h.calls).toHaveLength(0);
   });
 

@@ -67,6 +67,7 @@ type UiRendererLookup = import("../ui-tools.js").UiRendererLookup;
 
 const RENDERER = { rendererSource: "<!doctype html>", externalHosts: [] };
 const { tools } = await import("../tools/index.js");
+const { unlistedToolNames } = await import("../define-tool.js");
 
 async function listVia(uiRenderer?: UiRendererLookup) {
   const server = createMCPServer(
@@ -105,12 +106,16 @@ describe("tools/list — _meta.ui only when servable", () => {
   it("UNWIRED (default seam): tools/list equals the raw tool list, no _meta.ui anywhere", async () => {
     const { listed } = await listVia();
     const raw = await tools.list({ door: "chat" });
+    // The raw list holds every name that answers; tools/list never lists an
+    // old name or a hidden door (`filterToolsForAccess`).
+    const unlisted = unlistedToolNames();
+    expect(raw.some((t) => unlisted.has(t.name))).toBe(true);
     // Non-vacuity: a real surface that contains the tagged tool.
     expect(listed.length).toBeGreaterThan(50);
     expect(listed.map((t) => t.name)).toContain("synap_get_proposal");
     expect(listed.filter((t) => t._meta && "ui" in t._meta)).toEqual([]);
     // Over the wire the client re-parses (key order may differ) — deep-equal.
-    expect(listed).toEqual(raw);
+    expect(listed).toEqual(raw.filter((t) => !unlisted.has(t.name)));
     // At the seam itself: untouched tools are the SAME objects, not copies.
     const shaped = await withToolUiMeta(raw, NO_UI_RENDERER, {});
     shaped.forEach((t, i) => expect(t).toBe(raw[i]));
