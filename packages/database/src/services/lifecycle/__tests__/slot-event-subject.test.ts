@@ -30,7 +30,12 @@ describe("event subject id", () => {
   });
 
   it("refuses a slot id whose session part is not a uuid, or that has no key", () => {
-    for (const subjectId of ["repo:backend/pr", "/pr", `${randomUUID()}/`, "pr"]) {
+    for (const subjectId of [
+      "repo:backend/pr",
+      "/pr",
+      `${randomUUID()}/`,
+      "pr",
+    ]) {
       const r = SynapEventSchema.safeParse({
         ...base(),
         subjectType: "slot",
@@ -41,7 +46,12 @@ describe("event subject id", () => {
   });
 
   it("still refuses a non-uuid for every other subject type", () => {
-    for (const subjectType of ["entity", "focus_session", "proposal", undefined]) {
+    for (const subjectType of [
+      "entity",
+      "focus_session",
+      "proposal",
+      undefined,
+    ]) {
       const r = SynapEventSchema.safeParse({
         ...base(),
         subjectType,
