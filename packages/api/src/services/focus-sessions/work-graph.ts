@@ -34,10 +34,12 @@
  * is not drawn. Lineage is followed child → parent only (an off-window child
  * of a window parent is not fetched: lineage is read by the child's id).
  *
- * With no `kind` named, the window leaves out CLOSED automation runs
- * (`closedAutomationRunWhere`): open, failed and cancelled runs stay, and a
- * run at the far end of an edge is still fetched (far ends are any kind).
- * A `kind` named explicitly, `all` included, keeps them.
+ * With no `kind` named, the window leaves out every session an AUTOMATION
+ * opened (`notAutomationSessionWhere`, decision 90897bca, 27 Nov 2026: agents
+ * get no automation sessions until they ask; it replaces the 26 Nov default
+ * that left out only the CLOSED ones). A session at the far end of an edge is
+ * still fetched (far ends are any kind). A `kind` named explicitly, `all`
+ * included, keeps them.
  *
  * ── HONEST TRUNCATION ───────────────────────────────────────────────────────
  * At most `WORK_GRAPH_CEILING` window sessions, open ones first (the order
@@ -496,10 +498,12 @@ export interface BuildWorkGraphInput {
   windowHours?: number;
   /**
    * Population of the WINDOW (far ends are any kind). ABSENT = the default
-   * window: every kind EXCEPT closed automation runs
-   * (`closedAutomationRunWhere`, founder default 26 Nov 2026: one automation
-   * closing ~2,000 runs a day buried the map's other work under the
-   * ceiling). Named explicitly, `all` included, the window keeps them.
+   * window: every kind EXCEPT the sessions an automation opened
+   * (`notAutomationSessionWhere`, decision 90897bca, 27 Nov 2026; before it,
+   * 26 Nov, only the closed ones: one automation closing ~2,000 runs a day
+   * buried the map's other work under the ceiling). Named explicitly, `all`
+   * included, the window keeps them, and so does a `subjectEntityId` (one
+   * thing's workers' runs).
    */
   kind?: SessionKindFilter;
   /** Triage lens of the WINDOW (far ends are any lens). */
@@ -601,7 +605,11 @@ export async function buildWorkGraph(
     kind,
     lens,
     roster,
-    ...(input.kind === undefined ? { withoutClosedAutomationRuns: true } : {}),
+    // One thing's sessions keep its workers' runs (automation-opened), as
+    // the list doors do.
+    ...(input.kind === undefined && !input.subjectEntityId
+      ? { withoutAutomationSessions: true }
+      : {}),
     ...(focus && "trackId" in focus ? { trackId: focus.trackId } : {}),
     ...(focus && "rootSessionId" in focus
       ? { waveRootId: focus.rootSessionId }
