@@ -36,11 +36,15 @@
  *     pod answered (approved, proposed or denied), never an optimistic yes;
  *   - `synap:context` → the host's context (`context()`, frame contract v3),
  *     or an error when the host gives none;
- *   - navigate, toast, open-panel, surface:open, context-update → `on.*`.
+ *   - navigate, toast, open-panel, surface:open, context-update → `on.*`; a
+ *     web address is never handed to `on.navigate`: it goes to
+ *     `on.openExternal` without its query and fragment, for the host to ask
+ *     the reader first.
  *
- * Every answer is posted to that same window, only while it is still the
- * frame's, with targetOrigin "*" (an opaque-origin frame has no origin to
- * name; what is posted is only what the frame asked for).
+ * `synap:hello` hands over the document's reply port (`frame-channel.ts`).
+ * Every answer goes on that port, only while the frame is still this host's:
+ * never to the frame's window with targetOrigin "*", which a document that
+ * navigated the frame away would still receive (security review H1).
  */
 
 import {
@@ -52,6 +56,8 @@ import {
   type CellBridgeTarget,
 } from "./host.js";
 import { cellBridgeUnknownOp, type CellBridgeHostMessage } from "./protocol.js";
+import { acceptFrameHello, frameReplyTo } from "./frame-channel.js";
+import { frameExternalLink, type FrameExternalLink } from "./frame-links.js";
 import {
   cellBridgeReadRefusal,
   isCellBridgeReadOp,
@@ -129,7 +135,15 @@ export interface CellFrameHostOptions {
   on?: {
     status?: (status: CellFrameStatus) => void;
     resize?: (height: number) => void;
+    /** An in-app place (entity, view, channel, document). Never a web address. */
     navigate?: (target: CellFrameNavigationTarget) => void;
+    /**
+     * A web address the frame asked to open (`navigate({ type: "url" })`),
+     * cut to its origin and path (`frameExternalLink`): the host ASKS the
+     * reader first, naming `link.host`, and opens `link.href` only on a yes
+     * (security review H2). Absent: the frame cannot open a web address.
+     */
+    openExternal?: (link: FrameExternalLink) => void;
     toast?: (message: string, level: "info" | "error") => void;
     openPanel?: (
       panelType: "entity" | "view" | "document",
@@ -189,13 +203,16 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
     const frame = options.frameWindow();
     if (!frame || event.source !== frame) return;
     if (event.origin !== "null") return;
+    if (acceptFrameHello(frame, event)) return;
     const msg = parseCellFrameMessage(event.data);
     if (!msg) return;
 
+    // The asking document's own port, captured before anything runs.
+    const answer = frameReplyTo(frame);
     const post = (message: unknown) => {
       // The frame may have been reloaded or torn down meanwhile.
       if (options.frameWindow() !== frame) return;
-      frame.postMessage(message, "*");
+      answer(message);
     };
 
     switch (msg.type) {
@@ -223,9 +240,15 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
       case "synap:resize":
         on.resize?.(msg.height);
         return;
-      case "synap:navigate":
-        on.navigate?.(msg.target);
+      case "synap:navigate": {
+        if (msg.target.type !== "url") {
+          on.navigate?.(msg.target);
+          return;
+        }
+        const link = msg.target.url ? frameExternalLink(msg.target.url) : null;
+        if (link) on.openExternal?.(link);
         return;
+      }
       case "synap:toast":
         on.toast?.(msg.message, msg.level);
         return;

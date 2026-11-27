@@ -30,7 +30,10 @@
  * one per page.
  *
  * It only accepts answers from `window.parent` — the host — and only for an
- * id it sent. It holds no token and no pod address: there is none to hold.
+ * id it sent. The host answers on the reply port the frame handed it
+ * (`frame-channel.ts`, which runs first and re-dispatches each answer as a
+ * message from `window.parent`), never on the frame's window. It holds no
+ * token and no pod address: there is none to hold.
  *
  * Plain ES2015 in a string, so any host can inline it into a srcdoc. It never
  * contains a closing script tag (a test pins that).

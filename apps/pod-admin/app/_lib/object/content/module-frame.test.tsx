@@ -219,6 +219,22 @@ function harness(
     mechanism: opts.mechanism,
     onWriteAnswer: (r) => answers.push(r),
   });
+
+  // The frame's document hands over its reply port first (`frame-channel.ts`
+  // in the types leaf): every answer reaches it there, never on its window.
+  void onMessage({
+    source: frame,
+    origin: "null",
+    data: { type: "synap:hello" },
+    ports: [
+      {
+        postMessage: (m: unknown) => {
+          if ((m as { type?: unknown }).type !== "synap:channel:ready")
+            frame.postMessage(m);
+        },
+      },
+    ],
+  });
   const send = (data: unknown, source: unknown = frame, origin = "null") =>
     onMessage({ source, origin, data });
   return { posted, calls, answers, send, frame };

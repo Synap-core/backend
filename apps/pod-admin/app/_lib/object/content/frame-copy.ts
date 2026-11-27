@@ -19,6 +19,11 @@ export const en = {
   "tooLarge.mark": "Too large",
   "tooLarge.line": "This page is {size}. The console runs pages up to {max}.",
   "left.line": "This page tried to open another address, so it was stopped.",
+  // A link to another site: the console asks first (`frame-link-door`).
+  "link.external.title": "Open a page on {host}?",
+  "link.external.body":
+    "This page asks to open another site in a new tab. Only this address opens: anything the page added after it is left out.",
+  "link.external.open": "Open in a new tab",
   viewSource: "View source",
   "toggle.aria": "Show this page as",
   "toggle.page": "Page",
@@ -51,6 +56,10 @@ export const fr: Catalog<typeof en> = {
     "Cette page fait {size}. La console exécute les pages jusqu’à {max}.",
   "left.line":
     "Cette page a tenté d’ouvrir une autre adresse : elle a été arrêtée.",
+  "link.external.title": "Ouvrir une page de {host} ?",
+  "link.external.body":
+    "Cette page demande à ouvrir un autre site dans un nouvel onglet. Seule cette adresse s’ouvre : ce que la page y avait ajouté est retiré.",
+  "link.external.open": "Ouvrir dans un nouvel onglet",
   viewSource: "Voir la source",
   "toggle.aria": "Afficher cette page en tant que",
   "toggle.page": "Page",
