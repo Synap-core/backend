@@ -87,6 +87,20 @@ export function slotKeyAt(
 }
 
 /**
+ * The label of the slot whose key (stored, else derived) is `key`, trimmed;
+ * `null` when no slot has it. By KEY only: a lane's `forOutput` is a key the
+ * start door checked (`checkSpawnTarget`), never a label.
+ */
+export function slotLabelForKey(
+  slots: readonly unknown[],
+  key: string
+): string | null {
+  const i = deriveSlotKeys(slots).indexOf(key);
+  if (i === -1) return null;
+  return labelOf(slots[i])?.trim() || null;
+}
+
+/**
  * The FIRST slot a caller names that `accept`s — by KEY first (stored or
  * derived, exact), then by LABEL (trim + casefold). `ref` may be a key, a
  * label, or both; a bare string is tried as a key and then as a label, so a

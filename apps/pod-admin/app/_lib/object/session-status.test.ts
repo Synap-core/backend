@@ -452,6 +452,7 @@ describe("sessionParent — no parent and a failed read are two facts", () => {
         title: "Ship the wave",
         mark: { kind: expect.any(String), label: "Active" },
         forOutput: null,
+        forOutputLabel: null,
       },
     });
   });
@@ -505,6 +506,7 @@ describe("sessionChildren — the first rows and the exact total", () => {
           title: "Untitled session",
           mark: { kind: expect.any(String), label: expect.any(String) },
           forOutput: null,
+          forOutputLabel: null,
         },
       ],
     });
@@ -561,12 +563,42 @@ describe("which lane fills which output (W7 forOutput)", () => {
   });
 
   it("a lane names the output it fills by its label, never the raw key", () => {
-    expect(fillsOutputLabel("pull-request", deliverables)).toBe("Pull request");
+    const lane = (forOutput: string | null, forOutputLabel: string | null) => ({
+      forOutput,
+      forOutputLabel,
+    });
+    // The label the pod named on the packet wins.
+    expect(fillsOutputLabel(lane("pull-request", "The PR"), deliverables)).toBe(
+      "The PR"
+    );
+    // A row read without it (Show all): the deliverable's own label.
+    expect(fillsOutputLabel(lane("pull-request", null), deliverables)).toBe(
+      "Pull request"
+    );
     // An output since withdrawn: its key in words.
-    expect(fillsOutputLabel("release-notes", deliverables)).toBe(
+    expect(fillsOutputLabel(lane("release-notes", null), deliverables)).toBe(
       "Release notes"
     );
-    expect(fillsOutputLabel(null, deliverables)).toBeNull();
+    expect(fillsOutputLabel(lane(null, null), deliverables)).toBeNull();
+  });
+
+  it("a child row keeps the label the pod named", () => {
+    const view = sessionChildren({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          id: "a",
+          title: "Lane A",
+          status: "active",
+          forOutput: "pull-request",
+          forOutputLabel: "Pull request",
+        },
+      ],
+    });
+    expect(view).toMatchObject({
+      rows: [{ forOutput: "pull-request", forOutputLabel: "Pull request" }],
+    });
   });
 });
 

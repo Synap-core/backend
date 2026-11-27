@@ -344,18 +344,20 @@ export function outputLanes(
 }
 
 /**
- * The name of the parent output a lane fills: the deliverable's own label,
- * else its key in words (an output since withdrawn, or past an old key) —
- * never the raw key. Null for a child spawned for no output.
+ * The name of the parent output a lane fills: the label the pod named on the
+ * packet (`forOutputLabel`), else the deliverable's own label (a row read
+ * without it), else its key in words (an output since withdrawn) — never the
+ * raw key. Null for a child spawned for no output.
  */
 export function fillsOutputLabel(
-  forOutput: string | null,
+  row: Pick<LineageRow, "forOutput" | "forOutputLabel">,
   deliverables: ReadonlyArray<Pick<DeliverableRow, "key" | "label">>
 ): string | null {
-  if (!forOutput) return null;
+  if (!row.forOutput) return null;
   return (
-    deliverables.find((d) => d.key === forOutput)?.label ??
-    (humanizeToken(forOutput) || null)
+    row.forOutputLabel ??
+    deliverables.find((d) => d.key === row.forOutput)?.label ??
+    (humanizeToken(row.forOutput) || null)
   );
 }
 
@@ -549,6 +551,8 @@ interface LinkedSessionLike {
   closedAs?: string | null;
   /** The parent output it was spawned to deliver (W7), on a child. */
   forOutput?: string | null;
+  /** That output's label on the parent, as the pod named it. */
+  forOutputLabel?: string | null;
 }
 
 /** A linked session as a row: its name, its status mark, its id for the door. */
@@ -559,6 +563,8 @@ export interface LineageRow {
   mark: { kind: StatusKind; label: string } | null;
   /** The parent output key it delivers (a lane, W7); null otherwise. */
   forOutput: string | null;
+  /** That output's label as the pod named it; null when it did not. */
+  forOutputLabel: string | null;
 }
 
 export type SessionParent =
@@ -579,6 +585,7 @@ export function lineageRow(s: LinkedSessionLike): LineageRow {
       closedNotDone: s.closedAs === "not_done",
     }),
     forOutput: s.forOutput?.trim() || null,
+    forOutputLabel: s.forOutputLabel?.trim() || null,
   };
 }
 

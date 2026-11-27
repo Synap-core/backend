@@ -1084,8 +1084,8 @@ function SubSessionsSection({
     );
   }
   // `browse` rows carry no edge: a lane's output comes from the packet's rows.
-  const forOutputOf = new Map(
-    view.state === "ok" ? view.rows.map((r) => [r.id, r.forOutput]) : []
+  const packetRow = new Map(
+    view.state === "ok" ? view.rows.map((r) => [r.id, r]) : []
   );
   const rows: LineageRow[] =
     all && rest.data
@@ -1094,7 +1094,8 @@ function SubSessionsSection({
             id: row.id,
             title: resolveSessionTitle(row),
             status: row.status,
-            forOutput: forOutputOf.get(row.id) ?? null,
+            forOutput: packetRow.get(row.id)?.forOutput ?? null,
+            forOutputLabel: packetRow.get(row.id)?.forOutputLabel ?? null,
           })
         )
       : view.rows;
@@ -1103,7 +1104,7 @@ function SubSessionsSection({
       <ul className="flex flex-col">
         {rows.map((row) => {
           const href = hrefFor(row.id);
-          const fills = fillsOutputLabel(row.forOutput, deliverables);
+          const fills = fillsOutputLabel(row, deliverables);
           return (
             <li
               key={row.key}

@@ -21970,6 +21970,12 @@ export interface PacketChildItem {
 	 * absent when it was spawned for no output.
 	 */
 	forOutput?: string;
+	/**
+	 * That output's label on the parent (`slotLabelForKey`), so a reader draws
+	 * "fills <label>" with no second read. Absent with `forOutput`, and when
+	 * the parent no longer declares that key (a withdrawn or renamed slot).
+	 */
+	forOutputLabel?: string;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.

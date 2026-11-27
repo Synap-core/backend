@@ -142,7 +142,7 @@ import type {
   SlotAsk,
 } from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
-import { deriveSlotKeys } from "./slot-keys.js";
+import { deriveSlotKeys, slotLabelForKey } from "./slot-keys.js";
 import {
   listSessionOutputs,
   listOutputsForSessions,
@@ -417,6 +417,12 @@ export interface PacketChildItem {
    * absent when it was spawned for no output.
    */
   forOutput?: string;
+  /**
+   * That output's label on the parent (`slotLabelForKey`), so a reader draws
+   * "fills <label>" with no second read. Absent with `forOutput`, and when
+   * the parent no longer declares that key (a withdrawn or renamed slot).
+   */
+  forOutputLabel?: string;
 }
 
 /**
@@ -1473,7 +1479,9 @@ async function readInboundSessions(
   database: typeof db,
   reader: SessionReader,
   sessionId: string,
-  linkType: "spawned_from" | "blocked_by" | "orchestrated_by"
+  linkType: "spawned_from" | "blocked_by" | "orchestrated_by",
+  /** `spawned_from`: this session's declared slots, to name a lane's output. */
+  ownSlots: readonly unknown[] = []
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.fromId);
   const where = and(
@@ -1523,10 +1531,24 @@ async function readInboundSessions(
       closedAs: sessionClosedAs(r.status, r.closedNotDone),
       ...(r.skipped ? { skipped: true as const } : {}),
       ...(linkType === "spawned_from" && r.forOutput?.trim()
-        ? { forOutput: r.forOutput.trim() }
+        ? forOutputFields(r.forOutput.trim(), ownSlots)
         : {}),
     })),
   };
+}
+
+/** A lane's output: its key, and its label on the parent when it still declares it. */
+function forOutputFields(
+  key: string,
+  ownSlots: readonly unknown[]
+): Pick<PacketChildItem, "forOutput" | "forOutputLabel"> {
+  const label = slotLabelForKey(ownSlots, key);
+  return { forOutput: key, ...(label ? { forOutputLabel: label } : {}) };
+}
+
+/** The row's declared slots as stored (`expected_outputs`), `[]` when not a list. */
+function declaredSlots(row: { expectedOutputs: unknown }): readonly unknown[] {
+  return Array.isArray(row.expectedOutputs) ? row.expectedOutputs : [];
 }
 
 /**
@@ -3158,7 +3180,13 @@ export async function projectSessionShape(
       );
       return "unavailable" as const;
     }),
-    readInboundSessions(database, reader, row.id, "spawned_from").catch(
+    readInboundSessions(
+      database,
+      reader,
+      row.id,
+      "spawned_from",
+      declaredSlots(row)
+    ).catch(
       unavailable(
         row.id,
         "children",
@@ -3351,7 +3379,13 @@ export async function projectContinuationPacket(
       );
       return { available: false, reason: "availability_unknown" };
     }),
-    readInboundSessions(database, reader, row.id, "spawned_from").catch(
+    readInboundSessions(
+      database,
+      reader,
+      row.id,
+      "spawned_from",
+      declaredSlots(row)
+    ).catch(
       unavailable(
         row.id,
         "children",
