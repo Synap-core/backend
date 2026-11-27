@@ -2487,7 +2487,6 @@ export function toolDefinitions() {
             stageRunners: "stageRunners",
             startAnother: "startAnother",
           },
-          fixedArgs: { launch: true },
         },
       ],
       annotations: {
