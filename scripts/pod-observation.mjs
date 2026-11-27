@@ -13,7 +13,10 @@
  *   pull_request closed, not merged → dev.pr_closed
  *   pull_request enqueued           → dev.merge_queued (entered the merge queue)
  *   workflow_run requested          → ci.started (each attempt of a run)
- *   workflow_run completed          → ci.finished
+ *   workflow_run completed          → ci.finished (a failed run of a PR that
+ *                                     is not a draft, or of main, also carries
+ *                                     `failure`: its failing jobs, steps and
+ *                                     log tails, read from the run's jobs)
  *
  * `enqueued` and `requested` are mapped here but only reach the script once
  * pod-observations.yml subscribes to them (its `on:` lists opened / reopened /
@@ -226,7 +229,10 @@ function runStartObservation(run, repo, sessionId) {
   };
 }
 
-function runObservation(run, repo, sessionId, requiredChecks) {
+/** A run that ended red, for which a `failure` excerpt is worth reading. */
+const FAILED_STATUSES = ["failure", "timed_out"];
+
+function runObservation(run, repo, sessionId, requiredChecks, draft, failure) {
   const status = CI_STATUS[run.conclusion];
   if (!status || !run.head_sha) return null;
   return {
@@ -244,6 +250,13 @@ function runObservation(run, repo, sessionId, requiredChecks) {
       branch: run.head_branch,
       sessionId,
       requiredChecks,
+      // Only `true` is said: a run with no PR, or a ready one, carries none.
+      draft: draft ? true : undefined,
+      // A draft's red is by design (never a failure signal); a pass has none.
+      failure:
+        failure && !draft && FAILED_STATUSES.includes(status)
+          ? failure
+          : undefined,
       source: SOURCE,
     }),
   };
@@ -253,14 +266,19 @@ function runObservation(run, repo, sessionId, requiredChecks) {
  * The observation for one GitHub event, or null when the event is not one we
  * report (another pull_request action, a run from a fork).
  *
- * `sessionId` and `requiredChecks` are only used for workflow_run, whose
- * payload carries neither: the caller reads them from the run's first PR and
- * the head's check runs.
+ * `sessionId`, `requiredChecks`, `draft` and `failure` are only used for
+ * workflow_run, whose payload carries none of them: the caller reads them
+ * from the run's first PR, the head's check runs and the run's jobs.
  */
 export function observationFromEvent(
   eventName,
   payload,
-  { sessionId = null, requiredChecks = null } = {}
+  {
+    sessionId = null,
+    requiredChecks = null,
+    draft = false,
+    failure = null,
+  } = {}
 ) {
   const repo = payload?.repository?.full_name;
   if (!repo) return null;
@@ -289,14 +307,28 @@ export function observationFromEvent(
     if (run.name !== CI_WORKFLOW) return null;
     return payload.action === "requested"
       ? runStartObservation(run, repo, sessionId)
-      : runObservation(run, repo, sessionId, requiredChecks ?? undefined);
+      : runObservation(
+          run,
+          repo,
+          sessionId,
+          requiredChecks ?? undefined,
+          draft,
+          failure
+        );
   }
   return null;
 }
 
-/** GET a GitHub API path; null (said, not swallowed) when it fails. */
-async function github(path, token) {
-  const res = await fetch(`https://api.github.com/${path}`, {
+/**
+ * GET a GitHub API path; null (said, not swallowed) when it fails. The API
+ * base is GITHUB_API_URL, which Actions sets (https://api.github.com).
+ */
+async function github(path, token, { text = false } = {}) {
+  const base = (process.env.GITHUB_API_URL || "https://api.github.com").replace(
+    /\/+$/,
+    ""
+  );
+  const res = await fetch(`${base}/${path}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
@@ -307,7 +339,194 @@ async function github(path, token) {
     console.warn(`::warning::could not read ${path} (${res.status})`);
     return null;
   }
-  return res.json();
+  return text ? res.text() : res.json();
+}
+
+/** The `failure` budget: all tails together, and the lines kept per step. */
+export const FAILURE_TAIL_BYTES = 4000;
+const TAIL_LINES = 40;
+/** Steps listed, and steps whose log is read (each read is one API call). */
+const MAX_FAILED_STEPS = 5;
+const MAX_LOGGED_STEPS = 2;
+const MAX_NAME = 256;
+
+/**
+ * A step that only reports ANOTHER job's failure: the Release gate and Full
+ * suite judges ("Every … succeeded"), a preflight hold, a draft's held suites
+ * (.github/workflows/ci.yml). Its log says "a job failed", never why, so the
+ * root steps come first and get the log budget.
+ */
+const CASCADE_STEP_RE =
+  /^(Every .* succeeded|Suites not run\b|Preflight red\b)/;
+
+const ANSI_RE =
+  // CSI sequences (colours, cursor) and OSC sequences (titles, links).
+  /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+export function stripAnsi(text) {
+  return String(text).replace(ANSI_RE, "");
+}
+
+/**
+ * Token-like strings are replaced by `[redacted]` before a log line leaves
+ * GitHub (Actions masks its own secrets as ***; this catches the rest):
+ * GitHub tokens, bearer / basic credentials, `key=value` secrets, JWTs, AWS
+ * key ids, and any 32+ character run mixing upper case, lower case and
+ * digits. A lowercase hex sha is not touched.
+ */
+const SECRET_RES = [
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
+  /\b(Bearer|Basic)(\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\b([A-Za-z0-9_]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?)[^\s"']{8,}/gi,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\b(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}/g,
+];
+export function redactSecrets(text) {
+  let out = String(text);
+  out = out.replace(SECRET_RES[0], "[redacted]");
+  out = out.replace(SECRET_RES[1], "$1$2[redacted]");
+  out = out.replace(SECRET_RES[2], "$1[redacted]");
+  for (const re of SECRET_RES.slice(3)) out = out.replace(re, "[redacted]");
+  return out;
+}
+
+/** GitHub's job log prefixes each line with an ISO time (7-digit fraction). */
+const LOG_TIME_RE = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) ?/;
+
+/** The last `lines` that fit in `maxBytes` (a lone long line: its end). */
+function tailWithin(lines, maxBytes) {
+  const kept = [];
+  let bytes = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const add = Buffer.byteLength(lines[i]) + (kept.length ? 1 : 0);
+    if (bytes + add > maxBytes) {
+      if (!kept.length) {
+        // One line longer than the budget: its end, where the error is.
+        let s = lines[i].slice(-maxBytes);
+        while (Buffer.byteLength(s) > maxBytes)
+          s = s.slice(Math.max(1, (Buffer.byteLength(s) - maxBytes) >> 2));
+        kept.unshift(s);
+      }
+      break;
+    }
+    kept.unshift(lines[i]);
+    bytes += add;
+  }
+  return kept.join("\n");
+}
+
+/**
+ * The tail of ONE step's lines in a job log: the lines timed between the
+ * step's start and end (GitHub gives those to the second), without their time
+ * prefix, ANSI stripped and token-like strings redacted, at most TAIL_LINES
+ * lines and `maxBytes` bytes. When no line falls in the step's window (an
+ * unknown log shape), the job log's own tail stands in. Pure.
+ */
+export function stepLogTail(log, step, maxBytes = FAILURE_TAIL_BYTES) {
+  const lines = String(log ?? "")
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/);
+  const from = Date.parse(step?.started_at ?? "");
+  // The end is given to the second: every line of that second is in.
+  const to = Date.parse(step?.completed_at ?? "") + 1000;
+  const inStep = [];
+  const all = [];
+  for (const raw of lines) {
+    const m = LOG_TIME_RE.exec(raw);
+    const line = redactSecrets(stripAnsi(m ? raw.slice(m[0].length) : raw));
+    if (!line.trim()) continue;
+    all.push(line);
+    if (m && !Number.isNaN(from) && !Number.isNaN(to)) {
+      const t = Date.parse(m[1]);
+      if (t >= from && t < to) inStep.push(line);
+    }
+  }
+  const chosen = (inStep.length ? inStep : all).slice(-TAIL_LINES);
+  return tailWithin(chosen, maxBytes);
+}
+
+/**
+ * The failing steps of a run's jobs (the `jobs` array of
+ * GET /repos/{repo}/actions/runs/{id}/jobs): per failed job, its first failed
+ * step, root steps before cascade ones. Pure.
+ */
+export function failedSteps(jobs) {
+  const out = [];
+  for (const job of jobs ?? []) {
+    if (!FAILED_STATUSES.includes(job?.conclusion)) continue;
+    const step = (job.steps ?? []).find((s) =>
+      FAILED_STATUSES.includes(s?.conclusion)
+    );
+    out.push({ job, step: step ?? null });
+  }
+  const cascade = (f) => (f.step && CASCADE_STEP_RE.test(f.step.name) ? 1 : 0);
+  return out
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => cascade(a.f) - cascade(b.f) || a.i - b.i)
+    .map(({ f }) => f)
+    .slice(0, MAX_FAILED_STEPS);
+}
+
+/**
+ * Where a failed run broke, for `failure` (ciFailureSchema in dev-loop.ts):
+ * the failing jobs and steps, with the tail of the first root steps' logs.
+ * Null when it is not computed: no token, a run that did not fail, a draft
+ * PR (red by design) or one whose draft state could not be read, or the jobs
+ * could not be read. A log that cannot be read leaves that step's `tail` out.
+ * Never throws: the observation must still be posted (a failed read is said
+ * as a warning, not a red check).
+ */
+export async function runFailureFacts(payload, token, { draft = false } = {}) {
+  const run = payload?.workflow_run;
+  // A draft, or a PR whose draft state is unknown (null): red by design.
+  if (!token || draft !== false || !run?.id) return null;
+  if (!FAILED_STATUSES.includes(CI_STATUS[run.conclusion])) return null;
+  const repo = payload.repository.full_name;
+  try {
+    const jobs = await github(
+      `repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`,
+      token
+    );
+    const failed = failedSteps(jobs?.jobs);
+    if (!failed.length) return null;
+    const logged = failed
+      .filter((f) => f.step && !CASCADE_STEP_RE.test(f.step.name))
+      .slice(0, MAX_LOGGED_STEPS);
+    const budget = Math.floor(FAILURE_TAIL_BYTES / Math.max(1, logged.length));
+    const tails = new Map();
+    for (const f of logged) {
+      const log = await github(
+        `repos/${repo}/actions/jobs/${f.job.id}/logs`,
+        token,
+        { text: true }
+      ).catch((err) => {
+        console.warn(
+          `::warning::could not read the log of job ${f.job.id}: ${err?.message ?? err}`
+        );
+        return null;
+      });
+      if (log != null) {
+        const tail = stepLogTail(log, f.step, budget);
+        if (tail) tails.set(f, tail);
+      }
+    }
+    return {
+      steps: failed.map((f) =>
+        compact({
+          job: String(f.job.name || `job ${f.job.id}`).slice(0, MAX_NAME),
+          step: f.step?.name
+            ? String(f.step.name).slice(0, MAX_NAME)
+            : undefined,
+          tail: tails.get(f),
+        })
+      ),
+    };
+  } catch (err) {
+    console.warn(
+      `::warning::could not read where run ${run.id} failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return null;
+  }
 }
 
 /**
@@ -317,7 +536,8 @@ async function github(path, token) {
  */
 async function runPrFacts(payload, token) {
   const pr = payload.workflow_run?.pull_requests?.[0];
-  if (!pr || !token) return { sessionId: null, requiredChecks: null };
+  if (!pr || !token)
+    return { sessionId: null, requiredChecks: null, draft: false };
   const repo = payload.repository.full_name;
   const sha = payload.workflow_run.head_sha;
   const [pull, checks] = await Promise.all([
@@ -334,6 +554,8 @@ async function runPrFacts(payload, token) {
             mergeableState: pull.mergeable_state,
           })
         : null,
+    // Unknown (null) when the PR could not be read: no failure is read then.
+    draft: pull ? Boolean(pull.draft) : null,
   };
 }
 
@@ -387,13 +609,19 @@ async function main() {
   const payload = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")
   );
-  const { sessionId, requiredChecks } =
-    eventName === "workflow_run"
-      ? await runPrFacts(payload, process.env.GITHUB_TOKEN)
-      : { sessionId: null, requiredChecks: null };
+  const isRun = eventName === "workflow_run";
+  const { sessionId, requiredChecks, draft } = isRun
+    ? await runPrFacts(payload, process.env.GITHUB_TOKEN)
+    : { sessionId: null, requiredChecks: null, draft: false };
+  const failure =
+    isRun && payload.action === "completed"
+      ? await runFailureFacts(payload, process.env.GITHUB_TOKEN, { draft })
+      : null;
   const obs = observationFromEvent(eventName, payload, {
     sessionId,
     requiredChecks,
+    draft,
+    failure,
   });
   if (!obs) {
     console.log(`Nothing to report for ${eventName}/${payload.action}.`);

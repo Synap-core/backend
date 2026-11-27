@@ -282,6 +282,28 @@ export const requiredChecksSchema = z.object({
 export type RequiredChecks = z.infer<typeof requiredChecksSchema>;
 
 /**
+ * Where a failed CI run broke, so an agent woken on it can start fixing
+ * without opening the log: the failing job and step, and the TAIL of that
+ * step's log (ANSI stripped, token-like strings redacted; the producer keeps
+ * all tails together under ~4 KB). Root failures come first; a step that only
+ * reports another job's failure ("Every … succeeded") is listed after them.
+ * Absent = not computed (a pass, a draft, or the logs could not be read).
+ */
+export const ciFailureSchema = z.object({
+  steps: z
+    .array(
+      z.object({
+        job: z.string().min(1).max(256),
+        step: z.string().min(1).max(256).optional(),
+        tail: z.string().max(4096).optional(),
+      })
+    )
+    .min(1)
+    .max(5),
+});
+export type CiFailure = z.infer<typeof ciFailureSchema>;
+
+/**
  * Does a `ci.finished` of this workflow count as "the PR's checks finished"?
  * Only the CI workflow and a devbox gate job do. Any other workflow
  * (Depends-On, merge bot, pod observations) is not CI: its success must never
@@ -307,6 +329,14 @@ export const ciFinishedEventSchema = z.object({
    * the producer did not compute it: a reader must not say "passed" for it.
    */
   requiredChecks: requiredChecksSchema.optional(),
+  /**
+   * The run was for a draft PR. A draft's CI is red by design ("Suites not
+   * run (draft)"): a reader must not wake an agent on it, and the producer
+   * sends no `failure` for it.
+   */
+  draft: z.boolean().optional(),
+  /** Where a failed run broke (see ciFailureSchema). */
+  failure: ciFailureSchema.optional(),
 });
 export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 
@@ -318,6 +348,8 @@ export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 export const ciStartedEventSchema = ciFinishedEventSchema.omit({
   status: true,
   requiredChecks: true,
+  draft: true,
+  failure: true,
 });
 export type CiStartedEvent = z.infer<typeof ciStartedEventSchema>;
 

@@ -30,11 +30,16 @@ import {
 import {
   POD_SESSION_LINE_RE as SCRIPT_POD_SESSION_LINE_RE,
   REQUIRED_CHECK_NAMES as SCRIPT_REQUIRED_CHECK_NAMES,
+  FAILURE_TAIL_BYTES,
+  failedSteps,
   isKeyRefusal,
   observationFromEvent,
   podSessionFromBody,
   postObservation,
+  redactSecrets,
   requiredChecksVerdict,
+  stepLogTail,
+  stripAnsi,
 } from "./pod-observation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -656,5 +661,349 @@ describe("ci.finished says whether the required checks are green", () => {
       pending: ["Full suite"],
     });
     expect(checkDevLoopPayload("ci.finished", o.data).ok).toBe(true);
+  });
+});
+
+/**
+ * Lane B findings 3983d682 (Q2): a red ci.finished carried check names and a
+ * URL, no failed step and no log. A failed run now carries `failure`: the
+ * failing jobs and steps, with the tail of the root step's log (ANSI
+ * stripped, token-like strings redacted, under FAILURE_TAIL_BYTES). A draft's
+ * red is by design and carries none; a pass is unchanged; a GitHub read that
+ * fails degrades to the payload without `failure`, and the post still exits 0.
+ * Not covered: the real GitHub log shape on a live red run (the fixtures
+ * follow the documented `<ISO time> <text>` line shape).
+ */
+describe("ci.finished says where a failed run broke", () => {
+  // Built at run time so no token-shaped literal sits in this public file.
+  const GH_TOKEN = [
+    "ghp",
+    "_",
+    "Q".repeat(12),
+    "7".repeat(12),
+    "z".repeat(12),
+  ].join("");
+  const KEY_VALUE = ["api", "_key=", "s3cr3t", "V".repeat(10)].join("");
+  const ESC = "\u001b";
+  const t = (s: string) => `2026-11-26T23:41:${s}Z`;
+  const filler = "x".repeat(190);
+  const LOG = [
+    "﻿2026-11-26T23:40:00.0000000Z ##[group]Run pnpm install",
+    "2026-11-26T23:40:30.0000000Z Done in 30s (install step, before the failing one)",
+    `${t("00.1234567")} ##[group]Run pnpm --filter @synap/api gen-types:check`,
+    ...Array.from(
+      { length: 60 },
+      (_, i) => `${t("01.0000000")} ${filler} ${i}`
+    ),
+    `${t("05.0000000")} ${ESC}[31mError: generated.d.ts is out of date${ESC}[0m`,
+    `${t("05.5000000")} using ${GH_TOKEN} and ${KEY_VALUE}`,
+    `${t("09.9000000")} ##[error]Process completed with exit code 1.`,
+    `${t("10.0000000")} Post job cleanup.`,
+  ].join("\n");
+  const failingStep = {
+    name: "Verify generated API types are up to date",
+    conclusion: "failure",
+    started_at: "2026-11-26T23:41:00Z",
+    completed_at: "2026-11-26T23:41:09Z",
+  };
+  const JOBS = [
+    {
+      id: 11,
+      name: "Release gate",
+      conclusion: "failure",
+      steps: [
+        { name: "Set up job", conclusion: "success" },
+        { name: "Every Release gate job succeeded", conclusion: "failure" },
+      ],
+    },
+    {
+      id: 12,
+      name: "Release gate: typecheck, build, boot",
+      conclusion: "failure",
+      steps: [
+        { name: "Install", conclusion: "success" },
+        failingStep,
+        { name: "Boot", conclusion: "skipped" },
+      ],
+    },
+    { id: 13, name: "Preflight", conclusion: "success", steps: [] },
+  ];
+
+  it("strips ANSI and redacts token-like strings, keeping a sha", () => {
+    expect(stripAnsi(`${ESC}[1;31mred${ESC}[0m ${ESC}]0;title\u0007ok`)).toBe(
+      "red ok"
+    );
+    const sha = "64da8f353c0123456789abcdef0123456789abcd";
+    const out = redactSecrets(
+      `${GH_TOKEN} Authorization: Bearer abcdefgh12345678 ${KEY_VALUE} ${sha}`
+    );
+    expect(out).not.toContain(GH_TOKEN);
+    expect(out).not.toContain("abcdefgh12345678");
+    expect(out).not.toContain("s3cr3t");
+    expect(out).toContain(sha);
+    expect(out.match(/\[redacted\]/g)?.length).toBe(3);
+  });
+
+  it("keeps the tail of the failing step only: stripped, redacted, capped", () => {
+    const tail = stepLogTail(LOG, failingStep);
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(FAILURE_TAIL_BYTES);
+    // The tail, where the error is: the step's last line is kept.
+    expect(tail.endsWith("##[error]Process completed with exit code 1.")).toBe(
+      true
+    );
+    expect(tail).toContain("Error: generated.d.ts is out of date");
+    expect(tail).not.toContain(ESC);
+    expect(tail).not.toContain(GH_TOKEN);
+    expect(tail).not.toContain("s3cr3t");
+    expect(tail).toContain("[redacted]");
+    // Not another step's lines, and no time prefix.
+    expect(tail).not.toContain("Post job cleanup");
+    expect(tail).not.toContain("Run pnpm install");
+    expect(tail).not.toMatch(/^\d{4}-\d\d-\d\dT/m);
+    // The byte cap binds: 40 lines of ~200 bytes would not fit.
+    expect(tail.split("\n").length).toBeLessThan(40);
+    // A smaller budget is honoured, a lone long line cut from its end.
+    const small = stepLogTail(
+      `${t("05.0000000")} ${"y".repeat(500)}END`,
+      failingStep,
+      100
+    );
+    expect(Buffer.byteLength(small)).toBeLessThanOrEqual(100);
+    expect(small.endsWith("END")).toBe(true);
+  });
+
+  it("puts the root failing step before a cascade one", () => {
+    expect(failedSteps(JOBS).map((f) => [f.job.name, f.step?.name])).toEqual([
+      ["Release gate: typecheck, build, boot", failingStep.name],
+      ["Release gate", "Every Release gate job succeeded"],
+    ]);
+  });
+
+  const failure = {
+    steps: [
+      {
+        job: "Release gate: typecheck, build, boot",
+        step: failingStep.name,
+        tail: "Error: generated.d.ts is out of date",
+      },
+    ],
+  };
+  const finished = (conclusion: string, draft: boolean) =>
+    observationFromEvent(
+      "workflow_run",
+      { action: "completed", workflow_run: run({ conclusion }), repository },
+      { sessionId: SID, draft, failure }
+    )!;
+
+  it("a failed run carries its failure, and the contract accepts it", () => {
+    const o = finished("failure", false);
+    expect(o.data.failure).toEqual(failure);
+    expect(o.data).not.toHaveProperty("draft");
+    expect(checkDevLoopPayload("ci.finished", o.data)).toEqual({
+      contract: true,
+      ok: true,
+    });
+    // The contract bounds what a producer may send.
+    expect(
+      checkDevLoopPayload("ci.finished", {
+        ...o.data,
+        failure: { steps: [{ job: "x", tail: "z".repeat(5000) }] },
+      }).ok
+    ).toBe(false);
+  });
+
+  it("a draft's red carries no failure, and says it is a draft", () => {
+    const o = finished("failure", true);
+    expect(o.data).not.toHaveProperty("failure");
+    expect(o.data.draft).toBe(true);
+    expect(checkDevLoopPayload("ci.finished", o.data).ok).toBe(true);
+  });
+
+  it("a passed run is unchanged: no failure, no draft", () => {
+    const o = finished("success", false);
+    expect(Object.keys(o.data).sort()).toEqual(
+      [
+        "branch",
+        "pr",
+        "repo",
+        "sessionId",
+        "sha",
+        "source",
+        "status",
+        "url",
+        "workflow",
+      ].sort()
+    );
+  });
+
+  /**
+   * The script end to end: one local server plays the pod AND the GitHub API
+   * (GITHUB_API_URL, which Actions sets), so the seam from the run's jobs to
+   * the posted body is driven with nothing hand-built in between.
+   */
+  async function postRun(opts: {
+    conclusion: string;
+    draft?: boolean;
+    jobsStatus?: number;
+    logsStatus?: number;
+  }) {
+    const hits: string[] = [];
+    let posted: { type: string; data: Record<string, unknown> } | null = null;
+    const server = createServer((req, res) => {
+      const url = req.url ?? "";
+      let body = "";
+      req.on("data", (d) => (body += d));
+      req.on("end", () => {
+        hits.push(url);
+        const json = (status: number, v: unknown) => {
+          res.writeHead(status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(v));
+        };
+        if (url.endsWith("/observations.append")) {
+          posted = JSON.parse(body).json.observations[0];
+          return json(200, {
+            result: { data: { json: { results: [{ ok: true, index: 0 }] } } },
+          });
+        }
+        if (url.startsWith("/repos/Synap-core/backend/pulls/42"))
+          return json(
+            200,
+            pr({ draft: Boolean(opts.draft), mergeable_state: "blocked" })
+          );
+        if (url.includes("/check-runs"))
+          return json(200, {
+            check_runs: [
+              {
+                id: 1,
+                name: "Release gate",
+                status: "completed",
+                conclusion: "failure",
+              },
+            ],
+          });
+        if (url.startsWith("/repos/Synap-core/backend/actions/runs/7/jobs"))
+          return (opts.jobsStatus ?? 200) === 200
+            ? json(200, { total_count: JOBS.length, jobs: JOBS })
+            : json(opts.jobsStatus!, { message: "boom" });
+        if (url === "/repos/Synap-core/backend/actions/jobs/12/logs") {
+          if ((opts.logsStatus ?? 200) !== 200)
+            return json(opts.logsStatus!, { message: "forbidden" });
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          return res.end(LOG);
+        }
+        json(404, { message: "not found" });
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const eventPath = join(
+      mkdtempSync(join(tmpdir(), "pod-obs-")),
+      "event.json"
+    );
+    writeFileSync(
+      eventPath,
+      JSON.stringify({
+        action: "completed",
+        workflow_run: run({ id: 7, conclusion: opts.conclusion }),
+        repository,
+      })
+    );
+    try {
+      const child = spawn(process.execPath, [SCRIPT], {
+        env: {
+          ...process.env,
+          SYNAP_POD_URL: base,
+          SYNAP_OBS_KEY: "k",
+          GITHUB_API_URL: base,
+          GITHUB_TOKEN: "t",
+          GITHUB_EVENT_NAME: "workflow_run",
+          GITHUB_EVENT_PATH: eventPath,
+        },
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      const code = await new Promise<number | null>((r) =>
+        child.on("close", r)
+      );
+      return {
+        code,
+        out,
+        hits,
+        posted: posted as {
+          type: string;
+          data: Record<string, unknown>;
+        } | null,
+      };
+    } finally {
+      server.close();
+    }
+  }
+  const jobsRead = (hits: string[]) => hits.some((h) => h.includes("/jobs"));
+  type Failure = { steps: { job: string; step?: string; tail?: string }[] };
+
+  it("a failed run posts its failing step and log tail", async () => {
+    const r = await postRun({ conclusion: "failure" });
+    expect(r.code, r.out).toBe(0);
+    const f = r.posted?.data.failure as Failure;
+    expect(f.steps[0]).toMatchObject({
+      job: "Release gate: typecheck, build, boot",
+      step: failingStep.name,
+    });
+    expect(f.steps[0]!.tail).toContain("Error: generated.d.ts is out of date");
+    expect(f.steps[0]!.tail).not.toContain(ESC);
+    expect(f.steps[0]!.tail).not.toContain(GH_TOKEN);
+    // The cascade step is listed; its log is not read.
+    expect(f.steps[1]).toEqual({
+      job: "Release gate",
+      step: "Every Release gate job succeeded",
+    });
+    expect(r.hits).not.toContain(
+      "/repos/Synap-core/backend/actions/jobs/11/logs"
+    );
+    const total = f.steps.reduce(
+      (n, s) => n + Buffer.byteLength(s.tail ?? ""),
+      0
+    );
+    expect(total).toBeLessThanOrEqual(FAILURE_TAIL_BYTES);
+    expect(checkDevLoopPayload("ci.finished", r.posted!.data).ok).toBe(true);
+  });
+
+  it("a draft's failed run reads no jobs and posts no failure", async () => {
+    const r = await postRun({ conclusion: "failure", draft: true });
+    expect(r.code, r.out).toBe(0);
+    expect(jobsRead(r.hits)).toBe(false);
+    expect(r.posted?.data).not.toHaveProperty("failure");
+    expect(r.posted?.data.draft).toBe(true);
+  });
+
+  it("a passed run reads no jobs and posts today's payload", async () => {
+    const r = await postRun({ conclusion: "success" });
+    expect(r.code, r.out).toBe(0);
+    expect(jobsRead(r.hits)).toBe(false);
+    expect(r.posted?.data).not.toHaveProperty("failure");
+    expect(r.posted?.data).not.toHaveProperty("draft");
+  });
+
+  it("a GitHub error reading the jobs degrades to the payload without failure, exit 0", async () => {
+    const r = await postRun({ conclusion: "failure", jobsStatus: 500 });
+    expect(r.code, r.out).toBe(0);
+    expect(jobsRead(r.hits)).toBe(true);
+    expect(r.out).toContain("::warning::could not read");
+    expect(r.out).not.toContain("::error::");
+    expect(r.posted?.type).toBe("ci.finished");
+    expect(r.posted?.data).not.toHaveProperty("failure");
+    expect(r.posted?.data).toMatchObject({ status: "failure", sessionId: SID });
+  });
+
+  it("a log that cannot be read keeps the failing step, without a tail", async () => {
+    const r = await postRun({ conclusion: "failure", logsStatus: 403 });
+    expect(r.code, r.out).toBe(0);
+    const f = r.posted?.data.failure as Failure;
+    expect(f.steps[0]).toEqual({
+      job: "Release gate: typecheck, build, boot",
+      step: failingStep.name,
+    });
+    expect(checkDevLoopPayload("ci.finished", r.posted!.data).ok).toBe(true);
   });
 });
