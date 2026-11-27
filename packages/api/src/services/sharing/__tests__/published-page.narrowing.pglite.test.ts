@@ -129,8 +129,8 @@ beforeAll(async () => {
   );
   await q(
     `insert into proposals (id, target_type, target_id, proposal_type, status, data, api_key_id)
-     values ($1,'document',$1,'create','approved','{}'::jsonb,$2), ($3,'document',$3,'create','approved','{}'::jsonb,$4)`,
-    [P_WROTE, KEY, P_OLD, OLD_KEY]
+     values ($1,'document',$2,'create','approved','{}'::jsonb,$3), ($4,'document',$5,'create','approved','{}'::jsonb,$6)`,
+    [P_WROTE, P_WROTE, KEY, P_OLD, P_OLD, OLD_KEY]
   );
 }, 120_000);
 
