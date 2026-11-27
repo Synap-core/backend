@@ -13819,7 +13819,8 @@ declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"waits_on_output",
 	"triggered",
 	"updated",
-	"serves"
+	"serves",
+	"replaces"
 ];
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
@@ -28103,6 +28104,14 @@ export interface WorkGraphWindow {
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
 export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {
 	/**
+	 * How it ended (`sessionClosedAs`, one derivation with the dependency rule:
+	 * `done`, or `not_done` for a close-anyway / a failed or cancelled end).
+	 * ABSENT = not ended (or a pod from before this field: a reader then reads a
+	 * closed step as done, as `deriveStepReadiness` does).
+	 */
+	closedAs?: SessionClosedAs;
+	dueBy?: string;
+	/**
 	 * Who has it now (`readSessionHolder`'s derivation, `attachSessionHolder`):
 	 * `unavailable` when a fact it needs could not be read, never "nobody".
 	 */
@@ -28110,6 +28119,11 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * The step's time, lifted off `metadata` (`stepTimeOf`; only a valid date).
+	 * ABSENT = none declared (or a pod from before these fields).
+	 */
+	plannedFor?: string;
 	/**
 	 * With the `playbookId` narrow, how this window node follows it: `session`
 	 * = its own `playbookId` is the playbook, `goal` = only through the method
@@ -28152,7 +28166,10 @@ declare const WORK_GRAPH_APP_NODE_FIELDS: readonly [
 	"viewerRole",
 	"inWindow",
 	"playbookMatch",
-	"skipped"
+	"skipped",
+	"plannedFor",
+	"dueBy",
+	"closedAs"
 ];
 export type WorkGraphAppNode = Pick<WorkGraphNode, (typeof WORK_GRAPH_APP_NODE_FIELDS)[number]>;
 declare const LANDED_DECISION_STATES: readonly [
