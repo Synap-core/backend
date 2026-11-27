@@ -26,6 +26,15 @@ vi.mock("../../../services/cells/define-cell.js", async (importOriginal) => ({
   defineCell: (args: { workspaceId: string | null }) => defineCell(args),
 }));
 vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
+// A pod-wide cell is approved only by a pod admin (surfaces review M1): the
+// approver's standing is the one read this test switches.
+const podAdmin = { value: true };
+vi.mock("../../../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../utils/workspace-role.js")
+  >()),
+  isPodAdmin: async () => podAdmin.value,
+}));
 
 // The executor only does: select(status).from(proposals).where(...)  [no limit]
 // and update(proposals).set(...).where(...).
@@ -97,7 +106,10 @@ const run = async (args: {
   return call[0];
 };
 
-beforeEach(() => defineCell.mockClear());
+beforeEach(() => {
+  defineCell.mockClear();
+  podAdmin.value = true;
+});
 
 describe("cell/define approval scope", () => {
   // NOTE (bite-check, measured): this first case passes under the OLD `??`
@@ -128,5 +140,13 @@ describe("cell/define approval scope", () => {
       payloadWorkspaceId: "ws-payload",
     });
     expect(call.workspaceId).toBeNull();
+  });
+
+  it("refuses a pod-wide proposal approved by someone who is not a pod admin: nothing defined", async () => {
+    podAdmin.value = false;
+    await expect(
+      run({ proposalWorkspaceId: null, payloadWorkspaceId: null })
+    ).rejects.toThrow(/pod admin/);
+    expect(defineCell).not.toHaveBeenCalled();
   });
 });
