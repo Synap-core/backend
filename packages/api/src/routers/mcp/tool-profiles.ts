@@ -197,13 +197,14 @@ export interface KeyToolAccess {
 
 /**
  * The tool names a key may reach: the entry tools plus every tool of its
- * unlocked groups (hidden doors included: `synap_call_tool` runs them), or
+ * unlocked groups (hidden doors and old names included: `synap_call_tool`
+ * runs them), or
  * `null` for "every tool" (legacy NULL and `builder`). Unknown group strings
  * in storage are ignored, never widened.
  */
 export function visibleToolNames(access: KeyToolAccess): Set<string> | null {
   if (access.profile !== "entry") return null;
-  const names = new Set<string>(entryToolNames());
+  const names = new Set<string>(entryToolNames(true));
   const groups = toolGroupMembers(true) as Record<string, string[]>;
   for (const g of access.groups) {
     if (!Object.hasOwn(groups, g)) continue;

@@ -240,7 +240,7 @@ export interface RunPlaybookInput {
    * Producers: the automation `playbook_run` node (`data.handToAgentId`, from
    * a playbook's `schedule.handToAgentId`) and every manual run door
    * (`playbooks.run`, Hub REST `POST /playbooks/:id/run`, MCP
-   * `synap_run_playbook`, and the approved replay of a gated run). An agent
+   * `synap_start_session` `launch: true`, and the approved replay of a gated run). An agent
    * may hand a run only to ITSELF; its run is then held as the person's draft
    * and the hand-off rides with the hold (`HeldRun.handToAgentId`). An agent
    * handing work to another agent is `focus_session/assign_agent`, gated by

@@ -35,7 +35,33 @@ const NULLABLE =
 const TEXT_EDITS =
   "textEdits added to the patch in ac87e604, after the manifest was frozen";
 
+const LAUNCH =
+  "synap_run_playbook folded into synap_start_session `launch: true` (review B2 F5): its inputs, and goal no longer required";
+
+/**
+ * `synap_run_playbook` is now an old name of `synap_start_session` with
+ * `launch: true` (review B2 F5): it keeps its argument NAMES (a missing or an
+ * added one is still a difference), each advertised with start_session's
+ * schema of the input it maps to.
+ */
+const ALIAS_OF_START = (path: string) =>
+  /^synap_run_playbook\.properties\.[^.]+\./.test(path);
+
 const ACCEPTED: Record<string, string> = {
+  ...Object.fromEntries(
+    [
+      "properties.launch",
+      "properties.playbookName",
+      "properties.handToAgentId",
+      "properties.runner",
+      "properties.stageRunners",
+      "properties.startAnother",
+      "properties.reasoning",
+      "properties.goal.description",
+      "properties.templateId.description",
+      "required",
+    ].map((p) => [`synap_start_session.${p}`, LAUNCH])
+  ),
   "synap_start_session.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_update_session.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_set_track_params.properties.params.additionalProperties": VACUOUS_OPEN,
@@ -124,7 +150,10 @@ describe("oracle: the zod inputs derive the JSON Schema the tools advertised", (
     const found = Object.entries(FROZEN).flatMap(([name, frozen]) =>
       differences(canon(frozen), canon(derived.get(name)), name)
     );
-    expect(found.filter((p) => !(p in ACCEPTED))).toEqual([]);
+    expect(
+      found.filter((p) => !(p in ACCEPTED) && !ALIAS_OF_START(p))
+    ).toEqual([]);
+    expect(found.some(ALIAS_OF_START)).toBe(true);
     expect(Object.keys(ACCEPTED).filter((p) => !found.includes(p))).toEqual([]);
   });
 });

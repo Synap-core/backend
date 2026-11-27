@@ -6,7 +6,8 @@
  * name can still collide (CRM "Hygiene" vs Sales "Hygiene"); this door returns
  * candidates instead of inventing a winner.
  *
- * Used by MCP `synap_run_playbook` (playbookId OR unambiguous playbookName).
+ * Used by MCP `synap_start_session` `launch: true` (templateId OR unambiguous
+ * playbookName).
  */
 
 import {

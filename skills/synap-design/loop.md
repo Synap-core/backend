@@ -7,7 +7,7 @@ catalog ──► Puck JSON ──► 3 ui-design variants ──► critique �
 ```
 
 The process "Design to implementation" (Builder space) carries a design from draft to merged. A
-person, or an agent asked to, starts it on the request design with `synap_run_playbook`; it does not
+person, or an agent asked to, starts it on the request design with `synap_start_session` (`templateId`, `launch: true`); it does not
 start itself on every new `ui-design`, because sibling variants are `ui-design`s too.
 
 ## 1. The design is a canvas of Puck pages from real components

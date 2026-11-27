@@ -43,6 +43,7 @@ import { stageRunnerSchema } from "../../../schemas/playbook-runner.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { sessionWriteEcho } from "./session-write-echo.js";
+import { launchPlaybook, LAUNCH_ONLY_INPUTS } from "./build.js";
 import { fitReply } from "./fit-reply.js";
 import {
   waitForConversationChanges,
@@ -503,6 +504,21 @@ export const sessionHandlers = {
           "parentSessionId must be a session UUID (the id of a session you own that you are pushing FROM).",
       });
     }
+    // A LAUNCH runs the playbook through the shared run door; a start opens
+    // a session the caller works, and takes none of the launch inputs.
+    if (args.launch === true) return launchPlaybook(ctx);
+    const launchOnly = LAUNCH_ONLY_INPUTS.filter((k) => args[k] !== undefined);
+    if (launchOnly.length > 0) {
+      return ok({
+        error: `${launchOnly.map((k) => `\`${k}\``).join(", ")} only with launch: true (RUN the playbook) — NOTHING WAS CHANGED. Add launch: true, or leave ${launchOnly.length > 1 ? "them" : "it"} out to start a session you work.`,
+      });
+    }
+    if (args.goal === undefined) {
+      return ok({
+        error:
+          "goal is required — NOTHING WAS CHANGED: one outcome sentence for the session (or launch: true to run a playbook, whose goal it carries).",
+      });
+    }
     // Same reason: the blockers are session handles — refused here in words,
     // not as a uuid error (a title's length is the input's).
     const blockedByArg = args.blockedBySessionIds;
@@ -607,7 +623,7 @@ export const sessionHandlers = {
         subjectEntityId: args.subjectEntityId as string | undefined,
         subjectRef,
         title: typeof args.title === "string" ? args.title : null,
-        goal: args.goal as string,
+        goal: args.goal,
         agentUserId,
         correlationId: args.correlationId as string | undefined,
         channelId: args.channelId as string | undefined,

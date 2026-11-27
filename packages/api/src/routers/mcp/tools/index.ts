@@ -2464,15 +2464,48 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_session",
       group: "entry",
+      aliases: [
+        {
+          name: "synap_run_playbook",
+          reason:
+            "A launch is a start with launch: true (review B2 F5); the old name stays frozen on the connector as pod__run_playbook, with its argument names.",
+          args: {
+            playbookId: "templateId",
+            playbookName: "playbookName",
+            name: "playbookName",
+            params: "params",
+            subjectId: "subjectEntityId",
+            agentIds: "agentIds",
+            reasoning: "reasoning",
+            workspaceId: "workspaceId",
+            projectId: "projectId",
+            trackId: "trackId",
+            parentSessionId: "parentSessionId",
+            suspendedIntent: "suspendedIntent",
+            handToAgentId: "handToAgentId",
+            runner: "runner",
+            stageRunners: "stageRunners",
+            startAnother: "startAnother",
+          },
+          fixedArgs: { launch: true },
+        },
+      ],
       annotations: {
         title: "Start focus session",
         readOnlyHint: false,
         destructiveHint: false,
-        openWorldHint: false,
+        // A launch (`launch: true`) runs the playbook's executor.
+        openWorldHint: true,
       },
       description:
-        "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBy*Ids (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
+        "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBy*Ids (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to, instead of opening a session you work; it takes only the playbook inputs, and its goal and criteria are the playbook's. Outcomes, none to retry: \"draft\" (an agent's launch: the person's draft, not started until they accept it; tell them), \"proposed\" (SUCCESS, pass on reviewUrl), \"blocked\" (nothing ran: `unenabledSkills`; run again once `enableProposals` are approved), \"running\", \"already_running\" (nothing started: `session` is the live run; startAnother only if they asked), \"generated\" (one-shot: pass on generated.reviewUrl), \"skipped\" (nothing ran: read `message`).",
       input: z.object({
+        launch: z
+          .boolean()
+          .optional()
+          .describe(
+            "true: RUN the playbook instead of opening a session you work (see the description)."
+          ),
         forceCreate: z
           .boolean()
           .optional()
@@ -2488,8 +2521,9 @@ export function toolDefinitions() {
           ),
         goal: z
           .string()
+          .optional()
           .describe(
-            "The OUTCOME — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. The name goes in title; detail, scope, and deliverables go in expectedOutputs; dependencies go in blockedBySessionIds."
+            "Required, except with launch. The OUTCOME — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. The name goes in title; detail, scope, and deliverables go in expectedOutputs; dependencies go in blockedBySessionIds."
           ),
         workspaceId: z
           .string()
@@ -2551,8 +2585,38 @@ export function toolDefinitions() {
           .nullable()
           .optional()
           .describe(
-            "Optional playbook UUID this session follows from the start. Omit it and the pod binds on facts (subject kind, parent's playbook, `main red:` title) and ranks the rest against your words in `playbooks` (suggestions, nothing applied); null skips those suggestions. Later, synap_update_session followPlaybookId binds or releases one."
+            "Optional playbook UUID this session follows from the start. Omit it and the pod binds on facts (subject kind, parent's playbook, `main red:` title) and ranks the rest against your words in `playbooks` (suggestions, nothing applied); null skips those suggestions. Later, synap_update_session followPlaybookId binds or releases one. With launch: the playbook to run."
           ),
+        playbookName: z
+          .string()
+          .optional()
+          .describe(
+            "With launch, instead of templateId: the playbook's name, unique among those you see (several: candidates, never a pick)."
+          ),
+        handToAgentId: z
+          .string()
+          .optional()
+          .describe(
+            "With launch: the agent (synap_list_agents) that does the run instead of its executor; an agent may name only itself. Refused by name, never replaced."
+          ),
+        runner: z
+          .unknown()
+          .optional()
+          .describe("With launch: who runs it (system/synap/processes)."),
+        stageRunners: z
+          .unknown()
+          .optional()
+          .describe("With launch: who works each stage, by key."),
+        startAnother: z
+          .boolean()
+          .optional()
+          .describe(
+            "With launch: start a second run although one is live on the subject."
+          ),
+        reasoning: z
+          .string()
+          .optional()
+          .describe("With launch: why, shown on the review."),
         params: jsonObjectInput("params")
           .optional()
           .describe(
@@ -3978,7 +4042,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "List playbooks (reusable process templates) visible to you: every member workspace plus pod-wide ones. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+        "List playbooks (reusable process templates) visible to you: every member workspace plus pod-wide ones. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Run one with synap_start_session (templateId, launch: true).",
       input: z.object({
         workspaceId: z
           .string()
@@ -4026,7 +4090,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal process') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Process') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
+        "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal process') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Process') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before starting it: synap_start_session with templateId and the chosen entity as subjectEntityId (launch: true runs it by its executor). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
       input: z.object({
         profileSlug: z
           .string()
@@ -4078,7 +4142,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator (cron + timezone, default the owner\'s zone). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+        'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, started via synap_start_session (templateId; launch: true runs it). goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator (cron + timezone, default the owner\'s zone). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
       input: z.object({
         reasoning: z
           .string()
@@ -5244,7 +5308,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares only schedules: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+        "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares only schedules: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_start_session launch: true instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
       input: z.object({
         trackId: z
           .string()
@@ -5314,7 +5378,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Run ONE worker of a goal NOW, once, by its ruleId (synap_list_workers): its playbook runs, filed in the goal — the same door and governance as synap_run_playbook with that trackId. Its schedule or trigger is unchanged. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise the run and its session.",
+        "Run ONE worker of a goal NOW, once, by its ruleId (synap_list_workers): its playbook runs, filed in the goal — the same door and governance as synap_start_session launch: true with that trackId. Its schedule or trigger is unchanged. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise the run and its session.",
       input: z.object({
         ruleId: z
           .string()
@@ -6574,7 +6638,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+        "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_start_session (templateId = playbook id, launch: true).",
       input: z.object({
         intent: z
           .string()
@@ -7057,105 +7121,6 @@ export function toolDefinitions() {
           .describe(
             "true keeps (or returns) the rule to DRAFT — nothing compiled, nothing can fire. Omitted/false = live: a draft is ACTIVATED (recompiled, refused by clause if it has a hole)."
           ),
-      }),
-    }),
-    defineTool({
-      name: "synap_run_playbook",
-      group: "build",
-      hidden:
-        "Folded into synap_start_session (templateId); kept one release for the frozen connector name pod__run_playbook.",
-      annotations: {
-        title: "Run process",
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: true,
-      },
-      description:
-        'LAUNCH a playbook via its executor (discover via synap_list_playbooks): a session + run channel + playbook_run, dispatched to its executor (is-agent | external-agent). Pass playbookId OR an unambiguous playbookName/name (several matches return candidates, never a silent pick). Write home: workspaceId, else the playbook\'s home, else subject/session; a pod-wide playbook with no home is refused (pass workspaceId). It LAUNCHES the executor, unlike opening a working session from the template. Outcomes, none to retry: status="draft" (an agent\'s launch, the usual one: the person\'s DRAFT, not started until they accept it; `session` returned, `run` null; tell them), "proposed" (a rule or limit asks first: SUCCESS, pass on reviewUrl), "blocked" (nothing ran: skills not enabled; `unenabledSkills` names them, `enableProposals` holds one enable request per pack; run again once approved), "running" (`run` + `session`; the run is `queued` until claimed), "already_running" (nothing started: the person has a live run or draft of it on this subject; `session` is it, `reason` says which; startAnother only if they asked for a second run), "generated" (one-shot, no session: its draft is a proposal on the subject; pass on generated.reviewUrl), "skipped" (nothing ran: the record\'s last run failed recently, or no pinned record was ready; read `message`, never report it as started).',
-      input: z.object({
-        playbookId: z
-          .string()
-          .optional()
-          .describe(
-            "UUID of the playbook to run. Provide this OR playbookName/name."
-          ),
-        playbookName: z
-          .string()
-          .optional()
-          .describe(
-            "Public name of the playbook (case-insensitive). Must be unique among playbooks you can see; ambiguous names return candidates with id + workspaceId."
-          ),
-        name: z.string().optional().describe("Alias for playbookName."),
-        params: z
-          .record(z.string(), z.unknown())
-          .optional()
-          .describe(
-            "Values for the playbook's declared params, filled into its goalTemplate's {name} placeholders (e.g. { market: 'EU fintech' })."
-          ),
-        subjectId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional entity UUID to bind this run to (the run's subject lens). Also used as write-home fallback for pod-wide playbooks."
-          ),
-        agentIds: z
-          .array(z.string())
-          .optional()
-          .describe("Optional agent ids to staff the run with."),
-        reasoning: z
-          .string()
-          .optional()
-          .describe(
-            "Why you're launching this — surfaced on the review proposal."
-          ),
-        workspaceId: z
-          .string()
-          .optional()
-          .describe(
-            "Write workspace for the run: the playbook's home or a space it is shared with. Optional when it has a home; required for pod-wide playbooks unless subject/session supplies one. Never falls back to an arbitrary membership."
-          ),
-        projectId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional project UUID to file the run into. Must be a project you can see."
-          ),
-        trackId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused."
-          ),
-        parentSessionId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional UUID of the session this run is spawned FROM (a session you own): records `run session --spawned_from--> parent`, as synap_start_session does. Omitted: the session your call is bound to, if any."
-          ),
-        suspendedIntent: z
-          .string()
-          .optional()
-          .describe(
-            "With parentSessionId: this run is a DETOUR that BLOCKS the parent — one line (max 400) naming what the parent was about to do; the parent waits until the run's session closes. Omit for a run that does not block the parent."
-          ),
-        handToAgentId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the playbook's runner, else the agent the person ASSIGNED to it, else its own executor (`handedTo` names who)."
-          ),
-        runner: z
-          .unknown()
-          .optional()
-          .describe("Who runs it (system/synap/processes)."),
-        stageRunners: z
-          .unknown()
-          .optional()
-          .describe("Per stage key (same skill)."),
-        startAnother: z
-          .boolean()
-          .optional()
-          .describe("Start a second run although one is live on the subject."),
       }),
     }),
     defineTool({

@@ -92,6 +92,7 @@ import {
   PLAYBOOK_STAGES_PAGE_DEFAULT,
   PLAYBOOK_STAGES_PAGE_MAX,
 } from "./shared.js";
+import type { ToolArgs } from "../define-tool.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import {
   applyStageEdits,
@@ -247,6 +248,96 @@ async function renderPlaybookDoorOutcome<T>(
     case "not_found":
       return ok({ error: outcome.error });
   }
+}
+
+/** What a launch takes (`synap_start_session` with `launch: true`). */
+const LAUNCH_INPUTS: readonly string[] = [
+  "launch",
+  "templateId",
+  "playbookName",
+  "params",
+  "subjectEntityId",
+  "agentIds",
+  "reasoning",
+  "workspaceId",
+  "projectId",
+  "trackId",
+  "trackStage",
+  "parentSessionId",
+  "suspendedIntent",
+  "handToAgentId",
+  "runner",
+  "stageRunners",
+  "startAnother",
+  "sessionId",
+];
+
+/** The inputs only a launch reads: refused on a start without `launch`. */
+export const LAUNCH_ONLY_INPUTS = [
+  "playbookName",
+  "reasoning",
+  "handToAgentId",
+  "runner",
+  "stageRunners",
+  "startAnother",
+] as const;
+
+/**
+ * `synap_start_session` with `launch: true` (old name `synap_run_playbook`):
+ * RUN the playbook through the shared run door (`runPlaybookDoor`, the one
+ * Hub REST `POST /playbooks/:id/run` calls): name resolution, the write-home
+ * ladder, the governed `playbooks.run` and its run choice
+ * (`resolveRunChoice`) live there once. It takes only the playbook inputs:
+ * the run's goal, criteria and outputs are the playbook's (an agent's launch
+ * is the person's draft), so a start's NO_CRITERIA rule does not apply.
+ */
+export async function launchPlaybook(
+  ctx: McpToolContext<ToolArgs<"synap_start_session">>
+): Promise<CallToolResult> {
+  const { toolName, args, userId, requestedWorkspaceId } = ctx;
+  const notTaken = Object.keys(args).filter(
+    (k) =>
+      (args as Record<string, unknown>)[k] !== undefined &&
+      !LAUNCH_INPUTS.includes(k)
+  );
+  if (notTaken.length > 0) {
+    return ok({
+      error: `${toolName} with launch: true does not take ${notTaken.map((k) => `\`${k}\``).join(", ")} — NOTHING WAS CHANGED. A run's goal and criteria are its playbook's; it takes only ${LAUNCH_INPUTS.join(", ")}.`,
+    });
+  }
+  const trimmed = (v: unknown) =>
+    typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+  const parentSessionId = trimmed(args.parentSessionId);
+  const suspendedIntent = trimmed(args.suspendedIntent);
+  if (suspendedIntent && !parentSessionId) {
+    return ok({
+      error:
+        "suspendedIntent needs parentSessionId: it is the line the parent waits on.",
+    });
+  }
+  const outcome = await runPlaybookDoor(playbookDoorIdentity(ctx), {
+    workspaceId: requestedWorkspaceId,
+    playbookId: trimmed(args.templateId),
+    playbookName: trimmed(args.playbookName),
+    subjectId: trimmed(args.subjectEntityId),
+    params: args.params,
+    agentIds: args.agentIds,
+    reasoning: args.reasoning,
+    projectId: trimmed(args.projectId),
+    trackId: trimmed(args.trackId),
+    trackStage: trimmed(args.trackStage),
+    handToAgentId: trimmed(args.handToAgentId),
+    // Validated by `playbooks.run` (`playbookRunnerSchema`), never dropped.
+    ...(args.runner !== undefined ? { runner: args.runner } : {}),
+    ...(args.stageRunners !== undefined
+      ? { stageRunners: args.stageRunners }
+      : {}),
+    parentSessionId,
+    suspendedIntent,
+    ...(args.startAnother === true ? { startAnother: true } : {}),
+    source: "mcp",
+  });
+  return renderPlaybookDoorOutcome(outcome, userId);
 }
 
 /**
@@ -1760,60 +1851,6 @@ export const buildHandlers = {
       proposalId: resolvedProposalId,
       status: "rejected",
     });
-  },
-  synap_run_playbook: async (ctx) => {
-    const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
-    requireScope(apiKeyScopes, "mcp.write", toolName);
-    const trimmed = (v: unknown) =>
-      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
-    // Advisory schema: say in words what the pod would otherwise reject as a
-    // uuid / length error (same refusal as synap_start_session).
-    const parentArg = trimmed(args.parentSessionId);
-    if (parentArg && !isUuid(parentArg)) {
-      return ok({
-        error:
-          "parentSessionId must be a session UUID (the id of a session you own that you are running this playbook FROM).",
-      });
-    }
-    const intentArg = trimmed(args.suspendedIntent);
-    if (intentArg && intentArg.length > 400) {
-      return ok({
-        error:
-          "suspendedIntent must be at most 400 characters — ONE line naming what you were about to do.",
-      });
-    }
-    if (intentArg && !parentArg) {
-      return ok({
-        error:
-          "suspendedIntent needs parentSessionId: it is the line the parent waits on.",
-      });
-    }
-    // The shared run door (`hub-protocol/playbook-doors.ts`) — the same one Hub
-    // REST `POST /playbooks/:id/run` calls. Name resolution, the write-home
-    // ladder and the governed `playbooks.run` delegation live there once.
-    const outcome = await runPlaybookDoor(playbookDoorIdentity(ctx), {
-      workspaceId: requestedWorkspaceId,
-      playbookId: trimmed(args.playbookId),
-      // Accept playbookName OR name (alias) when id is absent.
-      playbookName: trimmed(args.playbookName) ?? trimmed(args.name),
-      subjectId: trimmed(args.subjectId),
-      params: args.params as Record<string, unknown> | undefined,
-      agentIds: args.agentIds as string[] | undefined,
-      reasoning: args.reasoning as string | undefined,
-      projectId: trimmed(args.projectId),
-      trackId: trimmed(args.trackId),
-      handToAgentId: trimmed(args.handToAgentId),
-      // Validated by `playbooks.run` (`playbookRunnerSchema`), never dropped.
-      ...(args.runner !== undefined ? { runner: args.runner } : {}),
-      ...(args.stageRunners !== undefined
-        ? { stageRunners: args.stageRunners }
-        : {}),
-      parentSessionId: trimmed(args.parentSessionId),
-      suspendedIntent: trimmed(args.suspendedIntent),
-      ...(args.startAnother === true ? { startAnother: true } : {}),
-      source: "mcp",
-    });
-    return renderPlaybookDoorOutcome(outcome, userId);
   },
   synap_create_skill: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =

@@ -575,7 +575,7 @@ export function registerPlaybookExecutors(): void {
   // gate-made proposal does NOT throw: it emits `.validated`, flips the row
   // APPROVED and returns success. So the user approved a playbook run, saw
   // green, and the playbook never ran. EVERY agent-initiated run — the MCP
-  // `synap_run_playbook` door (mcp/handlers/build.ts) always passes an
+  // launch door (`synap_start_session` `launch: true`, mcp/handlers/build.ts) always passes an
   // `agentUserId`, so it always proposes — has been in that state.
   //
   // PAYLOAD: the gate stores FLAT `data: { playbookId, name }` — note the key

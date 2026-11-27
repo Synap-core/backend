@@ -5,7 +5,7 @@
  * Thin REST seam over the governed playbook procedures so IS / CLI / Raycast /
  * MCP share ONE governed path. List / create / run go through the shared doors
  * in `../playbook-doors.ts` — the same functions MCP `synap_list_playbooks` /
- * `synap_create_playbook` / `synap_run_playbook` call. Every write is gated by
+ * `synap_create_playbook` / `synap_start_session` (`launch: true`) call. Every write is gated by
  * `checkPermissionOrPropose` inside the regular procedure — agent callers get
  * `status: 'proposed'`, operators get the executed result.
  */
@@ -488,7 +488,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     tags: ["Playbooks"],
     summary: "Run a playbook",
     description:
-      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. While you already have a live run of the playbook on `subjectId` (or an agent's draft of it waiting for you), it returns `status: 'already_running'` with that run's `session`, its `run` (null for a draft) and a `reason` (`live_run` | `draft_awaiting_acceptance`) — nothing started; pass `startAnother: true` to start a second run. Same door as MCP synap_run_playbook.",
+      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. While you already have a live run of the playbook on `subjectId` (or an agent's draft of it waiting for you), it returns `status: 'already_running'` with that run's `session`, its `run` (null for a draft) and a `reason` (`live_run` | `draft_awaiting_acceptance`) — nothing started; pass `startAnother: true` to start a second run. Same door as MCP synap_start_session with launch: true.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: RunPlaybookBodySchema,

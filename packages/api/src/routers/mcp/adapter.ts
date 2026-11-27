@@ -185,9 +185,9 @@ export async function executeMCPToolViaHubProtocol(
   // only consulted when NEITHER an explicit `args.workspaceId` NOR a bound
   // service-key pin resolved anything above — priority is explicit-per-call >
   // service-key pin > agent's live focus. MCP *write* tools that need a
-  // concrete home (capture text, create_project/playbook, run_playbook) must
+  // concrete home (capture text, create_project/playbook, a playbook launch) must
   // NOT fall back to membership[0] when this is still null — they reject via
-  // `rejectMissingWriteWorkspace` (run_playbook also falls through to the
+  // `rejectMissingWriteWorkspace` (a launch also falls through to the
   // playbook's own workspaceId, then subject/session, before rejecting).
   // Catalog/read tools like list_playbooks use listAllPage (user floor) — no
   // membership[0]. Never overrides, never 403s: a

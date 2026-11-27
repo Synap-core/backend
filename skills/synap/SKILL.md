@@ -475,7 +475,7 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 | The user needs…                                  | Do this                                                                                                                                                            |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | a **goal** in an existing project                | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `endState`, 2–5 `criteria`; lasting: `direction`, optional `kpi`; `parentGoalId`, `pillars`) |
-| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId`                                              |
+| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (a session template: `templateId`, `launch: true` to run it) with `trackId`                                              |
 | a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a goal method                                                                 |
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                                            |
 | a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                                                                     |
@@ -3180,11 +3180,11 @@ All three are optional: without them a playbook runs exactly as before.
     Example: render on the Mac, else the devbox:
     `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
     `null` clears a playbook's runner. A choice made when running it comes
-    first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+    first (`synap_start_session { templateId, launch: true, runner }`, the same shapes: a role, engine or
     list is resolved then, and nobody it names → refused), then the playbook's
     runner, then the person's remembered choice.
     A stage's runner can be chosen too: for a whole run,
-    `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+    `synap_start_session { templateId, launch: true, stageRunners: { "<stage key>": <runner> } }`; while
     working, `synap_update_session { currentStage, stageRunner }` for the stage
     you enter (`"self"` = you do it; naming another agent asks the person
     first). A step with another runner gives that agent a turn on the same

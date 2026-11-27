@@ -99,6 +99,43 @@ describe("the input check", () => {
     );
   });
 
+  it("an old name with its own argument shape: taken in its names, handed over in the tool's", () => {
+    expect(canonicalToolName("synap_run_playbook")).toBe(
+      "synap_start_session"
+    );
+    const out = parseToolArgs("synap_run_playbook", {
+      playbookId: "pb-1",
+      subjectId: "ent-1",
+      name: "Weekly review",
+      runner: { agentId: "a-1" },
+    });
+    expect(out).toEqual({
+      ok: true,
+      args: {
+        templateId: "pb-1",
+        subjectEntityId: "ent-1",
+        playbookName: "Weekly review",
+        runner: { agentId: "a-1" },
+        launch: true,
+      },
+    });
+    // The tool's own names are not the old name's inputs.
+    expect(refusal("synap_run_playbook", { templateId: "pb-1" })).toContain(
+      "synap_run_playbook does not take `templateId`"
+    );
+    // Two old names for one input: one is refused, never a silent pick.
+    expect(
+      refusal("synap_run_playbook", { playbookName: "A", name: "B" })
+    ).toContain("are the same input");
+    // A wrong type is said in the caller's names.
+    expect(
+      refusal("synap_run_playbook", { playbookId: "pb-1", startAnother: "yes" })
+    ).toContain("startAnother");
+    expect(
+      refusal("synap_run_playbook", { playbookId: 42 })
+    ).toContain("playbookId");
+  });
+
   it("an unknown tool passes through: the dispatch says it is unknown", () => {
     expect(parseToolArgs("synap_no_such_tool", { x: 1 })).toEqual({
       ok: true,
@@ -108,15 +145,14 @@ describe("the input check", () => {
 });
 
 describe("what is derived from the definitions", () => {
-  it("entry and group members: listed tools only; hidden doors stay callable once unlocked", () => {
+  it("entry and group members: listed tools only; old names stay callable", () => {
     expect(entryToolNames()).toContain("synap_start_session");
-    expect(toolGroupMembers().build).not.toContain("synap_run_playbook");
+    expect(entryToolNames()).not.toContain("synap_run_playbook");
+    expect(entryToolNames(true)).toContain("synap_run_playbook");
     expect(toolGroupMembers().build).not.toContain("synap_list_widgets");
-    expect(toolGroupMembers(true).build).toEqual(
-      expect.arrayContaining(["synap_run_playbook", "synap_list_widgets"])
-    );
+    expect(toolGroupMembers(true).build).toContain("synap_list_widgets");
     expect(
-      visibleToolNames({ profile: "entry", groups: ["build"] })!.has(
+      visibleToolNames({ profile: "entry", groups: [] })!.has(
         "synap_run_playbook"
       )
     ).toBe(true);
@@ -139,6 +175,40 @@ describe("what is derived from the definitions", () => {
     }
   });
 
+  it("an old name with its own shape advertises the OLD argument names, each with its tool's schema", () => {
+    const wire = new Map(wireTools().map((t) => [t.name, t]));
+    const old = wire.get("synap_run_playbook")!;
+    const start = wire.get("synap_start_session")!.inputSchema.properties!;
+    expect(Object.keys(old.inputSchema.properties!).sort()).toEqual(
+      [
+        "agentIds",
+        "handToAgentId",
+        "name",
+        "params",
+        "parentSessionId",
+        "playbookId",
+        "playbookName",
+        "projectId",
+        "reasoning",
+        "runner",
+        "sessionId",
+        "stageRunners",
+        "startAnother",
+        "subjectId",
+        "suspendedIntent",
+        "trackId",
+        "workspaceId",
+      ].sort()
+    );
+    expect(old.inputSchema.properties!.playbookId).toEqual(start.templateId);
+    expect(old.inputSchema.properties!.subjectId).toEqual(
+      start.subjectEntityId
+    );
+    expect(old.inputSchema.required ?? []).toEqual([]);
+    expect(old.description).toContain("launch: true");
+    expect(old.description).toContain("playbookId = templateId");
+  });
+
   it("teaching keys: what a tool teaches, then its own name", () => {
     expect(toolTeachingKeys().synap_create_entity).toEqual([
       "entity.create",
@@ -155,7 +225,10 @@ describe("what is derived from the definitions", () => {
       aliasOf: "synap_list_cells",
     });
     expect(exposure.synap_wait_for_answer!.cpOmit).toBeTruthy();
-    expect(exposure.synap_run_playbook!.hidden).toBeTruthy();
+    expect(exposure.synap_run_playbook).toMatchObject({
+      group: "entry",
+      aliasOf: "synap_start_session",
+    });
     expect(exposure.synap_ask).toEqual({ group: "entry" });
   });
 });

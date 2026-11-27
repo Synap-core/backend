@@ -22,7 +22,7 @@
  *
  * ONE call site, in the `runPlaybook` spine (after the subject is resolved,
  * before a session is minted), so every door — tRPC `playbooks.run`, MCP
- * `synap_run_playbook`, the automation `playbook_run` step, the entity action
+ * `synap_start_session` `launch: true`, the automation `playbook_run` step, the entity action
  * strip — is guarded by existing.
  */
 
