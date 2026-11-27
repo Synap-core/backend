@@ -977,7 +977,7 @@ export function toolDefinitions() {
           .describe(
             "raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise)."
           ),
-        limit: z.number().optional().describe("Max content chars (slice)"),
+        limit: z.number().optional(),
         offset: z.number().optional().describe("Chars to skip (nextOffset)"),
       }),
     }),
@@ -2557,7 +2557,8 @@ export function toolDefinitions() {
           .describe(
             "Optional playbook UUID this session follows from the start. Omit it and the pod binds on facts (subject kind, parent's playbook, `main red:` title) and ranks the rest against your words in `playbooks` (suggestions, nothing applied); null skips those suggestions. Later, synap_update_session followPlaybookId binds or releases one."
           ),
-        params: jsonObjectInput("params")
+        params: z
+          .record(z.string(), z.unknown())
           .optional()
           .describe(
             "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused."
@@ -4914,7 +4915,7 @@ export function toolDefinitions() {
           .enum(["active", "archived", "completed"])
           .optional()
           .describe("Optional filter by project status"),
-        limit: clampedLimit(1, 1000, 50)
+        limit: z.number().min(1).max(1000)
           .optional()
           .describe("Page size (1-1000, default 50)"),
         offset: z

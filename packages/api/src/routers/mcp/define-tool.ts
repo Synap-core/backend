@@ -450,7 +450,7 @@ function withoutAbsentValues(
       const { type, enum: values } = props[key] ?? {};
       return value === null
         ? type === "null" || (Array.isArray(type) && type.includes("null"))
-        : !Array.isArray(values);
+        : true;
     })
   );
 }

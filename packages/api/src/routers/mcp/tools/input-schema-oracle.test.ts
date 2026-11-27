@@ -50,7 +50,6 @@ const ACCEPTED: Record<string, string> = {
   "synap_run_capability.properties.parameters.additionalProperties":
     VACUOUS_OPEN,
   "synap_run_capability.properties.parameters.propertyNames": VACUOUS_KEYS,
-  "synap_revise_proposal.properties.patch.description": TEXT_EDITS,
   "synap_revise_proposal.properties.patch.properties.textEdits": TEXT_EDITS,
   "synap_revise_proposal.properties.patch.required": TEXT_EDITS,
   ...Object.fromEntries(
