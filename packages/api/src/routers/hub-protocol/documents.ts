@@ -158,12 +158,20 @@ export const documentsRouter = router({
          * `POST /cell-instances/html`): the cell only points at this page.
          * Auto-applied: placed at once (`cellInstanceId` on the receipt).
          * Proposed: carried by the proposal and placed on its approval, under
-         * `cellId`. Only a `type: "html"` page in a space takes it.
+         * a cell id THIS door reserves. Only a `type: "html"` page in a space
+         * takes it, and only the caller's own html page of that space is
+         * placed (`placeHtmlPage`).
          */
         placeAs: z
           .object({
             kind: z.literal("html-embed-cell"),
-            cellId: z.string().uuid(),
+            /**
+             * IGNORED (kept so earlier callers still parse): the server
+             * reserves the cell id itself, as `POST /cell-instances` does. A
+             * caller-chosen id could name an existing cell and learn from the
+             * reply that it exists (review of backend#1357).
+             */
+            cellId: z.string().uuid().optional(),
             name: z.string().optional(),
           })
           .optional(),
@@ -223,9 +231,20 @@ export const documentsRouter = router({
       const userId = ctx.userId!;
       const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
       const agentUserId = actingAgent ?? userId;
-      // The page placed as a cell (`placeAs`), once the page exists: the
-      // reserved id, or the cell that already places this page.
-      const placeAs = input.placeAs;
+      // The page placed as a cell (`placeAs`), once the page exists: under an
+      // id reserved HERE (a caller's `cellId` is ignored), or the cell that
+      // already places this page. `placeHtmlPage` refuses any page but the
+      // caller's own html page of this space (a replayed `proposedDocumentId`
+      // may name a page of another space).
+      const placeAs = input.placeAs
+        ? {
+            kind: input.placeAs.kind,
+            cellId: randomUUID(),
+            ...(input.placeAs.name !== undefined
+              ? { name: input.placeAs.name }
+              : {}),
+          }
+        : undefined;
       const placeCell = async (
         pageId: string
       ): Promise<{ cellInstanceId?: string }> =>

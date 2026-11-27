@@ -112,6 +112,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
 import { OpenAPIHono } from "@hono/zod-openapi";
 import {
   createDocumentWithContent,
+  createHtmlPage,
   db,
   eventRepository,
   HTML_PAGE_MAX_BYTES,
@@ -127,9 +128,16 @@ import type { HubHono, HubVariables } from "./hub-protocol/rest/_shared.js";
 import { resolveBoardReferences } from "../services/whiteboards/place-on-board.js";
 import { proposalExecRegistry } from "./proposals/execution-registry.js";
 import { registerDocumentExecutors } from "./proposals/executors/document.js";
+import {
+  insertCellInstance,
+  placeHtmlPage,
+} from "../services/cells/create-cell-instance.js";
 
 const OWNER = randomUUID();
 const WS = randomUUID();
+/** Another space of OWNER, and another person (review of backend#1357). */
+const WS_X = randomUUID();
+const OTHER = randomUUID();
 
 /** A declared read inside the ceiling, and one outside it. */
 const READS = [{ op: "entities.get" }];
@@ -303,6 +311,14 @@ beforeAll(async () => {
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
     [randomUUID(), WS, OWNER]
   );
+  await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
+    OTHER,
+    "other@example.test",
+  ]);
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'Finance',$2,'{}'::jsonb)`,
+    [WS_X, OWNER]
+  );
   registerDocumentExecutors();
 }, 120_000);
 
@@ -451,4 +467,251 @@ describe("the run-time fence: no html body outside the page door", () => {
       expect(await count("documents")).toBe(docs);
     });
   }
+});
+
+/**
+ * Review of backend#1357. A placement is only ever of the placer's OWN html
+ * page of the space the cell lands in; the cell id is the server's; an
+ * approval that fails part-way leaves nothing behind and can run again.
+ *
+ * The confined key is simulated by its effect: the scoped-key middleware is
+ * stubbed (see the header), so a caller in space WS (its key's space) names a
+ * page of WS_X through `proposedDocumentId`, the replay path.
+ */
+describe("a placement is of the caller's own html page of the space, under the server's id", () => {
+  const hubDocs = () =>
+    hubDocumentsRouter.createCaller({ userId: OWNER, scopes: [] } as never);
+  const pageIn = (workspaceId: string, ownerUserId: string, title: string) =>
+    createHtmlPage(db, eventRepository, {
+      ownerUserId,
+      workspaceId,
+      title,
+      content: PAGE.replace("Pipeline", title),
+      provenance: { createdByKind: "human" },
+    });
+  const cellsOf = async (documentId: string) =>
+    (
+      await q<{ id: string }>(
+        `select id from cell_instances where source_document_id = $1`,
+        [documentId]
+      )
+    ).rows;
+  const approve = (data: Record<string, unknown>, proposalId: string) =>
+    proposalExecRegistry.resolveExact("document/create")!.execute({
+      proposal: {
+        id: proposalId,
+        workspaceId: WS,
+        targetId: data.id,
+        subjectUserId: OWNER,
+        data: { data },
+      },
+      payload: null,
+      userId: OWNER,
+      input: { proposalId },
+      ctx: {},
+      deps: {
+        emitProposalReviewed: vi.fn(),
+        reportProposalOutcome: vi.fn(),
+      },
+    } as never) as unknown as Promise<Record<string, unknown>>;
+  /** A page filed as a proposal through the cell route; its stored data. */
+  const filed = async (title: string) => {
+    h.verdict = "proposed";
+    const res = await hubPost({
+      workspaceId: WS,
+      html: PAGE.replace("Pipeline", title),
+      name: title,
+    });
+    expect(res.status).toBe(202);
+    const data = h.gates.at(-1)!.data as Record<string, unknown>;
+    h.verdict = "granted";
+    return data;
+  };
+
+  it("a key of space WS naming a page of space WS_X (placeAs + proposedDocumentId): refused, no cell", async () => {
+    const pageX = await pageIn(WS_X, OWNER, "Finance page");
+    const cells = await count("cell_instances");
+    await expect(
+      hubDocs().createDocument({
+        userId: OWNER,
+        workspaceId: WS,
+        title: "Finance page",
+        content: PAGE,
+        type: "html",
+        proposedDocumentId: pageX.id,
+        placeAs: { kind: "html-embed-cell", cellId: randomUUID() },
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/cannot be placed as a cell here/),
+    });
+    expect(await count("cell_instances")).toBe(cells);
+    expect(await cellsOf(pageX.id)).toEqual([]);
+  });
+
+  it("a page that is not html: refused, no cell", async () => {
+    const md = await createDocumentWithContent(db, eventRepository, {
+      ownerUserId: OWNER,
+      workspaceId: WS,
+      title: "Plain notes",
+      content: "# Notes",
+      type: "markdown",
+      mimeType: "text/markdown",
+      provenance: { createdByKind: "human" },
+    });
+    const cells = await count("cell_instances");
+    await expect(
+      hubDocs().createDocument({
+        userId: OWNER,
+        workspaceId: WS,
+        title: "Plain notes",
+        content: PAGE,
+        type: "html",
+        proposedDocumentId: md.id,
+        placeAs: { kind: "html-embed-cell" },
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      placeHtmlPage({ documentId: md.id, workspaceId: WS, userId: OWNER })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await count("cell_instances")).toBe(cells);
+    expect(await cellsOf(md.id)).toEqual([]);
+  });
+
+  it("another person's page: refused, no cell", async () => {
+    const theirs = await pageIn(WS, OTHER, "Their page");
+    const cells = await count("cell_instances");
+    await expect(
+      placeHtmlPage({ documentId: theirs.id, workspaceId: WS, userId: OWNER })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Through the door: their id is not ours to reuse, a fresh page is made
+    // and placed; theirs is never placed.
+    const out = await hubDocs().createDocument({
+      userId: OWNER,
+      workspaceId: WS,
+      title: "Their page",
+      content: PAGE.replace("Pipeline", "Not theirs"),
+      type: "html",
+      proposedDocumentId: theirs.id,
+      placeAs: { kind: "html-embed-cell" },
+    });
+    expect(out.documentId).not.toBe(theirs.id);
+    expect(await cellsOf(theirs.id)).toEqual([]);
+    expect(await count("cell_instances")).toBe(cells + 1);
+  });
+
+  it("the same refusal for every case: no page, another space, another person, not html", async () => {
+    const pageX = await pageIn(WS_X, OWNER, "Finance page 2");
+    const theirs = await pageIn(WS, OTHER, "Their page 2");
+    const messages = await Promise.all(
+      [randomUUID(), pageX.id, theirs.id].map((documentId) =>
+        placeHtmlPage({ documentId, workspaceId: WS, userId: OWNER }).then(
+          () => "placed",
+          (e: Error) => e.message
+        )
+      )
+    );
+    expect(new Set(messages).size).toBe(1);
+    expect(messages[0]).toMatch(/cannot be placed as a cell here/);
+  });
+
+  it("a placement that fails on approval leaves no page; the proposal approves cleanly again", async () => {
+    const data = await filed("Failing placement");
+    const placeAs = data.placeAs as { cellId: string };
+    const docs = await count("documents");
+    const cells = await count("cell_instances");
+    const proposalId = randomUUID();
+    await h.client!.exec(`
+      create or replace function fail_cell_insert() returns trigger
+        language plpgsql as $$ begin raise exception 'cell insert failed (test)'; end $$;
+      create trigger fail_cell_insert before insert on cell_instances
+        for each row execute function fail_cell_insert();
+    `);
+    try {
+      // drizzle wraps the trigger's error: "Failed query: insert into …".
+      await expect(approve(data, proposalId)).rejects.toThrow(
+        /insert into "cell_instances"/
+      );
+    } finally {
+      await h.client!.exec(
+        `drop trigger if exists fail_cell_insert on cell_instances`
+      );
+    }
+    // No orphan page, nothing placed.
+    expect(await count("documents")).toBe(docs);
+    expect(await count("cell_instances")).toBe(cells);
+    // Approved again: the page and its cell, once each.
+    const result = await approve(data, proposalId);
+    expect(result).toMatchObject({ success: true, primaryId: data.id });
+    expect(await count("documents")).toBe(docs + 1);
+    expect((await cellOf(placeAs.cellId)).source_document_id).toBe(data.id);
+  });
+
+  it("an approval run again after it wrote the page: reuses it, never a duplicate-id failure", async () => {
+    const data = await filed("Approved twice");
+    const proposalId = randomUUID();
+    const first = await approve(data, proposalId);
+    const docs = await count("documents");
+    const cells = await count("cell_instances");
+    const again = await approve(data, proposalId);
+    expect(again).toMatchObject({ success: true, primaryId: data.id });
+    expect((again.effect as { ids: string[] }).ids).toEqual(
+      (first.effect as { ids: string[] }).ids
+    );
+    expect(await count("documents")).toBe(docs);
+    expect(await count("cell_instances")).toBe(cells);
+  });
+
+  it("a caller-chosen cell id naming an existing cell leaks nothing", async () => {
+    const foreignId = randomUUID();
+    await insertCellInstance({
+      id: foreignId,
+      workspaceId: WS_X,
+      userId: OTHER,
+      cellType: "html-embed",
+    });
+    const foreignBefore = await cellOf(foreignId);
+
+    // Applied at once: the caller's id is ignored; the server's is used.
+    const out = await hubDocs().createDocument({
+      userId: OWNER,
+      workspaceId: WS,
+      title: "Chosen id",
+      content: PAGE.replace("Pipeline", "Chosen id"),
+      type: "html",
+      placeAs: { kind: "html-embed-cell", cellId: foreignId },
+    });
+    expect(out.status).toBe("created");
+    const placedId = (out as { cellInstanceId?: string }).cellInstanceId!;
+    expect(placedId).toBeTruthy();
+    expect(placedId).not.toBe(foreignId);
+    expect((await cellOf(placedId)).source_document_id).toBe(out.documentId);
+
+    // Proposed: the proposal carries the server's id, never the caller's.
+    h.verdict = "proposed";
+    await hubDocs().createDocument({
+      userId: OWNER,
+      workspaceId: WS,
+      title: "Chosen id, proposed",
+      content: PAGE.replace("Pipeline", "Chosen id, proposed"),
+      type: "html",
+      placeAs: { kind: "html-embed-cell", cellId: foreignId },
+    });
+    const data = h.gates.at(-1)!.data as Record<string, unknown>;
+    h.verdict = "granted";
+    expect((data.placeAs as { cellId: string }).cellId).not.toBe(foreignId);
+
+    // A proposal filed before the server reserved ids, naming that cell: its
+    // approval places the page under a fresh id, and says nothing of it.
+    const old = {
+      ...data,
+      placeAs: { ...(data.placeAs as object), cellId: foreignId },
+    };
+    const result = await approve(old, randomUUID());
+    expect(result).toMatchObject({ success: true, primaryId: data.id });
+    const [, cellIdPlaced] = (result.effect as { ids: string[] }).ids;
+    expect(cellIdPlaced).not.toBe(foreignId);
+    expect((await cellOf(cellIdPlaced!)).source_document_id).toBe(data.id);
+    expect(await cellOf(foreignId)).toEqual(foreignBefore);
+  });
 });

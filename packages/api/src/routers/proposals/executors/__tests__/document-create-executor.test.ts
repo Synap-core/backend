@@ -25,9 +25,21 @@ vi.mock("../../../../services/document-patch/apply-document-patch.js", () => ({
 }));
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
-  db: {},
+  // The re-approval lookup (a page this proposal already wrote): none.
+  db: {
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
+  },
   proposals: { id: "id", status: "status" },
+  documents: {
+    id: "id",
+    userId: "user_id",
+    sourceProposalId: "source_proposal_id",
+    deletedAt: "deleted_at",
+  },
   eq: () => true,
+  and: () => true,
   transitionProposal: async (_db: unknown, args: unknown) => {
     h.updates.push(args);
   },
