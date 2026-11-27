@@ -410,8 +410,6 @@ export async function parseToolArgs(
   if (refused) {
     return { ok: false, result: toolError(def.refusedArgs![refused]!) };
   }
-  const undeclared = await refuseUndeclaredArgs(name, args);
-  if (undeclared) return { ok: false, result: undeclared };
   const parsed = inputValidator(def).safeParse(
     withoutNullOptionals(args, def.inputSchema)
   );

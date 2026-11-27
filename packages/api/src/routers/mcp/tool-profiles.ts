@@ -226,3 +226,5 @@ export function filterToolsForAccess<T extends { name: string }>(
     (t) => !unlisted.has(t.name) && (!visible || visible.has(t.name))
   );
 }
+
+export const ENTRY_TOOLS = ["synap_orient", "synap_ask", "synap_capture"];
