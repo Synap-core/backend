@@ -410,7 +410,7 @@ export function summarizeGlobalHealth(
         : cap.verbsAwaitingEnable > 0
           ? `${cap.verbsAwaitingEnable} verb(s) in ${cap.capabilitiesAwaitingEnable} capability(ies) not turned on — they refuse to run until turned on`
           : `${cap.installed} capability(ies) installed, all ${cap.verbs} verb(s) turned on`,
-    detail: cap,
+    detail: { ...cap },
   });
 
   // Agent activity — degraded when an agent is at/over the daily cap.
