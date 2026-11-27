@@ -188,8 +188,8 @@ export const coreRouter = router({
   machines: machinesRouter,
   // Signed-in devices of the Synap apps.
   devices: devicesRouter,
-  // The devices registry (devices plan 767a5978, decision 78fc3fa1): the
-  // Devices page. `fleet`, because `devices` above is the signed-in apps.
+  // The devices registry: the Devices page. `fleet`, because `devices`
+  // above is the signed-in apps.
   fleet: fleetRouter,
   presence: presenceRouter,
   governanceRules: governanceRulesRouter,

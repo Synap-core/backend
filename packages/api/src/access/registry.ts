@@ -649,7 +649,7 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// A device (0461, devices plan 767a5978 §3) is its OWNER's, within the
+// A device (0461) is its OWNER's, within the
 // workspace lens (as an installation), AND a device marked `shared` that is
 // filed in a space is read by that space's members too ("a person sees their
 // own and the shared devices"). A NULL workspace stays owner-private: a

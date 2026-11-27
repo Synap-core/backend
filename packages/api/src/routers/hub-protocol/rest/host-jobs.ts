@@ -228,10 +228,10 @@ export function registerHostJobsRoutes(app: HubHono): void {
         typeof runnerId === "string" ? runnerId : null
       );
       await reconcileComputer(who.runner, { recheckTools: cameBack });
-      // Every lease is the computer reporting (devices plan 767a5978, P1):
-      // the device's report time moves and, when the runner sends one, its
-      // manifest is stored. Never fails the lease: an older CLI sends none,
-      // a manifest the pod cannot read is answered `refused`.
+      // Every lease is the computer reporting: the device's report time moves
+      // and, when the runner sends one, its manifest is stored. Never fails
+      // the lease: an older CLI sends none, a manifest the pod cannot read is
+      // answered `refused`.
       const device = await recordDeviceReport({
         machineUserId: who.runner.machineUserId,
         manifest: (parsed.data as { manifest?: unknown }).manifest,

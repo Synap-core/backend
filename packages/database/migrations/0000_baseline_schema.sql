@@ -6466,7 +6466,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- Devices (0461, devices plan 767a5978 §3): the devices registry, one row per
+-- Devices (0461): the devices registry, one row per
 -- device; a computer with a runner keeps its `users` principal as its key.
 -- `compute_leases.device_id` links a provisioned cloud server. Mirrors 0461
 -- (the backfill lives only in the migration: a fresh pod has no computer).

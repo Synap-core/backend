@@ -584,10 +584,10 @@ const OBJECT_KIND_ROWS = {
     label: "Computer",
     labelPlural: "Computers",
   },
-  // A device (devices plan 767a5978, decision 78fc3fa1): anything the person
-  // connects that describes itself (a computer, a VM, a printer, a camera, a
-  // sensor), a `devices` row. The product word that replaces "Computers" in
-  // the nav; a computer stays a device KIND. `fleet` is only the code word.
+  // A device: anything the person connects that describes itself (a
+  // computer, a VM, a printer, a camera, a sensor), a `devices` row. The
+  // product word that replaces "Computers" in the nav; a computer stays a
+  // device KIND. `fleet` is only the code word.
   device: {
     kind: "device",
     category: "agent",

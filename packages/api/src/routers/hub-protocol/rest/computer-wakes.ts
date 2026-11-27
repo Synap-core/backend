@@ -150,8 +150,8 @@ export function registerComputerWakesRoutes(app: HubHono): void {
         ? header
         : WAKER_RUNNER;
     await recordWorkerServed(keyId, said);
-    // The poll is also the computer reporting (devices plan 767a5978, P1):
-    // its device's report time moves. Never fails the poll.
+    // The poll is also the computer reporting: its device's report time
+    // moves. Never fails the poll.
     await recordDeviceReport({
       machineUserId: machine.id,
       reporter: "waker",

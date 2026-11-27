@@ -605,15 +605,15 @@ const COMPUTER_RUNNER_WRITES: Readonly<
 );
 
 /**
- * Writes a computer's own key makes about ITSELF only (devices plan 767a5978,
- * P1): a computer reporting what it is, on its device row. No privileged
- * scope (every computer key reports, "Installs from the pod" or not), so the
- * bound is the caller and the target: the handler resolves its caller through
- * `via`, whose source refuses every principal that is not a computer of its
- * own person (`NOT_A_COMPUTER`: a person's, an agent's, an app's key, an
- * agent hosted on the computer included) and reads `MACHINE_AGENT_TYPE`; the
- * write then names only that computer (`write`, called with the resolved
- * `machineUserId`, never a body field). Each row is checked below.
+ * Writes a computer's own key makes about ITSELF only: a computer reporting
+ * what it is, on its device row. No privileged scope (every computer key
+ * reports, "Installs from the pod" or not), so the bound is the caller and
+ * the target: the handler resolves its caller through `via`, whose source
+ * refuses every principal that is not a computer of its own person
+ * (`NOT_A_COMPUTER`: a person's, an agent's, an app's key, an agent hosted on
+ * the computer included) and reads `MACHINE_AGENT_TYPE`; the write then names
+ * only that computer (`write`, called with the resolved `machineUserId`, never
+ * a body field). Each row is checked below.
  */
 const COMPUTER_SELF_WRITES: Readonly<
   Record<

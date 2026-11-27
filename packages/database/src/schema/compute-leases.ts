@@ -62,7 +62,7 @@ export const computeLeases = pgTable(
     /** The provider's id of the machine, from the start's result. */
     resourceId: text("resource_id"),
     /**
-     * The device this lease started (0461, devices plan 767a5978 §3): a
+     * The device this lease started (0461): a
      * provisioned cloud server is a device. Filled by the provision door (P4);
      * null on every lease before it.
      */

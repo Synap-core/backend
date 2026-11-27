@@ -65,8 +65,8 @@ export const installationHandlers: McpHandlerMap = {
               "No live installation of the person has this id: list them without installationId.",
           });
     }
-    // `deviceId` is an alias of `computerId` (devices plan 767a5978 §2): a
-    // device's id answers its computer.
+    // `deviceId` is an alias of `computerId`: a device's id answers its
+    // computer.
     const named = await computerFromDeviceArgs(access, {
       computer: ctx.args.computerId,
       device: ctx.args.deviceId,
@@ -100,7 +100,7 @@ export const installationHandlers: McpHandlerMap = {
         error:
           "capabilityKey is a capability's catalog slug, e.g. media-ffmpeg: find one with synap_run_capability market.search.",
       });
-    // `device` is an alias of `computer` (devices plan 767a5978 §2).
+    // `device` is an alias of `computer`.
     const named = await computerFromDeviceArgs(
       AccessContext.agent({
         userId: ctx.userId,
