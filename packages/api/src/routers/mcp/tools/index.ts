@@ -7202,7 +7202,7 @@ export function toolDefinitions(): ToolDefinition[] {
         openWorldHint: false,
       },
       description:
-        "Amend a pending proposal you authored (e.g. after user feedback), or REPAIR one whose approval failed (status 'approval_failed': the revision reopens it as pending, and its failure stays on the revision history): its summary, its reasoning, and/or the payload it will actually apply. A pending playbook proposal (create or update) is amended with patch {kind:'inner', fields:{ stages, goalTemplate, params, … }}; the revised payload is checked like the playbook write itself, so a bad one is refused now, not at approval. Does not re-run the event pipeline. The reply's `status` says where it stands: `pending` (a person still decides), or `auto_approved` when your own revised capture graph no longer needed a review and was applied (`materializedIds` maps each ref to what it created); `message` says it in one sentence.",
+        "Amend a pending proposal you authored, or REPAIR one whose approval failed (status 'approval_failed': the revision reopens it as pending, and its failure stays on the revision history): its summary, its reasoning, and/or the payload it will actually apply. A pending playbook proposal (create or update) is amended with patch {kind:'inner', fields:{ stages, goalTemplate, params, … }}; the revised payload is checked like the playbook write itself, so a bad one is refused now, not at approval. The reply's `status` says where it stands: `pending` (a person still decides), or `auto_approved` when your own revised capture graph no longer needed a review and was applied (`materializedIds` maps each ref to what it created); `message` says it in one sentence.",
       inputSchema: {
         type: "object",
         properties: {
@@ -7227,10 +7227,8 @@ export function toolDefinitions(): ToolDefinition[] {
           patch: {
             type: "object",
             description:
-              "Amend WHAT WILL BE APPLIED, not just the narrative. Use this " +
-              "whenever you change the summary to describe different content " +
-              "\u2014 a summary that no longer matches the payload is worse " +
-              "than no revision, because the human reads the summary.",
+              "What will be applied. Change it with the summary: a summary " +
+              "that no longer matches the payload misleads the reviewer.",
             properties: {
               kind: {
                 type: "string",
@@ -7248,7 +7246,7 @@ export function toolDefinitions(): ToolDefinition[] {
               textEdits: {
                 type: "array",
                 description:
-                  "Change part of a long text field (a cell's source) without resending it: each `find` must occur exactly once in `field`.",
+                  "Edit part of a long text field (a cell's rendererSource) without resending it; each `find` must occur once.",
                 items: {
                   type: "object",
                   properties: {
