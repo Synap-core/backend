@@ -106,9 +106,10 @@ export interface SeedableStage {
 
 /**
  * A template row → the steps worth copying onto a session as the session's
- * OWN snapshot (`focus_sessions.stages`). This is how a work template STARTS
- * work (the start-work door): it seeds, it never binds — `playbookId` stays
- * unwritten, so the session stays `work` and stays on the Work list.
+ * OWN snapshot (`focus_sessions.stages`), with `playbookId` left unwritten.
+ * "Start from" a playbook no longer comes through here: it BINDS the playbook
+ * (founder, 27 Nov 2026; `startWorkFromTemplate` passes `templateId` to the
+ * start door, whose binding snapshots the stages itself).
  *
  * Malformed stages are dropped one by one (a missing `name`/`category` would
  * make the pod refuse the WHOLE write), and a duplicate key keeps its first

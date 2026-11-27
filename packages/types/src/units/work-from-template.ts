@@ -1,25 +1,28 @@
 /**
- * Start work FROM a work template — the ONE rule, shared by every surface that
+ * Start work FROM a playbook — the ONE rule, shared by every surface that
  * offers it (browser Home "Start from…", relay new-work, relay capture).
  *
- * ── A WORK TEMPLATE SEEDS, IT NEVER BINDS ───────────────────────────────────
- * `playbooks.run` instantiates a run, and `templateId` / `followPlaybookId`
- * stamp `playbookId`, which reclassifies the session from `work` to `run` and
- * moves it off the Work list. So a work template starts YOUR work: a plain
- * session with your goal, and the template's steps copied onto it as the
- * session's own snapshot (`focusSessions.update { stages }`). `playbookId` is
- * never written. Track templates are a different act (`tracks.start`) and do
- * not come through here.
+ * ── STARTING FROM A PLAYBOOK BINDS IT (founder, 27 Nov 2026) ───────────────
+ * The session is started WITH the playbook: `focusSessions.create { goal,
+ * templateId }`. The pod's one create door (`createFocusSession`) then makes
+ * it a real run of that playbook: `playbookId` stamped, the playbook's stages
+ * snapshotted onto the session with the first one current, a `playbook_runs`
+ * row, the session placed in the playbook's space (W3), and a stage that moves
+ * the subject's status moves it (W6). The surface copies nothing: the steps
+ * come from the binding, so a stage advance and the subject's status follow
+ * the playbook. (Until 27 Nov this leaf started plain work and copied the
+ * steps onto it with `focusSessions.update { stages }`; nothing advanced.)
+ * Track templates are a different act (`tracks.start`) and do not come
+ * through here.
  *
- * ── A FAILED READ IS NOT "NO STEPS" ────────────────────────────────────────
- * The template read runs FIRST, in its own try. Starting blank on a 500 would
- * say "started" over work that silently lost its steps.
+ * ── A REFUSAL IS SAID ──────────────────────────────────────────────────────
+ * A playbook the person cannot see, or any other refusal of the start door,
+ * comes back as `refused` with its reason; nothing half-started is reported
+ * as started.
  *
- * PURE: the doors arrive as arguments, so each surface wires its own client and
- * navigation while the order of acts and the outcome words stay one.
+ * PURE: the door arrives as an argument, so each surface wires its own client
+ * and navigation while the order of acts and the outcome words stay one.
  */
-
-import { readSeedableStages, type SeedableStage } from "./templates.js";
 
 /** What a surface's create door answered. `deduped` = an open twin was reused. */
 export interface CreatedWork {
@@ -28,32 +31,23 @@ export interface CreatedWork {
 }
 
 export interface WorkFromTemplateDoors {
-  /** `playbooks.get` — the template, whose `stages` are read. */
-  getTemplate: (id: string) => Promise<unknown>;
   /**
-   * The surface's own start join: create PLAIN work with `goal`, await
-   * `onCreated` (the seed runs there, BEFORE the work is opened), then open it.
-   * Resolves the new work's id, or null when nothing was created (the join has
-   * already said why).
+   * The surface's own start join: create the session with `goal` BOUND to the
+   * playbook `templateId` (`focusSessions.create { goal, templateId }`), then
+   * open it. Resolves what was created, or null when nothing was (the join
+   * has already said why).
    */
-  startWork: (
-    goal: string,
-    onCreated: (created: CreatedWork) => Promise<void>
-  ) => Promise<string | null>;
-  /** `focusSessions.update { id, stages }` — the seed. */
-  seedSteps: (input: {
-    id: string;
-    stages: SeedableStage[];
-  }) => Promise<unknown>;
+  startWork: (start: {
+    goal: string;
+    templateId: string;
+  }) => Promise<CreatedWork | null>;
 }
 
 export type WorkFromTemplateOutcome =
-  /** Work started, with this many steps copied onto it (0 = the template has none). */
-  | { kind: "started"; sessionId: string; steps: number }
-  /** An open session with this goal already existed: opened, NOT re-seeded. */
+  /** A run of the playbook started: bound, its steps its own. */
+  | { kind: "started"; sessionId: string }
+  /** The join reused an open session with this goal: opened as it is. */
   | { kind: "reused"; sessionId: string }
-  /** Work started, but the steps did not land: said, never swallowed. */
-  | { kind: "unseeded"; sessionId: string; message: string }
   /** Nothing was started. */
   | { kind: "refused"; message: string };
 
@@ -61,9 +55,9 @@ const errorText = (err: unknown): string =>
   err instanceof Error && err.message ? err.message : "The pod refused it.";
 
 /**
- * Start work from a work template. The goal is what the person typed, else the
- * template's own name: a session needs a sentence, and the name is the one the
- * person just chose.
+ * Start work from a playbook. The goal is what the person typed, else the
+ * playbook's own name: a session needs a sentence, and the name is the one
+ * the person just chose.
  */
 export async function startWorkFromTemplate(
   doors: WorkFromTemplateDoors,
@@ -72,34 +66,9 @@ export async function startWorkFromTemplate(
   const { template } = args;
   const goal = args.goal.trim() || template.name;
 
-  let stages: SeedableStage[];
+  let created: CreatedWork | null;
   try {
-    stages = readSeedableStages(await doors.getTemplate(template.id));
-  } catch {
-    return {
-      kind: "refused",
-      message: `Couldn't read ${template.name} just now, so nothing was started. Try again.`,
-    };
-  }
-
-  let seedError: string | null = null;
-  let reused = false;
-  let sessionId: string | null;
-  try {
-    sessionId = await doors.startWork(goal, async (created) => {
-      // A reused twin is work already in flight: copying steps over it would
-      // rewrite its path under whoever is working it. Open it as it is.
-      if (created.deduped) {
-        reused = true;
-        return;
-      }
-      if (stages.length === 0) return;
-      try {
-        await doors.seedSteps({ id: created.id, stages });
-      } catch (err) {
-        seedError = errorText(err);
-      }
-    });
+    created = await doors.startWork({ goal, templateId: template.id });
   } catch (err) {
     return {
       kind: "refused",
@@ -107,39 +76,29 @@ export async function startWorkFromTemplate(
     };
   }
 
-  if (!sessionId) {
+  if (!created) {
     // The join already reported why; this only says nothing was started.
     return { kind: "refused", message: `Couldn't start ${template.name}.` };
   }
-  if (reused) return { kind: "reused", sessionId };
-  if (seedError) return { kind: "unseeded", sessionId, message: seedError };
-  return { kind: "started", sessionId, steps: stages.length };
+  if (created.deduped) return { kind: "reused", sessionId: created.id };
+  return { kind: "started", sessionId: created.id };
 }
 
 /**
- * The words for an outcome, or null when landing on the work says it all.
- * "Step" is the glossary word (concepts.md), on every surface.
+ * The words for an outcome, or null when landing on the work says it all
+ * (a started run shows its own steps).
  */
 export function describeWorkFromTemplate(
   outcome: WorkFromTemplateOutcome,
-  templateName: string
+  _templateName: string
 ): { tone: "info" | "error"; text: string } | null {
   switch (outcome.kind) {
     case "started":
-      if (outcome.steps === 0) return null;
-      return {
-        tone: "info",
-        text: `Started from ${templateName}: ${outcome.steps === 1 ? "its 1 step was" : `its ${outcome.steps} steps were`} copied onto your work.`,
-      };
+      return null;
     case "reused":
       return {
         tone: "info",
         text: "You already had work with that goal, so it was opened as it is.",
-      };
-    case "unseeded":
-      return {
-        tone: "error",
-        text: `Started, but the steps of ${templateName} were not copied: ${outcome.message}`,
       };
     case "refused":
       return { tone: "error", text: outcome.message };
