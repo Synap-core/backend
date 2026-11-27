@@ -108,6 +108,11 @@ export function SurfaceRowMenu({
 }) {
   const t = openT();
   const label = t("surfaces.actions", { title });
+  const detachLabel = resolveActionLabel(
+    "detach",
+    "imperative",
+    ambientCatalogLocale()
+  );
   return (
     <Dropdown placement="bottom-end">
       <DropdownTrigger>
@@ -133,14 +138,10 @@ export function SurfaceRowMenu({
                   key="detach"
                   color="danger"
                   className="text-danger"
+                  textValue={detachLabel}
                   onPress={onDetach}
                 >
-                  {resolveActionLabel(
-                    "detach",
-                    "imperative",
-                    ambientCatalogLocale()
-                  )}
-                  …
+                  {`${detachLabel}…`}
                 </DropdownItem>,
               ]
             : []),
