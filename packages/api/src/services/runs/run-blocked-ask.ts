@@ -32,6 +32,7 @@ import {
   playbooks,
   runHolder,
   setRunStatus,
+  uuidFromTextSql,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { PlaybookRun } from "@synap/database/schema";
@@ -59,7 +60,7 @@ function automationOf(fs: string): SQL {
   return drizzleSql`coalesce(
     ${m} ->> 'automationId',
     (SELECT ar.automation_id::text FROM automation_runs ar
-      WHERE ar.id::text = ${m} ->> 'automationRunId')
+      WHERE ar.id = ${uuidFromTextSql(drizzleSql`${m} ->> 'automationRunId'`)})
   )`;
 }
 
