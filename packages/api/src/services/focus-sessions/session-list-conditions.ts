@@ -10,9 +10,11 @@
  * The doors still differ where they SHOULD, and those differences are the
  * caller's arguments, never a fork of this logic:
  *   - DEFAULTS. tRPC (a person's work surface) defaults to `lens: "default"`
- *     and `kind: "work"`. Hub REST (the agent door) passes `"all"` for both,
+ *     and `kind: "work"`. Hub REST and MCP (the agent doors) pass lens `"all"`,
  *     because an agent looking for the session it just opened wants exactly
- *     the rows a person's default lens hides.
+ *     the rows a person's default lens hides, and, with no kind named, every
+ *     kind except the sessions an automation opened (`withoutAutomationSessions`,
+ *     decision 90897bca).
  *   - The SUBJECT narrow ("sessions on these things", `session-subject.ts`)
  *     is resolved by the door (a slug lookup is async) and passed in here, so
  *     tRPC and Hub REST read the same predicate.
@@ -31,7 +33,6 @@ import {
   inArray,
   isNotNull,
   isNull,
-  not,
   or,
   focusSessions,
   links,
@@ -50,7 +51,7 @@ import {
 } from "./session-status-filter.js";
 import { triagePendingWhere, notTriagePendingWhere } from "./triage.js";
 import {
-  closedAutomationRunWhere,
+  notAutomationSessionWhere,
   sessionKindWhere,
   sessionAutomationWhere,
 } from "./session-kind.js";
@@ -159,11 +160,13 @@ export interface SessionListQuery {
    */
   subject?: SessionSubject;
   /**
-   * Leave out CLOSED automation runs (`closedAutomationRunWhere`): the work
-   * graph's DEFAULT window, when its caller named no kind. A kind named
-   * explicitly (`all` included) keeps them.
+   * Leave out every session an AUTOMATION opened (`notAutomationSessionWhere`):
+   * the agent doors' default population when the caller names no `kind`
+   * (decision 90897bca, 27 Nov 2026) — the MCP and Hub list and work-graph
+   * doors. A kind named explicitly (`all` included) keeps them. Rendered as
+   * the predicate of the partial index 0460, so the read skips those rows.
    */
-  withoutClosedAutomationRuns?: boolean;
+  withoutAutomationSessions?: boolean;
 }
 
 /**
@@ -231,7 +234,7 @@ export function sessionListConditions({
   parentSessionId,
   roster,
   subject,
-  withoutClosedAutomationRuns,
+  withoutAutomationSessions,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [
     sessionReadableWhere({ userId: requireUserId(userId), roster }),
@@ -304,8 +307,8 @@ export function sessionListConditions({
   } else if (kind !== "all") {
     conditions.push(sessionKindWhere(kind));
   }
-  if (withoutClosedAutomationRuns) {
-    conditions.push(not(closedAutomationRunWhere()));
+  if (withoutAutomationSessions) {
+    conditions.push(notAutomationSessionWhere());
   }
 
   // FLOW-DEFINITION filters, so a playbook or automation detail page lists its

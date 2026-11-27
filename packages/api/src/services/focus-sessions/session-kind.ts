@@ -94,26 +94,44 @@ export function startedByAutomation(metadata: unknown): boolean {
 }
 
 /**
- * SQL: a CLOSED automation run — a `run`-kind row an automation opened
- * (`origin: "automation"` or either automation key) that ended `closed`. The
- * work graph's default window leaves these out (founder default, 26 Nov 2026:
- * the GitHub dev-loop automation closes one run session per webhook, ~2,000 a
- * day, and they buried the map's ~400 other sessions under its 500 ceiling).
- * An open, failed or cancelled run is not matched: it may need someone.
+ * SQL: an AUTOMATION SESSION — a `run`-kind row an automation opened
+ * (`origin = 'automation'` or either automation key): not accepted from
+ * triage, not a `scheduled` appointment, not a receipt (the overrides the
+ * kind derivation reads before `run`; the follow override cannot apply, it
+ * requires no automation signal). Not a fourth kind: the kind lens is
+ * untouched.
  *
- * Never NULL (`coalesce`), so `NOT (…)` of it keeps every other row: the
- * kind predicate's `origin IN (…)` is NULL on a NULL origin, the trap
- * `notReceiptWhere` documents.
+ * Decision 90897bca (founder, 27 Nov 2026): "AIs that check the latest
+ * sessions get no automation sessions until they ask for automations." The
+ * agent list and graph doors leave these out when no `kind` is named
+ * (`withoutAutomationSessions`). Not the `run` kind: a session a person or an
+ * agent starts on a playbook is stamped `origin: 'playbook'` and reads `run`,
+ * and those are exactly the long sessions that must stay in view (390 of them
+ * on the founder's pod, 71 open, against 60,781 automation rows).
+ *
+ * Constants are RAW, never bind parameters, and the text is the predicate of
+ * the partial index `idx_focus_sessions_user_started_not_automation`
+ * (migration 0460): the planner uses a partial index only when the query's
+ * WHERE carries the index predicate itself, and a `$1` in place of
+ * `'automation'` is not provably the same expression under a generic plan.
+ * Change both together (`session-kind.not-automation-index.pglite.test.ts`).
+ * Never NULL (`coalesce`), so `NOT (…)` keeps every other row.
  */
-export function closedAutomationRunWhere(): SQL {
-  return drizzleSql`coalesce((${and(
-    eq(focusSessions.status, "closed"),
-    sessionKindWhere("run"),
-    or(
-      eq(focusSessions.origin, "automation"),
-      ...AUTOMATION_KEYS.map((key) => metadataKeyWhere(key, "IS NOT NULL"))
-    )
+export function automationSessionWhere(): SQL {
+  return drizzleSql`coalesce(((${focusSessions.origin} = 'automation' OR ${or(
+    ...AUTOMATION_KEYS.map((key) => metadataKeyWhere(key, "IS NOT NULL"))
+  )}) AND ${focusSessions.metadata} #>> ${ACCEPTED_PATH} IS NULL AND ${
+    focusSessions.status
+  } <> ${drizzleSql.raw(`'${SCHEDULED_STATUS}'`)} AND ${
+    focusSessions.metadata
+  } #>> '{kind}' IS DISTINCT FROM ${drizzleSql.raw(
+    `'${AGENT_PROPOSAL_PACKAGE_KIND}'`
   )}), false)` as SQL;
+}
+
+/** SQL: NOT {@link automationSessionWhere} — the agent doors' default population. */
+export function notAutomationSessionWhere(): SQL {
+  return drizzleSql`NOT ${automationSessionWhere()}` as SQL;
 }
 
 /** The marker `resolveOrCreateAgentProposalSession` stamps on a receipt. */
