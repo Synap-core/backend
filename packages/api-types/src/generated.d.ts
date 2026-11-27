@@ -10392,7 +10392,8 @@ declare const DEVICE_STATUSES: readonly [
 	"online",
 	"offline",
 	"degraded",
-	"unknown"
+	"unknown",
+	"retired"
 ];
 export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
 /** What a list row shows of a device's resources. Absent = not reported. */
