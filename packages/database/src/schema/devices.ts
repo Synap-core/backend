@@ -35,6 +35,7 @@ import {
 import { sql } from "drizzle-orm";
 import type {
   DeviceBelongsTo,
+  DeviceCapabilityReports,
   DeviceConnection,
   DeviceManifest,
 } from "@synap-core/types/device-manifest";
@@ -63,6 +64,16 @@ export const devices = pgTable(
       .notNull()
       .default({ mode: "manual" }),
     manifest: jsonb("manifest").$type<DeviceManifest | null>(),
+    /**
+     * Each reporting process's latest capabilities and report time
+     * (`DeviceCapabilityReports`): one computer runs several Synap processes,
+     * each knowing part of what it can do. The device's capabilities are the
+     * union of the reporters seen within the TTL, read at read time.
+     */
+    capabilityReports: jsonb("capability_reports")
+      .$type<DeviceCapabilityReports>()
+      .notNull()
+      .default({}),
     labels: text("labels").array().notNull().default([]),
     lastReportAt: timestamp("last_report_at", {
       mode: "date",

@@ -127,6 +127,8 @@ export const DeviceIdentitySchema = z.object({
   model: Word(200).optional(),
   /** The OS as the runner reads it (`darwin`, `linux`, `win32`, "iOS 18"). */
   os: Word(64).optional(),
+  /** The OS release ("15.1", "Ubuntu 24.04", "6.8.0-45-generic"). */
+  osVersion: Word(120).optional(),
   arch: Word(32).optional(),
   hostname: Word(253).optional(),
 });
@@ -289,6 +291,105 @@ function firstIssue(
     .filter(Boolean)
     .join(".");
   return `${path || "manifest"}: ${i?.message ?? "invalid"}`;
+}
+
+// ─── Several processes report one device ────────────────────────────────────
+
+/**
+ * Who on the device sent a report: one computer runs several Synap processes
+ * (the worker's host runner, the waker, a one-shot `synap login`), each
+ * knowing only PART of what the device can do. A report names its reporter;
+ * the pod keeps each reporter's latest capabilities apart, so one process
+ * never erases another's.
+ */
+export const DEVICE_REPORTER = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** The reporter a door uses when the report names none. */
+export const DEVICE_DEFAULT_REPORTER = "runner";
+
+/**
+ * A reporter's capabilities count while it reported within this window: a
+ * process that stopped (its capabilities are gone with it) drops out by
+ * itself. A live reporter refreshes it on every report, with or without a
+ * manifest, so a process should report at least every 10 minutes.
+ */
+export const DEVICE_CAPABILITY_TTL_MS = 30 * 60 * 1000;
+
+/** Each reporter's latest capabilities and when it last reported. */
+export type DeviceCapabilityReports = Record<
+  string,
+  { capabilities: string[]; at: string }
+>;
+
+/**
+ * THE capabilities of a device at `now`: the union of every reporter that
+ * reported within {@link DEVICE_CAPABILITY_TTL_MS}, sorted. Null when no
+ * reporter ever said any (the caller then reads the manifest as stored).
+ */
+export function effectiveDeviceCapabilities(
+  reports: DeviceCapabilityReports | null | undefined,
+  now: Date | number = Date.now()
+): string[] | null {
+  const entries = Object.values(reports ?? {});
+  if (entries.length === 0) return null;
+  const nowMs = typeof now === "number" ? now : now.getTime();
+  const live = new Set<string>();
+  for (const r of entries) {
+    const at = new Date(r.at).getTime();
+    if (Number.isNaN(at) || nowMs - at > DEVICE_CAPABILITY_TTL_MS) continue;
+    for (const c of r.capabilities ?? []) live.add(c);
+  }
+  return [...live].sort();
+}
+
+/**
+ * The reports after `reporter` reported at `now`: its capabilities replaced
+ * when the report carries some, kept (and refreshed) when it carries none.
+ */
+export function recordCapabilityReport(
+  reports: DeviceCapabilityReports | null | undefined,
+  reporter: string,
+  capabilities: string[] | undefined,
+  now: Date
+): DeviceCapabilityReports {
+  const prev = (reports ?? {})[reporter];
+  return {
+    ...(reports ?? {}),
+    [reporter]: {
+      capabilities: capabilities ?? prev?.capabilities ?? [],
+      at: now.toISOString(),
+    },
+  };
+}
+
+/**
+ * A report merged into the stored manifest, section by section: a section
+ * the report carries replaces the stored one, a section it leaves out is
+ * KEPT (the waker that knows nothing of disks never erases them). The
+ * `capabilities` of the result are the given union, never one report's.
+ */
+export function mergeDeviceManifest(
+  stored: DeviceManifest | null | undefined,
+  incoming: DeviceManifest,
+  capabilities: string[] | null
+): DeviceManifest {
+  const merged: DeviceManifest = {
+    ...(stored ?? {}),
+    manifestVersion: DEVICE_MANIFEST_VERSION,
+  };
+  for (const key of [
+    "identity",
+    "resources",
+    "parameters",
+    "location",
+    "health",
+  ] as const) {
+    if (incoming[key] !== undefined) (merged as Record<string, unknown>)[key] = incoming[key];
+  }
+  if (capabilities !== null) merged.capabilities = capabilities;
+  else if (incoming.capabilities !== undefined)
+    merged.capabilities = incoming.capabilities;
+  return merged;
 }
 
 // ─── Status: a read verdict ─────────────────────────────────────────────────

@@ -28,13 +28,19 @@ import {
 } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
+  DEVICE_DEFAULT_REPORTER,
   DEVICE_MANIFEST_VERSION,
+  DEVICE_REPORTER,
   DEVICE_REPORT_WRITE_MS,
   DeviceManifestSchema,
   buildDeviceTree,
   deriveDeviceStatus,
+  effectiveDeviceCapabilities,
+  mergeDeviceManifest,
   parseDeviceManifest,
+  recordCapabilityReport,
   summarizeDeviceResources,
+  type DeviceCapabilityReports,
   type DeviceConnection,
   type DeviceManifest,
   type DeviceReportAck,
@@ -127,6 +133,7 @@ async function deviceOfPrincipal(machineUserId: string) {
       id: devices.id,
       kind: devices.kind,
       manifest: devices.manifest,
+      capabilityReports: devices.capabilityReports,
       lastReportAt: devices.lastReportAt,
       retiredAt: devices.retiredAt,
     })
@@ -140,21 +147,35 @@ async function deviceOfPrincipal(machineUserId: string) {
 
 /**
  * Record that computer `machineUserId` reported, with its manifest when the
- * runner sent one (`manifest` undefined or null = none). Never throws: the
+ * process sent one (`manifest` undefined or null = none). Never throws: the
  * report rides on a call that must answer whatever happens here, so a failure
  * comes back as `recorded: false` with the reason (and is logged).
  *
+ * One computer runs several processes (the host runner, the waker, a one-shot
+ * `synap login`), each knowing only part of the device: `reporter` names the
+ * one reporting. A manifest is MERGED section by section (a section the
+ * report leaves out keeps the stored one), and each reporter's capabilities
+ * are kept apart (`capability_reports`): the device's capabilities are the
+ * union of the reporters seen within `DEVICE_CAPABILITY_TTL_MS`, so neither
+ * process erases the other's and a stopped one drops out by itself.
+ *
  * Writes at most once a minute when nothing changed
- * ({@link DEVICE_REPORT_WRITE_MS}); a manifest that differs from the stored
- * one is written at once. A refused manifest keeps the last good one.
+ * ({@link DEVICE_REPORT_WRITE_MS}); a changed manifest or capability set is
+ * written at once. A refused manifest keeps the last good one.
  */
 export async function recordDeviceReport(args: {
   machineUserId: string;
   manifest?: unknown;
+  /** Which process reports (`DEVICE_REPORTER`); the door's default else. */
+  reporter?: string;
   now?: Date;
 }): Promise<DeviceReportAck> {
   const now = args.now ?? new Date();
   const sent = args.manifest !== undefined && args.manifest !== null;
+  const reporter =
+    args.reporter && DEVICE_REPORTER.test(args.reporter)
+      ? args.reporter
+      : DEVICE_DEFAULT_REPORTER;
   try {
     let row = await deviceOfPrincipal(args.machineUserId);
     if (!row) {
@@ -171,9 +192,25 @@ export async function recordDeviceReport(args: {
     const parsed = sent
       ? parseDeviceManifest(args.manifest, { kind: row.kind })
       : null;
-    const manifest = parsed?.ok ? parsed.manifest : null;
+    const incoming = parsed?.ok ? parsed.manifest : null;
+    const reports = recordCapabilityReport(
+      row.capabilityReports,
+      reporter,
+      incoming?.capabilities,
+      now
+    );
+    const stored = storedManifest(row);
+    const manifest = incoming
+      ? mergeDeviceManifest(
+          stored,
+          incoming,
+          effectiveDeviceCapabilities(reports, now)
+        )
+      : stored;
     const changed =
-      manifest !== null && stableJson(manifest) !== stableJson(row.manifest);
+      stableJson(manifest) !== stableJson(stored) ||
+      stableJson(capabilitySets(reports)) !==
+        stableJson(capabilitySets(row.capabilityReports));
     const due =
       !row.lastReportAt ||
       now.getTime() - row.lastReportAt.getTime() >= DEVICE_REPORT_WRITE_MS;
@@ -183,7 +220,8 @@ export async function recordDeviceReport(args: {
         .set({
           lastReportAt: now,
           updatedAt: now,
-          ...(changed ? { manifest } : {}),
+          capabilityReports: reports,
+          ...(manifest !== stored ? { manifest } : {}),
         })
         .where(eq(devices.id, row.id));
     }
@@ -213,6 +251,18 @@ export async function recordDeviceReport(args: {
   }
 }
 
+/** Each reporter's capability set, without its report time. */
+function capabilitySets(
+  reports: DeviceCapabilityReports | null | undefined
+): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(reports ?? {}).map(([k, v]) => [
+      k,
+      [...(v.capabilities ?? [])].sort(),
+    ])
+  );
+}
+
 /** JSON with sorted keys: jsonb reorders keys, so a plain stringify differs. */
 function stableJson(v: unknown): string {
   return JSON.stringify(v, (_k, val: unknown) =>
@@ -229,7 +279,9 @@ function stableJson(v: unknown): string {
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /** A stored manifest, read back: a row that no longer parses reads as none. */
-function storedManifest(row: Pick<Device, "id" | "manifest">): DeviceManifest | null {
+function storedManifest(
+  row: Pick<Device, "id" | "manifest">
+): DeviceManifest | null {
   if (!row.manifest) return null;
   const parsed = DeviceManifestSchema.safeParse(row.manifest);
   if (parsed.success) return parsed.data;
@@ -238,8 +290,16 @@ function storedManifest(row: Pick<Device, "id" | "manifest">): DeviceManifest | 
 }
 
 /** One device row as the fleet reads it, its status derived at `now`. */
-export function toFleetDevice(row: Device, now: Date = new Date()): FleetDeviceDetail {
-  const manifest = storedManifest(row);
+export function toFleetDevice(
+  row: Device,
+  now: Date = new Date()
+): FleetDeviceDetail {
+  const stored = storedManifest(row);
+  // The capabilities are the live reporters' union at `now`; a device no
+  // process reports for (a bridge's, a manual one) keeps its manifest's.
+  const live = effectiveDeviceCapabilities(row.capabilityReports, now);
+  const manifest =
+    stored && live !== null ? { ...stored, capabilities: live } : stored;
   return {
     id: row.id,
     kind: row.kind,
@@ -260,7 +320,7 @@ export function toFleetDevice(row: Device, now: Date = new Date()): FleetDeviceD
     retiredAt: row.retiredAt?.toISOString() ?? null,
     identity: manifest?.identity ?? {},
     resources: summarizeDeviceResources(manifest),
-    capabilities: manifest?.capabilities ?? [],
+    capabilities: live ?? manifest?.capabilities ?? [],
     location: manifest?.location ?? null,
     health: manifest?.health ?? null,
     manifest,

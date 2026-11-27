@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEVICE_CAPABILITY_TTL_MS,
   DEVICE_KINDS,
   DEVICE_KIND_PARAMETERS,
   DEVICE_ONLINE_WINDOW_MS,
   DeviceConnectionSchema,
   buildDeviceTree,
   deriveDeviceStatus,
+  effectiveDeviceCapabilities,
+  mergeDeviceManifest,
   parseDeviceManifest,
+  recordCapabilityReport,
   summarizeDeviceResources,
 } from "./index.js";
 
@@ -229,5 +233,59 @@ describe("buildDeviceTree", () => {
     expect(roots.map((r) => r.id)).toEqual(["host", "orphan", "a", "b"]);
     expect(roots[0]!.children[0]!.id).toBe("vm");
     expect(roots[0]!.children[0]!.children[0]!.id).toBe("ct");
+  });
+});
+
+describe("several processes report one device", () => {
+  const t0 = new Date("2026-11-27T12:00:00Z");
+  const later = (ms: number) => new Date(t0.getTime() + ms);
+
+  it("keeps each reporter's capabilities apart and answers their union", () => {
+    let reports = recordCapabilityReport({}, "waker", ["wake.agent"], t0);
+    reports = recordCapabilityReport(reports, "host", ["serve.http"], t0);
+    // The waker reports again: the host's capability is not erased.
+    reports = recordCapabilityReport(reports, "waker", ["wake.agent"], t0);
+    expect(effectiveDeviceCapabilities(reports, t0)).toEqual([
+      "serve.http",
+      "wake.agent",
+    ]);
+  });
+
+  it("a report with no capabilities keeps the reporter's last set alive", () => {
+    let reports = recordCapabilityReport({}, "host", ["serve.http"], t0);
+    const at = later(DEVICE_CAPABILITY_TTL_MS - 1000);
+    reports = recordCapabilityReport(reports, "host", undefined, at);
+    expect(
+      effectiveDeviceCapabilities(reports, later(DEVICE_CAPABILITY_TTL_MS + 1))
+    ).toEqual(["serve.http"]);
+  });
+
+  it("a reporter that stopped drops out after the TTL", () => {
+    let reports = recordCapabilityReport({}, "host", ["serve.http"], t0);
+    const late = later(DEVICE_CAPABILITY_TTL_MS + 1000);
+    reports = recordCapabilityReport(reports, "waker", ["wake.agent"], late);
+    expect(effectiveDeviceCapabilities(reports, late)).toEqual(["wake.agent"]);
+    expect(effectiveDeviceCapabilities({}, t0)).toBeNull();
+  });
+
+  it("merges a report section by section: what it leaves out is kept", () => {
+    const stored = parseDeviceManifest(FULL);
+    if (!stored.ok) throw new Error(stored.error);
+    const waker = parseDeviceManifest({
+      manifestVersion: 1,
+      identity: { os: "darwin", osVersion: "15.1" },
+      capabilities: ["wake.agent"],
+    });
+    if (!waker.ok) throw new Error(waker.error);
+    const merged = mergeDeviceManifest(stored.manifest, waker.manifest, [
+      "run.tool",
+      "wake.agent",
+    ]);
+    expect(merged.identity).toEqual({ os: "darwin", osVersion: "15.1" });
+    // Not in the waker's report: kept from the stored manifest.
+    expect(merged.resources).toEqual(stored.manifest.resources);
+    expect(merged.location).toEqual(stored.manifest.location);
+    // The union, never the one report's set.
+    expect(merged.capabilities).toEqual(["run.tool", "wake.agent"]);
   });
 });

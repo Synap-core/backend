@@ -235,6 +235,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       const device = await recordDeviceReport({
         machineUserId: who.runner.machineUserId,
         manifest: (parsed.data as { manifest?: unknown }).manifest,
+        reporter: "host",
       });
       const job = await leaseHostJob(who.runner, parsed.data);
       return c.json({ job, device });

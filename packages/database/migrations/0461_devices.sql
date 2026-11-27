@@ -13,7 +13,10 @@
 --   parent_device_id host → VM → container;
 --   principal_user_id the machine user, when it runs the runner;
 --   connection      {mode: agent | bridge | provider | manual, ...};
---   manifest        the device manifest (v1) as it last reported it;
+--   manifest        the device manifest (v1), merged section by section
+--                   from every report;
+--   capability_reports each reporting process's capabilities and report
+--                   time: the device's capabilities are their live union;
 --   labels          what `placement.labels` will read (P4);
 --   last_report_at  when it last reported. Status (online, offline,
 --                   degraded, unknown) is a READ verdict derived from it and
@@ -38,6 +41,7 @@ CREATE TABLE IF NOT EXISTS "devices" (
   "principal_user_id" text,
   "connection" jsonb NOT NULL DEFAULT '{"mode":"manual"}'::jsonb,
   "manifest" jsonb,
+  "capability_reports" jsonb NOT NULL DEFAULT '{}'::jsonb,
   "labels" text[] NOT NULL DEFAULT '{}'::text[],
   "last_report_at" timestamp with time zone,
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),

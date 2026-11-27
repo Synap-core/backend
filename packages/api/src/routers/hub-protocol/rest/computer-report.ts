@@ -45,6 +45,12 @@ const ReportBodySchema = z
   .object({
     /** The device manifest v1; checked by the registry, not here. */
     manifest: z.unknown().optional(),
+    /**
+     * Which process reports (`waker`, `worker`, `host`, `login`; a-z, 0-9,
+     * dashes): its capabilities are kept apart from the other processes'.
+     * Absent or malformed: `runner`.
+     */
+    reporter: z.string().optional(),
   })
   .openapi("ComputerReportBody");
 
@@ -109,7 +115,7 @@ export function registerComputerReportRoutes(app: HubHono): void {
     tags: ["Computers"],
     summary: "A computer reports what it is (its device manifest)",
     description:
-      "A connected computer's own key only (the device-flow key). Stores `manifest` (the device manifest v1, optional) on the computer's device and moves its report time. A manifest the pod cannot read is answered `manifest: \"refused\"` with the field in `error`, and the last good one is kept.",
+      "A connected computer's own key only (the device-flow key). Merges `manifest` (the device manifest v1, optional) into the computer's device, section by section, and moves its report time. `reporter` names the process (its capabilities are kept apart from the other processes' and expire 30 minutes after its last report). A manifest the pod cannot read is answered `manifest: \"refused\"` with the field in `error`, and the last good one is kept.",
     request: { body: ReportBodySchema },
     responses: {
       200: {
@@ -142,13 +148,15 @@ export function registerComputerReportRoutes(app: HubHono): void {
         );
       }
     }
-    const manifest =
+    const fields =
       body && typeof body === "object"
-        ? (body as { manifest?: unknown }).manifest
-        : undefined;
+        ? (body as { manifest?: unknown; reporter?: unknown })
+        : {};
     const device = await recordDeviceReport({
       machineUserId: who.machineUserId,
-      manifest,
+      manifest: fields.manifest,
+      reporter:
+        typeof fields.reporter === "string" ? fields.reporter : undefined,
     });
     if (!device.recorded)
       return c.json(

@@ -410,3 +410,48 @@ describe("device / deviceId: aliases of computer / computerId", () => {
     expect(byDevice.installations).toEqual(byComputer.installations);
   });
 });
+
+describe("two processes report one computer (waker and host runner)", () => {
+  const RUNNER = [...WRITE, "host.runner"];
+  const capsOf = async () => {
+    const { devices } = await fleetAs(B).list();
+    return devices.find((d) => d.name === "box-b")!;
+  };
+
+  it("neither erases the other's capabilities, nor a section it left out", async () => {
+    const waker = await post(computer(BOX_B, B), "/computers/me/report", {
+      reporter: "waker",
+      manifest: {
+        manifestVersion: 1,
+        resources: { memoryMb: 8192 },
+        capabilities: ["wake.agent"],
+      },
+    });
+    expect(waker.status).toBe(200);
+    const host = await post(computer(BOX_B, B, RUNNER), "/host-jobs/lease", {
+      manifest: { manifestVersion: 1, capabilities: ["serve.http"] },
+    });
+    expect(host.status).toBe(200);
+    // The waker again, last: the host's capability stays.
+    await post(computer(BOX_B, B), "/computers/me/report", {
+      reporter: "waker",
+      manifest: { manifestVersion: 1, capabilities: ["wake.agent"] },
+    });
+    const device = await capsOf();
+    expect(device.capabilities).toEqual(["serve.http", "wake.agent"]);
+    // The host's report carried no resources: the waker's are kept.
+    expect(device.resources.memoryMb).toBe(8192);
+  });
+
+  it("a process that stopped reporting drops out after the TTL", async () => {
+    await q(
+      `UPDATE devices
+         SET capability_reports = jsonb_set(capability_reports, '{host,at}',
+               to_jsonb(to_char((now() - interval '2 hours') AT TIME ZONE 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
+       WHERE principal_user_id = $1`,
+      [BOX_B]
+    );
+    expect((await capsOf()).capabilities).toEqual(["wake.agent"]);
+  });
+});

@@ -6481,6 +6481,7 @@ CREATE TABLE IF NOT EXISTS "devices" (
   "principal_user_id" text,
   "connection" jsonb NOT NULL DEFAULT '{"mode":"manual"}'::jsonb,
   "manifest" jsonb,
+  "capability_reports" jsonb NOT NULL DEFAULT '{}'::jsonb,
   "labels" text[] NOT NULL DEFAULT '{}'::text[],
   "last_report_at" timestamp with time zone,
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),
