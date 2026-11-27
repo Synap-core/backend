@@ -57,7 +57,10 @@ import { fleetRouter } from "../../routers/fleet.js";
 import { installationHandlers } from "../../routers/mcp/handlers/installations.js";
 import { AccessContext } from "../../access/index.js";
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
-import type { HubHono, HubVariables } from "../../routers/hub-protocol/rest/_shared.js";
+import type {
+  HubHono,
+  HubVariables,
+} from "../../routers/hub-protocol/rest/_shared.js";
 import { computerFromDeviceArgs, ensureComputerDevice } from "./devices.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
@@ -111,7 +114,9 @@ const MANIFEST = {
   resources: {
     cpu: { model: "EPYC", cores: 8 },
     memoryMb: 32768,
-    disks: [{ mount: "/data", sizeMb: 492_000, freeMb: 481_000, tier: "hdd-thin" }],
+    disks: [
+      { mount: "/data", sizeMb: 492_000, freeMb: 481_000, tier: "hdd-thin" },
+    ],
   },
   capabilities: ["run.tool", "wake.agent"],
 };
@@ -170,13 +175,30 @@ beforeAll(async () => {
       ($2, $5, $6, 'person', 'printer', 'Bea''s printer', NULL, '{"mode":"manual"}', '{}'),
       ($3, $5, $7, 'shared', 'camera', 'B-only camera', NULL, '{"mode":"manual"}', '{}'),
       ($4, $8, NULL, 'person', 'vm', 'VM 109', $9, '{"mode":"manual"}', '{}')`,
-    [PRINTER_SHARED, PRINTER_PERSON, CAMERA_B, VM, B, WS_SHARED, WS_B, A, devbox.id]
+    [
+      PRINTER_SHARED,
+      PRINTER_PERSON,
+      CAMERA_B,
+      VM,
+      B,
+      WS_SHARED,
+      WS_B,
+      A,
+      devbox.id,
+    ]
   );
 }, 60_000);
 
 describe("enrolment", () => {
   it("makes one computer device per computer, named and owned as the computer", async () => {
-    const rows = await q<{ principal_user_id: string; owner_user_id: string; kind: string; name: string; connection: { mode: string }; manifest: { identity: Record<string, string> } }>(
+    const rows = await q<{
+      principal_user_id: string;
+      owner_user_id: string;
+      kind: string;
+      name: string;
+      connection: { mode: string };
+      manifest: { identity: Record<string, string> };
+    }>(
       `SELECT principal_user_id, owner_user_id, kind, name, connection, manifest
        FROM devices WHERE principal_user_id IS NOT NULL ORDER BY principal_user_id`
     );
@@ -189,7 +211,10 @@ describe("enrolment", () => {
       name: "mac.local",
       connection: { mode: "agent" },
     });
-    expect(mac.manifest.identity).toEqual({ hostname: "mac.local", os: "darwin" });
+    expect(mac.manifest.identity).toEqual({
+      hostname: "mac.local",
+      os: "darwin",
+    });
   });
 
   it("a reconnect reuses the device: never a twin", async () => {
@@ -264,7 +289,9 @@ describe("POST /computers/me/report", () => {
       appAs({ scopes: WRITE, userId: A, agentUserId: HOSTED }),
       computer(DEVBOX, B),
     ]) {
-      const res = await post(app, "/computers/me/report", { manifest: MANIFEST });
+      const res = await post(app, "/computers/me/report", {
+        manifest: MANIFEST,
+      });
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ code: "NOT_A_COMPUTER" });
     }
@@ -359,7 +386,9 @@ describe("device / deviceId: aliases of computer / computerId", () => {
 
   it("a device id answers its computer; any other value passes through", async () => {
     const devbox = await deviceRow(DEVBOX);
-    expect(await computerFromDeviceArgs(access(), { device: devbox.id })).toEqual({
+    expect(
+      await computerFromDeviceArgs(access(), { device: devbox.id })
+    ).toEqual({
       ok: true,
       computer: DEVBOX,
     });
@@ -373,11 +402,18 @@ describe("device / deviceId: aliases of computer / computerId", () => {
     });
     // Two names for one computer agree; two different computers do not.
     expect(
-      await computerFromDeviceArgs(access(), { computer: DEVBOX, device: devbox.id })
+      await computerFromDeviceArgs(access(), {
+        computer: DEVBOX,
+        device: devbox.id,
+      })
     ).toEqual({ ok: true, computer: DEVBOX });
     expect(
-      (await computerFromDeviceArgs(access(), { computer: MAC, device: devbox.id }))
-        .ok
+      (
+        await computerFromDeviceArgs(access(), {
+          computer: MAC,
+          device: devbox.id,
+        })
+      ).ok
     ).toBe(false);
     // A device with no runner is not a computer.
     const printer = await computerFromDeviceArgs(access(), {
@@ -402,7 +438,9 @@ describe("device / deviceId: aliases of computer / computerId", () => {
         apiKeyScopes: ["mcp.read"],
       } as never);
       const text = (res.content[0] as { text: string }).text;
-      return JSON.parse(text) as { installations: Array<Record<string, unknown>> };
+      return JSON.parse(text) as {
+        installations: Array<Record<string, unknown>>;
+      };
     };
     const byComputer = await call({ computerId: DEVBOX });
     const byDevice = await call({ deviceId: devbox.id });

@@ -118,7 +118,10 @@ describe("migration 0461 — devices", () => {
     const devbox = rows.find((r) => r.principal_user_id === "devbox")!;
     // A blank name falls back to the hostname; whose it is is copied.
     expect(devbox).toMatchObject({ name: "devbox", belongs_to: "shared" });
-    expect(devbox.manifest.identity).toEqual({ hostname: "devbox", os: "linux" });
+    expect(devbox.manifest.identity).toEqual({
+      hostname: "devbox",
+      os: "linux",
+    });
     const bare = rows.find((r) => r.principal_user_id === "bare")!;
     expect(bare).toMatchObject({ name: "Computer", belongs_to: "person" });
     expect(bare.manifest.identity).toEqual({});

@@ -135,7 +135,8 @@ export function registerComputerReportRoutes(app: HubHono): void {
     const stale = refuseStaleDeviceSession(c);
     if (stale) return stale;
     const who = await resolveComputerSelf(c);
-    if (!who.ok) return c.json({ code: who.code, error: who.error }, who.status);
+    if (!who.ok)
+      return c.json({ code: who.code, error: who.error }, who.status);
     let body: unknown = {};
     const text = await c.req.text();
     if (text.trim() !== "") {

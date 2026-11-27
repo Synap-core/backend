@@ -115,7 +115,8 @@ export type DeviceNativeCapability =
   (typeof DEVICE_NATIVE_CAPABILITIES)[number];
 
 /** `run.tool`, `print.3d`, `capture.photo`: lower-case words joined by dots. */
-export const DEVICE_CAPABILITY_NAME = /^[a-z][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/;
+export const DEVICE_CAPABILITY_NAME =
+  /^[a-z][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/;
 
 // ─── The manifest ───────────────────────────────────────────────────────────
 
@@ -196,29 +197,28 @@ export const DeviceParametersSchema = z.record(z.string(), z.unknown());
 const Mm = z.number().positive().max(100_000);
 
 /** The kinds whose `parameters` have a known shape. */
-export const DEVICE_KIND_PARAMETERS: Partial<
-  Record<DeviceKind, z.ZodTypeAny>
-> = {
-  printer: z
-    .object({
-      /** The build volume, in millimetres. */
-      bedMm: z.object({ x: Mm, y: Mm, z: Mm.optional() }).optional(),
-      nozzleMm: Mm.optional(),
-      materials: z.array(Word(64)).max(64).optional(),
-    })
-    .passthrough(),
-  camera: z
-    .object({
-      resolution: z
-        .object({
-          width: z.number().int().positive(),
-          height: z.number().int().positive(),
-        })
-        .optional(),
-      fps: z.number().positive().max(10_000).optional(),
-    })
-    .passthrough(),
-};
+export const DEVICE_KIND_PARAMETERS: Partial<Record<DeviceKind, z.ZodTypeAny>> =
+  {
+    printer: z
+      .object({
+        /** The build volume, in millimetres. */
+        bedMm: z.object({ x: Mm, y: Mm, z: Mm.optional() }).optional(),
+        nozzleMm: Mm.optional(),
+        materials: z.array(Word(64)).max(64).optional(),
+      })
+      .passthrough(),
+    camera: z
+      .object({
+        resolution: z
+          .object({
+            width: z.number().int().positive(),
+            height: z.number().int().positive(),
+          })
+          .optional(),
+        fps: z.number().positive().max(10_000).optional(),
+      })
+      .passthrough(),
+  };
 
 /**
  * The device manifest, v1. Unknown top-level keys are dropped (a newer runner
@@ -249,8 +249,7 @@ export type DeviceManifestInput = z.input<typeof DeviceManifestSchema>;
 export const DEVICE_MANIFEST_MAX_BYTES = 64 * 1024;
 
 export type ParsedDeviceManifest =
-  | { ok: true; manifest: DeviceManifest }
-  | { ok: false; error: string };
+  { ok: true; manifest: DeviceManifest } | { ok: false; error: string };
 
 /**
  * THE manifest check: the v1 shape, its size, and, for a kind with a known
@@ -384,7 +383,8 @@ export function mergeDeviceManifest(
     "location",
     "health",
   ] as const) {
-    if (incoming[key] !== undefined) (merged as Record<string, unknown>)[key] = incoming[key];
+    if (incoming[key] !== undefined)
+      (merged as Record<string, unknown>)[key] = incoming[key];
   }
   if (capabilities !== null) merged.capabilities = capabilities;
   else if (incoming.capabilities !== undefined)
@@ -472,7 +472,9 @@ export function summarizeDeviceResources(
     diskSizeMb: disks.length ? size : null,
     diskFreeMb: disks.length ? free : null,
     diskUsedPct:
-      disks.length && size > 0 ? Math.round(((size - free) / size) * 100) : null,
+      disks.length && size > 0
+        ? Math.round(((size - free) / size) * 100)
+        : null,
   };
 }
 

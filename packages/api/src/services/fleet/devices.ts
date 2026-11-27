@@ -94,7 +94,9 @@ export async function ensureComputerDevice(
   const identity = parseDeviceManifest({
     manifestVersion: DEVICE_MANIFEST_VERSION,
     identity: {
-      ...(word(meta.hostname, 253) ? { hostname: word(meta.hostname, 253) } : {}),
+      ...(word(meta.hostname, 253)
+        ? { hostname: word(meta.hostname, 253) }
+        : {}),
       ...(word(meta.platform, 64) ? { os: word(meta.platform, 64) } : {}),
       ...(word(meta.arch, 32) ? { arch: word(meta.arch, 32) } : {}),
     },
@@ -106,7 +108,10 @@ export async function ensureComputerDevice(
         ownerUserId: m.owner,
         belongsTo: m.belongsTo ?? "person",
         kind: "computer",
-        name: machineName({ name: m.name, agentMetadata: m.meta }).slice(0, 200),
+        name: machineName({ name: m.name, agentMetadata: m.meta }).slice(
+          0,
+          200
+        ),
         principalUserId: machineUserId,
         connection: { mode: "agent" },
         manifest: identity.ok ? identity.manifest : null,
@@ -386,7 +391,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function computerFromDeviceArgs(
   access: AccessContext,
   args: { computer?: unknown; device?: unknown }
-): Promise<{ ok: true; computer: string | undefined } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; computer: string | undefined } | { ok: false; error: string }
+> {
   const text = (v: unknown) =>
     typeof v === "string" && v.trim() ? v.trim() : undefined;
   const computer = text(args.computer);

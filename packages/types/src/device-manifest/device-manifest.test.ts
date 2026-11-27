@@ -168,14 +168,17 @@ describe("deriveDeviceStatus", () => {
       "online"
     );
     expect(
-      deriveDeviceStatus({ lastReportAt: ago(DEVICE_ONLINE_WINDOW_MS + 1) }, now)
+      deriveDeviceStatus(
+        { lastReportAt: ago(DEVICE_ONLINE_WINDOW_MS + 1) },
+        now
+      )
     ).toBe("offline");
   });
   it("degraded when it reports and says so; a stale degraded is offline", () => {
     const manifest = { health: { state: "failing" } };
-    expect(
-      deriveDeviceStatus({ lastReportAt: ago(1000), manifest }, now)
-    ).toBe("degraded");
+    expect(deriveDeviceStatus({ lastReportAt: ago(1000), manifest }, now)).toBe(
+      "degraded"
+    );
     expect(
       deriveDeviceStatus(
         { lastReportAt: ago(DEVICE_ONLINE_WINDOW_MS * 2), manifest },
@@ -185,10 +188,7 @@ describe("deriveDeviceStatus", () => {
   });
   it("offline when retired, whatever it last said", () => {
     expect(
-      deriveDeviceStatus(
-        { lastReportAt: ago(1000), retiredAt: ago(500) },
-        now
-      )
+      deriveDeviceStatus({ lastReportAt: ago(1000), retiredAt: ago(500) }, now)
     ).toBe("offline");
   });
 });

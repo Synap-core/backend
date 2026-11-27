@@ -20,10 +20,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext } from "../access/index.js";
-import {
-  getFleetDevice,
-  readFleetTree,
-} from "../services/fleet/devices.js";
+import { getFleetDevice, readFleetTree } from "../services/fleet/devices.js";
 
 export const fleetRouter = router({
   list: protectedProcedure
