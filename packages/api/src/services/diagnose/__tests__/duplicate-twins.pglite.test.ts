@@ -56,6 +56,19 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: d, getDb: async () => d };
 });
 
+// Two whole-pod signals these tests do not read report "not computed" (no
+// section): the schema contract reads project twins over the raw postgres.js
+// client (`sql`), which has no PGlite twin here, and the resources signal
+// reads the host.
+vi.mock("../schema-contract.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  gatherSchemaContractSignal: async () => undefined,
+}));
+vi.mock("../resources.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  gatherResourcesSignal: async () => undefined,
+}));
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { diagnoseRouter } from "../index.js";
