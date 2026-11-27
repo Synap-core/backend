@@ -137,6 +137,7 @@ import {
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
 import { runFilingOfFlow } from "../utils/run-filing.js";
+import { isIngestOnlyAutomation } from "../utils/ingest-only-run.js";
 import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
@@ -471,6 +472,10 @@ async function executeAutomationFlow(params: {
   // must not double-open here.
   const isPlaybookDelegate =
     flow.nodes.length === 1 && flow.nodes[0]?.type === "playbook_run";
+  // An automation that only STORES data (decisions 90897bca + ce5fb987) opens
+  // no session either: its run row is the whole record, and a failed run
+  // surfaces from that row (`utils/ingest-only-run.ts` names every reader).
+  const isIngestOnly = isIngestOnlyAutomation(automation);
 
   // `focusSessionId`/`focusSessionOwned` arrive already-set on `automationContext`
   // when this call is a delay-resumption of an in-flight run (see the "delay"
@@ -484,7 +489,7 @@ async function executeAutomationFlow(params: {
   // Stamped as the session's `startedByAgentId`; the session is the owner's.
   const runAgentUserId = actorAgentUserId;
 
-  if (!isPlaybookDelegate && !runSessionId) {
+  if (!isPlaybookDelegate && !isIngestOnly && !runSessionId) {
     // Channel resolution — the ONE door shared with the run-narration path
     // (`resolveRunChannel`), switching on `metadata.resultRouting`: a per-entity
     // automation lands each run in its subject's own channel; otherwise an
