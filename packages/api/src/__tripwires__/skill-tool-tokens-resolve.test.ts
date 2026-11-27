@@ -109,7 +109,7 @@ describe("tripwire: taught tool tokens resolve to a door", () => {
       .map(([t, files]) => `${t} (${files.join(", ")})`);
     expect(
       unclassified,
-      "A skill teaches a tool no door has. Fix the skill text, add the alias in tool-verb-aliases.ts, or classify it in door-tool-render.ts."
+      "A skill teaches a tool no door has. Fix the skill text, add the key to that tool's `teaches` (its defineTool), or classify it in door-tool-render.ts."
     ).toEqual([]);
   });
 

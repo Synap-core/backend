@@ -10,7 +10,7 @@
  * `expectedOutputs` empty. The agent believed both, and so did the person.
  *
  * The valid set is DERIVED from the tool's own declared `inputSchema`
- * (`tools.list()`), never a second hand-kept list: a property added to the
+ * (its `defineTool`), never a second hand-kept list: a property added to the
  * schema is accepted the moment it is declared, and one read by a handler
  * without being declared is refused (pinned by the door's test, which scans
  * the handler for every `args.<key>` it reads).
@@ -21,11 +21,8 @@
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { createLogger } from "@synap-core/core";
 import { toolError } from "./tool-errors.js";
-import { clearIgnoredArgs, noteIgnoredArgs } from "./call-notices.js";
-
-const logger = createLogger({ module: "mcp/undeclared-args" });
+import { toolDefinition } from "./define-tool.js";
 
 /** Keys the MCP door injects into every tool call (the URL lens). */
 export const DOOR_INJECTED_ARGS = ["workspaceId", "projectId"] as const;
@@ -34,15 +31,12 @@ export const DOOR_INJECTED_ARGS = ["workspaceId", "projectId"] as const;
 async function inputNames(
   toolName: string
 ): Promise<{ declared: string[]; required: string[] } | null> {
-  const { tools } = await import("./tools/index.js");
-  const def = (await tools.list()).find((t) => t.name === toolName);
-  const schema = def?.inputSchema as
-    { properties?: Record<string, unknown>; required?: unknown } | undefined;
+  const schema = toolDefinition(toolName)?.inputSchema;
   if (!schema?.properties) return null;
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((k): k is string => typeof k === "string")
-    : [];
-  return { declared: Object.keys(schema.properties), required };
+  return {
+    declared: Object.keys(schema.properties),
+    required: schema.required ?? [],
+  };
 }
 
 /** The declared property names of `toolName`'s input schema, or null. */
@@ -103,9 +97,10 @@ function nearMissHints(
 export function undeclaredArgsMessage(
   toolName: string,
   unknown: readonly string[],
-  declared: readonly string[]
+  declared: readonly string[],
+  required: readonly string[] = []
 ): string {
-  const hints = nearMissHints(unknown, declared);
+  const hints = nearMissHints(unknown, declared, required);
   return (
     `${toolName} does not take ${unknown.map((k) => `\`${k}\``).join(", ")} — NOTHING WAS CHANGED. ` +
     (hints.length > 0 ? `${hints.join(" ")} ` : "") +
@@ -115,79 +110,18 @@ export function undeclaredArgsMessage(
 
 /**
  * The door check: `null` when every key is declared, else the refusal RESULT
- * (`isError: true`). A tool absent from `tools.list()` refuses nothing (it is
- * a bug in the list, not a reason to block every call); a list that cannot be
- * BUILT throws, and the MCP error door reports it.
+ * (`isError: true`). Run for every call by `parseToolArgs` (`define-tool.ts`).
+ * An unknown tool refuses nothing: the dispatch says it is unknown.
  */
 export async function refuseUndeclaredArgs(
   toolName: string,
   args: Record<string, unknown> | null | undefined
 ): Promise<CallToolResult | null> {
-  const declared = await declaredArgNames(toolName);
-  if (!declared) return null;
-  const unknown = undeclaredArgs(args, declared);
+  const names = await inputNames(toolName);
+  if (!names) return null;
+  const unknown = undeclaredArgs(args, names.declared);
   if (unknown.length === 0) return null;
-  // The refusal names them itself: the door's `ignoredArgs` note would repeat it.
-  clearIgnoredArgs();
-  return toolError(undeclaredArgsMessage(toolName, unknown, declared));
-}
-
-/**
- * The note the `tools/call` door adds to a reply when the call carried
- * arguments the tool does not take (`call-notices.ts`): they were IGNORED,
- * what each was probably meant as, and the inputs the tool has. Pure.
- */
-function ignoredArgsNote(
-  toolName: string,
-  unknown: readonly string[],
-  declared: readonly string[],
-  required: readonly string[] = []
-): string {
-  const hints = nearMissHints(unknown, declared, required);
-  return (
-    `${toolName} does not take ${unknown.map((k) => `\`${k}\``).join(", ")}: ignored. ` +
-    (hints.length > 0 ? `${hints.join(" ")} ` : "") +
-    `Its inputs: ${declared.join(", ")}.`
+  return toolError(
+    undeclaredArgsMessage(toolName, unknown, names.declared, names.required)
   );
-}
-
-/**
- * SHADOW (W-C1): the undeclared keys of a call, LOGGED per (tool, key) — key
- * names only, never values — and the call is NOT refused. Since tickets
- * e18a0451 / 2d61ff7c the caller is told too: the keys are noted for the
- * door's reply (`ignoredArgs`, `call-notices.ts`), so `sort` on a tool whose
- * input is `sortBy` no longer returns the default order as if it were sorted. The dispatch calls
- * this for every tool; after seven days of these numbers every recurrent key
- * is either declared (a handler reads it) or confirmed junk, and the dispatch
- * refuses through {@link refuseUndeclaredArgs} instead (W-C3). Returns the
- * keys it logged. A list that cannot be built is logged too, never folded
- * into "nothing undeclared".
- */
-export async function shadowUndeclaredArgs(
-  toolName: string,
-  args: Record<string, unknown> | null | undefined
-): Promise<string[]> {
-  try {
-    const names = await inputNames(toolName);
-    if (!names) return [];
-    const { declared, required } = names;
-    const unknown = undeclaredArgs(args, declared);
-    if (unknown.length > 0) {
-      noteIgnoredArgs({
-        keys: unknown,
-        note: ignoredArgsNote(toolName, unknown, declared, required),
-      });
-      logger.info(
-        { toolName, undeclaredKeys: unknown, shadow: true },
-        "mcp: tool call carried undeclared arguments (accepted; shadow count)"
-      );
-    }
-    return unknown;
-  } catch (err) {
-    logger.warn(
-      { err, toolName },
-      "mcp: undeclared-argument shadow check could not run"
-    );
-    return [];
-  }
 }

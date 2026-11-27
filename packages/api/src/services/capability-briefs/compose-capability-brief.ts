@@ -8,7 +8,7 @@
  * Composed in order, hard-capped at ~4000 chars (~1000 tokens; smaller is
  * better and typical):
  *   1. Teaching core — seeded `system/*` instruction skills whose
- *      `teachesTools` overlaps this tool's teaching keys (MCP_TOOL_TEACHING_KEYS).
+ *      `teachesTools` overlaps this tool's teaching keys (`teaches` on its definition).
  *      Max 2 matches. Each contributes its `description` (L1) + a
  *      `synap_load_skill(slug)` pointer (L2), plus a verbatim `<!-- brief:start
  *      -->…<!-- brief:end -->` extract when the skill body carries one
@@ -35,7 +35,7 @@
 import { and, eq, isNull, like } from "drizzle-orm";
 import { db, skills, ProfileResolutionService } from "@synap/database";
 
-import { MCP_TOOL_TEACHING_KEYS } from "../../routers/mcp/tool-verb-aliases.js";
+import { toolTeachingKeys } from "../../routers/mcp/define-tool.js";
 
 export type CapabilityBriefDoor = "chat" | "automation";
 
@@ -54,12 +54,14 @@ export interface CapabilityBriefContext {
 
 /**
  * The MCP tools that teach a runnable-action verbId (`entity.create` →
- * `synap_create_entity`), read off `MCP_TOOL_TEACHING_KEYS` in reverse — never
- * a second table. Empty for an MCP tool name itself, or a verb no tool teaches.
+ * `synap_create_entity`), read off each tool's teaching keys in reverse
+ * (`teaches` on its definition) — never a second table. Empty for an MCP tool
+ * name itself, or a verb no tool teaches.
  */
 export function resolveTeachingAliases(name: string): string[] {
-  if (MCP_TOOL_TEACHING_KEYS[name]) return [];
-  return Object.entries(MCP_TOOL_TEACHING_KEYS)
+  const teaching = toolTeachingKeys();
+  if (teaching[name]) return [];
+  return Object.entries(teaching)
     .filter(([, keys]) => keys.includes(name))
     .map(([tool]) => tool);
 }
@@ -420,11 +422,9 @@ export async function composeCapabilityBrief(
 ): Promise<string | null> {
   try {
     const aliases = resolveTeachingAliases(toolName);
-    const teachingKeys = MCP_TOOL_TEACHING_KEYS[toolName] ?? [
-      ...new Set([
-        toolName,
-        ...aliases.flatMap((a) => MCP_TOOL_TEACHING_KEYS[a] ?? []),
-      ]),
+    const teaching = toolTeachingKeys();
+    const teachingKeys = teaching[toolName] ?? [
+      ...new Set([toolName, ...aliases.flatMap((a) => teaching[a] ?? [])]),
     ];
     // An alias lends posture emphases + the write footer, never its governance
     // door: a verb run through the execute gate is governed by that gate, and

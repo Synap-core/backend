@@ -29,7 +29,7 @@ import {
   runWithWriteSessionLedger,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
-import { toolAliasHandlers } from "./tool-aliases.js";
+import { canonicalToolName } from "./define-tool.js";
 import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   fileSuperseding,
@@ -73,16 +73,12 @@ import {
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
 /**
- * THE dispatch map — every MCP tool name declared in `tools/index.ts`
- * resolves to exactly one handler here. Merged from the per-domain files;
- * a tool declared in `tools/index.ts` but missing here falls through to
- * `executeMCPToolViaHubProtocol`'s `Unknown MCP tool` error, same as the
- * old switch's `default:`. Kept alias: `synap_capture_graph` (deprecated,
- * not declared in `tools/index.ts` `list()`) maps to the same handler as
- * `synap_capture` — see `handlers/capture.ts`. A LISTED old name (a renamed
- * tool, `MCP_TOOL_ALIASES`) is added from `tool-aliases.ts`.
+ * THE dispatch map — every tool `tools/index.ts` defines resolves to exactly
+ * one handler here, merged from the per-domain files (pinned both ways by
+ * `define-tool.tripwire.test.ts`). An old name (`aliases` on a definition)
+ * dispatches to its tool's handler.
  */
-const DOMAIN_HANDLERS: McpHandlerMap = {
+export const TOOL_HANDLERS: McpHandlerMap = {
   ...readHandlers,
   ...entityHandlers,
   ...captureHandlers,
@@ -100,15 +96,10 @@ const DOMAIN_HANDLERS: McpHandlerMap = {
   ...devApprovalHandlers,
   ...askPersonHandlers,
 };
-/** Plus each old tool name, answering through its canonical tool's handler. */
-const TOOL_HANDLERS: McpHandlerMap = {
-  ...DOMAIN_HANDLERS,
-  ...toolAliasHandlers(DOMAIN_HANDLERS),
-};
 
 /** The handler a tool name dispatches to (undefined: an unknown tool). */
 export function mcpToolHandler(toolName: string) {
-  return TOOL_HANDLERS[toolName];
+  return TOOL_HANDLERS[canonicalToolName(toolName)];
 }
 
 export async function executeMCPToolViaHubProtocol(
@@ -230,7 +221,7 @@ export async function executeMCPToolViaHubProtocol(
       )
     : caller;
 
-  const handler = TOOL_HANDLERS[toolName];
+  const handler = mcpToolHandler(toolName);
   if (!handler) {
     throw new Error(
       `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`

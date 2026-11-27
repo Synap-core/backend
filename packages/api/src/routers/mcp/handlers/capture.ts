@@ -1813,6 +1813,5 @@ const organizeLibraryHandler = async (
 
 export const captureHandlers: McpHandlerMap = {
   synap_capture: captureHandler,
-  synap_capture_graph: captureHandler,
   synap_organize_library: organizeLibraryHandler,
 };

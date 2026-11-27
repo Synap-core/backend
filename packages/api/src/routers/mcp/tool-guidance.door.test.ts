@@ -34,10 +34,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { tools } from "./tools/index.js";
+import { entryToolNames } from "./define-tool.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import {
   BUILDER_REF,
-  ENTRY_TOOLS,
   TOOL_GROUP_NAMES,
   TOOL_GROUP_PURPOSES,
   toolGroupRef,
@@ -93,7 +93,7 @@ describe("synap_orient carries `yourTools`", () => {
     ]);
     const yt = out.yourTools as Record<string, unknown>;
     expect(yt.profile).toBe("entry");
-    expect(yt.listed).toContain(`${ENTRY_TOOLS.length} essential tools`);
+    expect(yt.listed).toContain(`${entryToolNames().length} essential tools`);
     expect(yt.ask).toMatch(/^synap_ask asks the pod/);
     expect(yt.unlock).toContain('synap_load_skill({ref: "tools:read"})');
     expect(yt.unlock).toContain(BUILDER_REF);

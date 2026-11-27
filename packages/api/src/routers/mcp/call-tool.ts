@@ -30,7 +30,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { toolError } from "./tool-errors.js";
-import { TOOL_GROUPS, TOOL_GROUP_NAMES } from "./tool-profiles.js";
+import { toolDefinition } from "./define-tool.js";
 import { loadSkillCall } from "./tool-guidance.js";
 
 /** Renders a pod tool name as the calling door names it (`pod__*` on the connector). */
@@ -107,9 +107,8 @@ export async function resolveDispatch(
     );
   }
   if (listed && !listed.has(tool)) {
-    const group = TOOL_GROUP_NAMES.find((g) =>
-      (TOOL_GROUPS[g] as readonly string[]).includes(tool)
-    );
+    const placed = toolDefinition(tool)?.group;
+    const group = placed === "entry" ? undefined : placed;
     // Every advertised tool is entry (always listed) or in one group
     // (`tool-profiles.test.ts`); a tool in neither is not this key's to run.
     if (!group) {

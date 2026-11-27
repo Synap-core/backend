@@ -31,7 +31,6 @@ import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { resolveDispatch, withInputSchemaOnError } from "./call-tool.js";
 import { doorToolName } from "./tool-guidance.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
-import { shadowUndeclaredArgs } from "./undeclared-args.js";
 import { runWithCallNotices, withCallNotices } from "./call-notices.js";
 import { withToolCallLog } from "./tool-call-log.js";
 import {
@@ -320,9 +319,14 @@ export function createMCPServer(
       agentUserId,
       door: "chat",
     });
-    const visible = toolAccessKeyId
-      ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
-      : all;
+    // No key (stdio / dev) lists every tool; an old name or a hidden door is
+    // never listed, whatever the key.
+    const visible = filterToolsForAccess(
+      all,
+      toolAccessKeyId
+        ? await loadKeyToolAccess(toolAccessKeyId)
+        : { profile: null, groups: [] }
+    );
     return {
       tools: await withToolUiMeta(visible, uiRenderer, uiCtx),
     };
@@ -412,15 +416,9 @@ export function createMCPServer(
         };
 
         // What the door does to the caller's arguments is SAID on the reply
-        // (`call-notices.ts`): an argument the tool does not take (`ignoredArgs`)
-        // and a `limit` the page cap clamped (`limitClamped`). One scope around
-        // the shadow check and the tool run, for every tool.
+        // (`call-notices.ts`): a `limit` the page cap clamped (`limitClamped`).
+        // An argument the tool does not take is refused by `tools.execute`.
         const { result, notices } = await runWithCallNotices(async () => {
-          // W-C1 SHADOW: undeclared argument keys are logged and noted, never
-          // refused yet (W-C3 refuses after seven days of these numbers). The
-          // caller's own arguments — the door-injected lens is never "unknown".
-          await shadowUndeclaredArgs(name, args);
-
           // Session attribution is resolved SERVER-SIDE in the adapter (derived
           // from the caller's open sessions), so nothing session-shaped is spread
           // into `scopedArgs`. Every write tool declares an OPTIONAL `sessionId`

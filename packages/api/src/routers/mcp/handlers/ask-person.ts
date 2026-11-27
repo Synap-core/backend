@@ -38,7 +38,6 @@ import {
 } from "@synap-core/types/ask";
 import { isUuid } from "@synap-core/types/property-render";
 import { needsYouPriority } from "@synap-core/types/needs-you";
-import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import { ok, requireScope, type McpHandlerMap } from "./shared.js";
 
 /** The slot kind an ask filed through this door carries. */
@@ -228,8 +227,6 @@ export const askPersonHandlers: McpHandlerMap = {
   synap_ask_person: async (ctx): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const undeclared = await refuseUndeclaredArgs("synap_ask_person", args);
-    if (undeclared) return undeclared;
 
     // ── The ticket, parsed by THE slot wire schema (the ask by `AskSchema`) ──
     const question = text(args.question);

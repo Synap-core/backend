@@ -54,17 +54,10 @@ const HANDLERS_DIR = join(MCP_DIR, "handlers");
 /** Names special-cased inline in `execute()` BEFORE delegating to the adapter. */
 const DISPATCHED_INLINE_IN_TOOLS_INDEX = new Set(["synap_load_skill"]);
 
-/**
- * Handler-map keys that intentionally register a name no longer on the
- * curated `list()` — a DEPRECATED alias kept for backward compatibility, not
- * a forgotten rename. `handlers/capture.ts` documents `synap_capture_graph`
- * as the deprecated alias of `synap_capture` (same handler function, two
- * map keys).
- */
-const INTENTIONALLY_UNDECLARED_ALIASES = new Set(["synap_capture_graph"]);
-
 function parseDeclaredNames(src: string): string[] {
-  return [...src.matchAll(/name: "(synap_[a-z_]+)"/g)].map((m) => m[1]);
+  // A tool's own `name` (a defineTool property, 6 spaces in); an alias's
+  // `name` sits deeper and dispatches through its tool's handler.
+  return [...src.matchAll(/^ {6}name: "(synap_[a-z_]+)"/gm)].map((m) => m[1]);
 }
 
 /**
@@ -145,10 +138,7 @@ describe("tripwire: every declared MCP tool has a dispatch branch", () => {
     const declared = new Set(parseDeclaredNames(toolsIndexSrc));
     const dispatched = parseDispatchedNames();
 
-    const orphaned = [...dispatched].filter(
-      (name) =>
-        !declared.has(name) && !INTENTIONALLY_UNDECLARED_ALIASES.has(name)
-    );
+    const orphaned = [...dispatched].filter((name) => !declared.has(name));
 
     expect(
       orphaned,

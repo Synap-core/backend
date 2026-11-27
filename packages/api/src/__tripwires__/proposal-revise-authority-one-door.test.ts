@@ -296,7 +296,7 @@ describe("TRIPWIRE: proposal revise goes through the authority path", () => {
       scanned,
       "the by-reference handler declarations in handlers/capture.ts must be seen " +
         "by the scan (they were invisible to the original `: async (` pattern)"
-    ).toEqual(expect.arrayContaining(["synap_capture", "synap_capture_graph"]));
+    ).toEqual(expect.arrayContaining(["synap_capture"]));
 
     // FLOOR 2 — the CLASSIFIER is real. If no door is recognised as mutating,
     // "no offenders" means nothing. These two are the doors this tripwire was

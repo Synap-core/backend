@@ -25,7 +25,8 @@ vi.mock("../../../services/workspace-ops-doors.js", async (importOriginal) => ({
 }));
 
 import { tools } from "../tools/index.js";
-import { TOOL_GROUPS, groupsForLoadSkillRef } from "../tool-profiles.js";
+import { groupsForLoadSkillRef } from "../tool-profiles.js";
+import { toolGroupMembers } from "../define-tool.js";
 import { buildHandlers } from "../handlers/build.js";
 import { workspaceHandlers } from "../handlers/workspace.js";
 
@@ -73,7 +74,7 @@ describe("the agent UI doors are listed and unlocked with the build tools", () =
   });
 
   it("both new tools sit in the build group that the synap-ui skill unlocks", () => {
-    expect(TOOL_GROUPS.build).toEqual(
+    expect(toolGroupMembers().build).toEqual(
       expect.arrayContaining(["synap_update_view", "synap_set_start_page"])
     );
     expect(groupsForLoadSkillRef("system/synap-ui/skill")).toContain("build");

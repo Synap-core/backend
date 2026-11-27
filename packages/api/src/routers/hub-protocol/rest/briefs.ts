@@ -19,7 +19,7 @@ import { z } from "@hono/zod-openapi";
 import { and, eq, getDb, workspaceMembers } from "@synap/database";
 
 import { composeCapabilityBrief } from "../../../services/capability-briefs/compose-capability-brief.js";
-import { MCP_TOOL_TEACHING_KEYS } from "../../mcp/tool-verb-aliases.js";
+import { isPodToolName } from "../../mcp/define-tool.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -120,7 +120,7 @@ export function registerBriefsRoutes(app: HubHono): void {
     // list-actions returns). Its run posture comes from the SAME projection the
     // actions door serves — read once, only when such a name was asked for.
     const actionPosture = new Map<string, "auto" | "propose">();
-    const verbNames = toolNames.filter((n) => !MCP_TOOL_TEACHING_KEYS[n]);
+    const verbNames = toolNames.filter((n) => !isPodToolName(n));
     if (parsed.data.workspaceId && verbNames.length > 0) {
       try {
         const [{ listCapabilities }, { projectRunnableActions }] =

@@ -7,8 +7,6 @@ import {
   BUILDER_REF,
   SKILL_PACKAGES_THAT_UNLOCK,
   SKILL_STEMS_THAT_UNLOCK,
-  ENTRY_TOOLS,
-  TOOL_GROUPS,
   TOOL_GROUP_NAMES,
   filterToolsForAccess,
   groupsForLoadSkillRef,
@@ -18,6 +16,7 @@ import {
   visibleToolNames,
 } from "./tool-profiles.js";
 import { BUILD_SKILLS } from "./tool-guidance.js";
+import { entryToolNames, toolGroupMembers } from "./define-tool.js";
 
 /**
  * Every seeded skill STEM on disk (`skills/<package>/*.md`) — what a bare
@@ -40,44 +39,14 @@ const SKILL_STEMS: string[] = SKILL_SLUGS.map((s) => s.split("/")[2]!);
 const packageOfSlug = (slug: string) => slug.split("/")[1]!;
 
 /**
- * MCP tool profiles (V1 D4). The coverage half is DERIVED from the live
- * `tools.list()` — the set a client is actually advertised — so a tool added
- * tomorrow joins the check by existing: it must be entry or in exactly one
- * group, or an entry key could never reach it (not even via `builder`).
+ * MCP tool profiles (V1 D4). A tool's place (entry or one group) is its
+ * definition's `group`, so "every tool is entry or in exactly one group" holds
+ * by construction (`define-tool.tripwire.test.ts` pins that every listed
+ * tool is defined).
  */
 describe("tool profiles", () => {
-  it("every advertised tool is entry or in exactly ONE group (derived from tools.list())", async () => {
-    const advertised = (await tools.list()).map((t) => t.name);
-    // Non-vacuity: the scan sees the real surface, including the new tool.
-    expect(advertised.length).toBeGreaterThan(60);
-    expect(advertised).toContain("synap_wait_for_answer");
-
-    const entry = new Set<string>(ENTRY_TOOLS);
-    const unplaced: string[] = [];
-    const doubled: string[] = [];
-    for (const name of advertised) {
-      const homes =
-        TOOL_GROUP_NAMES.filter((g) =>
-          (TOOL_GROUPS[g] as readonly string[]).includes(name)
-        ).length + (entry.has(name) ? 1 : 0);
-      if (homes === 0) unplaced.push(name);
-      if (homes > 1) doubled.push(name);
-    }
-    expect(unplaced).toEqual([]);
-    expect(doubled).toEqual([]);
-  });
-
-  it("names no tool that is not advertised (a rename cannot leave a dead entry)", async () => {
-    const advertised = new Set((await tools.list()).map((t) => t.name));
-    const named = [
-      ...ENTRY_TOOLS,
-      ...Object.values(TOOL_GROUPS).flat(),
-    ] as string[];
-    expect(named.filter((n) => !advertised.has(n))).toEqual([]);
-  });
-
   it("the entry surface is the 9 tools of D4 + the goal and pick-up tools of plan v5 T1 + the relay door + the ask-the-person door + the dispatcher", () => {
-    expect([...ENTRY_TOOLS].sort()).toEqual(
+    expect(entryToolNames().sort()).toEqual(
       [
         "synap_orient",
         "synap_ask",
@@ -109,7 +78,7 @@ describe("tool profiles", () => {
       profile: "entry",
       groups: ["schema", "not-a-group"],
     })!;
-    expect(withSchema.size).toBe(15 + TOOL_GROUPS.schema.length);
+    expect(withSchema.size).toBe(15 + toolGroupMembers(true).schema.length);
     expect(withSchema.has("synap_define_kind")).toBe(true);
     // An unknown stored group is ignored, never widened.
     expect(withSchema.has("synap_create_view")).toBe(false);

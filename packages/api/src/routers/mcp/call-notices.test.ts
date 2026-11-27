@@ -1,11 +1,12 @@
 /**
  * What the door did to a call's arguments is SAID on the reply (tickets
- * e18a0451, 1ef84d45, 2d61ff7c; `call-notices.ts`).
+ * 1ef84d45; `call-notices.ts`). An argument the tool does not take is
+ * refused by `parseToolArgs` (`define-tool.test.ts`).
  *
  * Real: the tool list (the declared set), the `tools/call` dispatch of
- * `createMCPServer`, the undeclared-argument check and the one page clamp
- * (`pageLimit`). Stubbed: `tools.execute` — each test gives it the body a
- * handler would run (a page read, a refusal), since the tools themselves are
+ * `createMCPServer` and the one page clamp (`pageLimit`). Stubbed:
+ * `tools.execute` — each test gives it the body a handler would run (a page
+ * read), since the tools themselves are
  * not under test.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -29,7 +30,6 @@ vi.mock("@synap/database", async (importOriginal) => ({
 import { createMCPServer } from "./index.js";
 import { tools } from "./tools/index.js";
 import { pageLimit } from "./handlers/shared.js";
-import { refuseUndeclaredArgs } from "./undeclared-args.js";
 import { withCallNotices } from "./call-notices.js";
 
 type Handler = (req: unknown, extra: unknown) => Promise<unknown>;
@@ -69,52 +69,6 @@ beforeEach(() => {
   execute
     .mockReset()
     .mockResolvedValue({ content: [{ type: "text", text: '{"items":[]}' }] });
-});
-
-describe("ignoredArgs — an argument the tool does not take is said, not dropped", () => {
-  it("e18a0451: get_entities with sort/order names them and points at sortBy", async () => {
-    const res = await call("synap_get_entities", {
-      profileSlug: "person",
-      sort: "lastInteractionAt",
-      order: "asc",
-    });
-    const body = payload(res);
-    expect(body.items).toEqual([]);
-    const ignored = body.ignoredArgs as { keys: string[]; note: string };
-    expect(ignored.keys).toEqual(["sort", "order"]);
-    expect(ignored.note).toContain("`sort` → did you mean `sortBy`?");
-    expect(ignored.note).toMatch(/Its inputs: .*sortDir/);
-  });
-
-  it("2d61ff7c: get_entity with `id` is told the input is `entityId`, on a failed call too", async () => {
-    execute.mockResolvedValue({
-      isError: true,
-      content: [{ type: "text", text: "synap_get_entity needs `entityId`." }],
-    });
-    const res = await call("synap_get_entity", { id: "0667d277" });
-    expect(res.isError).toBe(true);
-    const ignored = payload(res).ignoredArgs as { note: string };
-    expect(ignored.note).toContain("`id` → did you mean `entityId`?");
-  });
-
-  it("a call with only declared arguments comes back byte for byte", async () => {
-    const reply = { content: [{ type: "text", text: '{"items":[]}' }] };
-    execute.mockResolvedValue(reply);
-    const res = await call("synap_get_entities", { profileSlug: "person" });
-    expect(res.content).toEqual(reply.content);
-  });
-
-  it("a tool that REFUSES undeclared arguments is not told twice", async () => {
-    execute.mockImplementation(
-      async (name: string, args: Record<string, unknown>) =>
-        (await refuseUndeclaredArgs(name, args)) ?? {
-          content: [{ type: "text", text: "{}" }],
-        }
-    );
-    const res = await call("synap_update_session", { addOutputs: [] });
-    expect(res.isError).toBe(true);
-    expect(payload(res).ignoredArgs).toBeUndefined();
-  });
 });
 
 describe("limitClamped — a limit the page cap did not honour is said", () => {
