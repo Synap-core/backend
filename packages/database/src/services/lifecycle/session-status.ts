@@ -174,6 +174,8 @@ export async function setSessionStatus(
         current: carried.get(r.id) ?? null,
         fallback: input.defaultHold,
         since,
+        // A session has a holder a resume can wake (`hold.wake`).
+        wakeable: true,
       });
       if (!decided.ok) throw new HoldRefusedError(decided);
       // A wait on an answer or a proposal names the session owner's own work.

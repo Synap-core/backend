@@ -349,6 +349,43 @@ describe("the awaited thing moved (until.moves)", () => {
       reason: `What it waited on (focus_session:${awaited}) moved to closed.`,
     });
   });
+
+  it("hands the api's follow-up the hold that resumed (its `wake`), why, and the pause it ends, once", async () => {
+    const thing = randomUUID();
+    const waiter = await session();
+    await setSessionStatus(db, {
+      sessionId: waiter,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: { on: "thing", until: { moves: `entity:${thing}` }, wake: true },
+    });
+    const pause = await lastOwed(waiter);
+    const before = h.followUps.length;
+    const moved = {
+      awaiting: {
+        subjectType: "entity",
+        subjectId: thing,
+        to: "done",
+        category: "done",
+      },
+    };
+    expect((await handleHoldResume(moved)).resumed).toBe(1);
+    const given = h.followUps.slice(before);
+    expect(given).toHaveLength(1);
+    expect(given[0]).toMatchObject({
+      subjectType: "focus_session",
+      subjectId: waiter,
+      from: "paused",
+      to: "active",
+      hold: { wake: true, until: { moves: `entity:${thing}` } },
+      holdTransitionId: pause.transitionId,
+      reason: `What it waited on (entity:${thing}) moved to done.`,
+    });
+    // Delivered again: nothing is held, no second follow-up.
+    expect((await handleHoldResume(moved)).resumed).toBe(0);
+    expect(h.followUps.slice(before)).toHaveLength(1);
+  });
 });
 
 describe("a dev fact (until.moves = pr: / main: / job:)", () => {

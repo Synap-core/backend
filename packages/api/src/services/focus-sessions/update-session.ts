@@ -2270,6 +2270,7 @@ export function sessionMoveRefusal(
     actorKind: agentUserId ? "agent" : "human",
     given: params.hold,
     since,
+    wakeable: true,
   });
   return decided.ok ? null : decided.message;
 }

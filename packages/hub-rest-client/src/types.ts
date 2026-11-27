@@ -1554,6 +1554,8 @@ export interface HubWorkGraphHold {
     reason?: string | null;
     until?: { date: string } | { moves: string; to?: string } | null;
     reviewBy?: string | null;
+    /** The pauser asked to wake the session's agent when it resumes. */
+    wake?: boolean;
     resumeTo: string | null;
     since: string;
   };

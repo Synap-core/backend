@@ -12,6 +12,7 @@ import { z } from "zod";
 import {
   HOLD_DEV_MOVES_HELP,
   HOLD_WAIT_MOVES_HELP,
+  HOLD_WAKE_HELP,
   HOLD_ON,
   OCCURRED_AT_MAX_PAST_DAYS,
   type Hold,
@@ -30,6 +31,8 @@ export const holdInputSchema = z
       .nullable()
       .optional(),
     reviewBy: z.string().nullable().optional(),
+    /** A session's pause only (`decideMoveHold` refuses it elsewhere). */
+    wake: z.boolean().nullable().optional(),
   })
   .strict();
 
@@ -77,6 +80,23 @@ export const MOVE_HOLD_TOOL_PROPERTIES = {
   occurredAt: {
     type: "string",
     description: `When the move really happened, if earlier than now (ISO date-time): at most ${OCCURRED_AT_MAX_PAST_DAYS} days back, never in the future. The move is recorded now and marked backdated.`,
+  },
+} as const;
+
+/**
+ * The same, for a SESSION's status door (`update_session`): its hold may ask
+ * to wake the agent working the session when it resumes (`hold.wake`). Only
+ * the session door offers it; every other door refuses it (`decideMoveHold`).
+ */
+export const SESSION_MOVE_HOLD_TOOL_PROPERTIES = {
+  ...MOVE_HOLD_TOOL_PROPERTIES,
+  hold: {
+    ...MOVE_HOLD_TOOL_PROPERTIES.hold,
+    description: `${MOVE_HOLD_TOOL_PROPERTIES.hold.description} ${HOLD_WAKE_HELP}.`,
+    properties: {
+      ...MOVE_HOLD_TOOL_PROPERTIES.hold.properties,
+      wake: { type: ["boolean", "null"] },
+    },
   },
 } as const;
 
