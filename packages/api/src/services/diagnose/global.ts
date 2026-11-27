@@ -4,7 +4,7 @@
  * A no-arg `diagnose` runs a fixed checklist and returns a ranked health report.
  * The door only ORCHESTRATES + RANKS; every signal reuses a primitive that
  * already exists (the runs substrate, the pending-proposal reads,
- * `collapseProposalsToClusters`). All USER-floored — it aggregates across every
+ * `findProposalTwins`). All USER-floored — it aggregates across every
  * workspace the caller can see (the sovereign "whole brain"), narrowable with a
  * `workspaceId`.
  *
@@ -31,16 +31,18 @@ import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
-import { listRuns, listRecentlyFailingFlows } from "../runs/index.js";
+import {
+  listRuns,
+  listRecentlyFailingFlows,
+  countRecentlyStoppedFlows,
+  type RecentlyStoppedFlows,
+} from "../runs/index.js";
 import {
   DEFAULT_STUCK_THRESHOLD_HOURS,
   RECENT_FAILURE_WINDOW_DAYS,
   isRecentFailure,
 } from "@synap-core/types/run-activity";
-import {
-  collapseProposalsToClusters,
-  type ClusterInputRow,
-} from "../proposals/fingerprint.js";
+import { findProposalTwins } from "../proposals/twin-key.js";
 import { agentProposalCap } from "../../utils/permission-check.js";
 import type {
   GlobalHealthReport,
@@ -216,6 +218,13 @@ export interface GlobalSignals {
     flowType?: "automation" | "playbook";
     flowId?: string;
   }>;
+  /**
+   * Flows that STOPPED at their budget in the same window (token budget or
+   * step limit, `countRecentlyStoppedFlows`): not failures, so they never
+   * make `failed_flows` degraded; the section names them as information.
+   * Optional: absent means NOT COMPUTED, and the section says nothing.
+   */
+  budgetStopped?: RecentlyStoppedFlows;
   backlog: {
     pending: number;
     oldestAgeHours: number | null;
@@ -234,6 +243,11 @@ export interface GlobalSignals {
      */
     oldestAgeHoursIncludingOutsideLens: number | null;
   };
+  /**
+   * Pending proposals filed more than once: groups of TWINS (the same change
+   * on the same target, `findProposalTwins`), the same groups
+   * `diagnose({type: "proposal"})` lists, so the two never disagree.
+   */
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
   capabilities: CapabilityVerbPosture;
   agentActivity: Array<{ agentId: string; pendingCount: number; cap: number }>;
@@ -330,13 +344,22 @@ export function summarizeGlobalHealth(
     0
   );
   const failingFlows = signals.failedFlows.length;
+  // Budget stops are information: a run that hit its token budget or step
+  // limit broke nothing (#1369), so they never move the status; the headline
+  // names them so a flow that stopped does not silently vanish from health.
+  const stoppedFlows = signals.budgetStopped?.flows ?? 0;
+  const stoppedLine =
+    stoppedFlows > 0
+      ? `; ${stoppedFlows} flow(s) stopped at their budget (not failures)`
+      : "";
   sections.push({
     key: "failed_flows",
     status: failingFlows > 0 ? "degraded" : "ok",
     headline:
-      failingFlows > 0
+      (failingFlows > 0
         ? `${failingFlows} flow(s) failing in the last ${RECENT_FAILURE_WINDOW_DAYS} days`
-        : `No flow failed in the last ${RECENT_FAILURE_WINDOW_DAYS} days`,
+        : `No flow failed in the last ${RECENT_FAILURE_WINDOW_DAYS} days`) +
+      stoppedLine,
     detail: {
       flows: signals.failedFlows.slice(0, 10),
       /** THE health number: distinct flows with a failed run in the window. */
@@ -344,6 +367,14 @@ export function summarizeGlobalHealth(
       /** Failed runs inside the window, summed over those flows. */
       failedTotal,
       windowDays: RECENT_FAILURE_WINDOW_DAYS,
+      ...(signals.budgetStopped
+        ? {
+            /** Distinct flows that stopped at their budget (not failing). */
+            stoppedFlows: signals.budgetStopped.flows,
+            /** Their budget-stopped runs inside the window. */
+            stoppedRuns: signals.budgetStopped.runs,
+          }
+        : {}),
     },
   });
 
@@ -375,23 +406,24 @@ export function summarizeGlobalHealth(
     detail: { ...signals.backlog, mineOutsideLens },
   });
 
-  // Similar-proposal groups — a review-GROUPING signal, not a duplicate
-  // detector: `computeProposalFingerprint` clusters on a deliberately loose
-  // structural key (proposalType × targetType × name), so a cluster can
-  // legitimately contain distinct payloads that merely share that shape (see
-  // the file's own FINGERPRINT_CAUSE_EXTENSION note). It reads "N proposals
-  // want to change X" for the reviewer — it is NOT evidence of a governance
-  // bug. The strict, preventive de-duplication is `dedup_hash` + the 0208
-  // partial unique index, a separate mechanism this section does not surface.
-  // `attention` here means "worth a look", never "degraded" — a grouping is
-  // informational and must never register as a health failure.
+  // Duplicate proposals: TWINS only, the same change filed more than once
+  // (`findProposalTwins`, the key the class read and the agent duplicateRate
+  // use). It used to read the review grouping (`computeProposalFingerprint`),
+  // which keys every capability run on the capability: seven deletes of seven
+  // different notes raised this mark as one group of 7 (finding 9ae52db7).
+  // `attention`, never `degraded`: a twin wastes a review, it breaks nothing.
+  const twinGroups = signals.duplicateClusters.length;
+  const twinProposals = signals.duplicateClusters.reduce(
+    (sum, c) => sum + c.count,
+    0
+  );
   sections.push({
     key: "duplicate_proposals",
-    status: signals.duplicateClusters.length > 0 ? "attention" : "ok",
+    status: twinGroups > 0 ? "attention" : "ok",
     headline:
-      signals.duplicateClusters.length > 0
-        ? `${signals.duplicateClusters.length} proposal(s) grouped by similarity for review`
-        : "No similar-proposal groups pending review",
+      twinGroups > 0
+        ? `${twinGroups} pending proposal(s) filed more than once (${twinProposals} copies)`
+        : "No pending proposal filed twice",
     detail: { clusters: signals.duplicateClusters.slice(0, 10) },
   });
 
@@ -683,6 +715,7 @@ export async function diagnoseGlobal(params: {
   const [
     runningRuns,
     failingFlows,
+    budgetStopped,
     failedChatRuns,
     backlogRow,
     // Author-floored twin of `backlogRow` — see the comment on its query.
@@ -708,6 +741,8 @@ export async function diagnoseGlobal(params: {
     // counted in-DB. Only those: aggregating every run of every flow
     // (`listRunGroups`) cost ~220 ms on 64k runs to keep a handful of rows.
     listRecentlyFailingFlows({ userId, scope, limit: 100 }),
+    // Budget stops in the same window, counted apart: never a failure.
+    countRecentlyStoppedFlows({ userId, scope }),
     // Failed chat turns (no flowId group) — B4: only failures, not successes.
     listRuns({ userId, flowType: "chat", status: "failed", scope, limit: 100 }),
     // Backlog: exact count + oldest age of pending proposals (user-floored).
@@ -749,15 +784,14 @@ export async function diagnoseGlobal(params: {
           workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
         )
       ),
-    // Duplicate clustering: a capped scan of the pending rows.
+    // Duplicate proposals (twins): a capped scan of the pending rows.
     db
       .select({
-        id: proposals.id,
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
         targetId: proposals.targetId,
+        dedupHash: proposals.dedupHash,
         data: proposals.data,
-        createdAt: proposals.createdAt,
         workspaceId: proposals.workspaceId,
       })
       .from(proposals)
@@ -883,19 +917,9 @@ export async function diagnoseGlobal(params: {
       : null,
   };
 
-  const clusterRows: ClusterInputRow[] = pendingRows.map((r) => ({
-    id: r.id,
-    proposalType: r.proposalType,
-    targetType: r.targetType,
-    targetId: r.targetId,
-    data: r.data,
-    createdAt: r.createdAt,
-    workspaceId: r.workspaceId ?? null,
-  }));
-  const duplicateClusters = collapseProposalsToClusters(clusterRows)
-    .filter((c) => c.count > 1)
-    .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))
-    .sort((a, b) => b.count - a.count);
+  // The same twins `diagnose({type: "proposal"})` lists (same function, same
+  // lens, same 1000-row scan).
+  const duplicateClusters = findProposalTwins(pendingRows);
 
   return summarizeGlobalHealth(
     {
@@ -905,6 +929,7 @@ export async function diagnoseGlobal(params: {
       stall,
       idleMinutes: IDLE_STALL_MINUTES,
       failedFlows,
+      budgetStopped,
       backlog,
       duplicateClusters,
       capabilities: capabilitiesSignal,
