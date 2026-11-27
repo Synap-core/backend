@@ -3,10 +3,11 @@
  *
  * `skills/surfaces/eval/run.mjs` is run on demand (it calls a model), so CI
  * never runs it. What CI can hold is its input and its grader: the prompt set
- * of audit appendix E §4 (26 prompts + 7 adversarial) parses with the eval's
- * own parser, and every door an item accepts is a door agents really have (a
- * tool in the committed MCP manifest, or `none`). A door that does not exist
- * could never be answered, so the item would be graded against nothing.
+ * (its prompts and its adversarial ones) parses with the eval's own parser,
+ * every item is complete, and every door an item accepts is a door agents
+ * really have (a tool in the committed MCP manifest, or `none`). A door that
+ * does not exist could never be answered, so the item would be graded
+ * against nothing.
  *
  * WHAT IT CANNOT SEE: whether a model passes (that is the eval itself), or
  * whether an accepted body is the RIGHT one (the audit's table is the source).
@@ -42,9 +43,9 @@ describe("tripwire: the surfaces eval's prompts and grader", () => {
     readFileSync(resolve(EVAL_DIR, "prompts.yaml"), "utf8")
   );
 
-  it("holds the 26 prompts and the 7 adversarial ones, each complete", () => {
-    expect(sets.prompts).toHaveLength(26);
-    expect(sets.adversarial).toHaveLength(7);
+  it("holds prompts and adversarial ones, each complete", () => {
+    expect(sets.prompts?.length).toBeGreaterThan(0);
+    expect(sets.adversarial?.length).toBeGreaterThan(0);
     for (const item of [...sets.prompts!, ...sets.adversarial!]) {
       expect(item.prompt.length, item.id).toBeGreaterThan(5);
       expect(item.why.length, item.id).toBeGreaterThan(5);

@@ -8,9 +8,6 @@ import { describe, expect, it } from "vitest";
 import {
   BLOCK_KINDS,
   BLOCK_PROPS_ON_INSTANCE,
-  BlockSchema,
-  blockToEmbed,
-  embedToBlock,
   readLegacyBlock,
   type Block,
 } from "./index.js";
@@ -150,8 +147,7 @@ describe("readLegacyBlock: every legacy spelling reads into the one Block", () =
   it.each(cases)("%s", (_name, raw, expected) => {
     const block = readLegacyBlock(raw);
     expect(block).toEqual(expected);
-    // What it read is a valid Block, and reading the Block again is a fixpoint.
-    expect(BlockSchema.safeParse(block).success).toBe(true);
+    // Reading the Block again is a fixpoint.
     expect(readLegacyBlock(block)).toEqual(expected);
   });
 
@@ -174,71 +170,6 @@ describe("readLegacyBlock: every legacy spelling reads into the one Block", () =
     expect(readLegacyBlock({ kind: "cell", instanceId: INSTANCE })).toEqual({
       kind: "cell",
       instanceId: INSTANCE,
-    });
-  });
-});
-
-describe("markdown embeds ↔ Block", () => {
-  const embeds: Array<[string, Parameters<typeof embedToBlock>[0], Block]> = [
-    [
-      "entity",
-      { directive: "synap-entity", ref: { id: ENTITY } },
-      { kind: "entity", entityId: ENTITY },
-    ],
-    [
-      "view",
-      { directive: "synap-view", ref: { viewId: VIEW } },
-      { kind: "view", viewId: VIEW },
-    ],
-    [
-      "view (legacy data-view-id)",
-      { directive: "synap-view", ref: { "data-view-id": VIEW } },
-      { kind: "view", viewId: VIEW },
-    ],
-    [
-      "inline cell with props",
-      {
-        directive: "synap-cell",
-        ref: { cellKey: "stat-card" },
-        props: { metric: "count" },
-      },
-      { kind: "cell", cellKey: "stat-card", props: { metric: "count" } },
-    ],
-    [
-      "instance cell",
-      { directive: "synap-cell", ref: { instanceId: INSTANCE } },
-      { kind: "cell", instanceId: INSTANCE },
-    ],
-    [
-      "cell (legacy data-cell-key)",
-      { directive: "synap-cell", ref: { "data-cell-key": "greeting" } },
-      { kind: "cell", cellKey: "greeting" },
-    ],
-  ];
-
-  it.each(embeds)("%s round-trips", (_name, embed, expected) => {
-    const block = embedToBlock(embed);
-    expect(block).toEqual(expected);
-    expect(embedToBlock(blockToEmbed(block!))).toEqual(expected);
-  });
-
-  it("an ask and a reference-less embed are not blocks", () => {
-    expect(
-      embedToBlock({
-        directive: "synap-ask",
-        ref: { sessionId: "s", slot: "x" },
-      })
-    ).toBeNull();
-    expect(embedToBlock({ directive: "synap-cell", ref: {} })).toBeNull();
-  });
-
-  it("writes the canonical reference attributes", () => {
-    expect(
-      blockToEmbed({ kind: "cell", cellKey: "stat-card", props: { a: 1 } })
-    ).toEqual({
-      directive: "synap-cell",
-      ref: { cellKey: "stat-card" },
-      props: { a: 1 },
     });
   });
 });

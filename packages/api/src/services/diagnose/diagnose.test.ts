@@ -173,14 +173,18 @@ describe("computeAgentScorecard", () => {
     );
   });
 
-  it("derives duplicateRate from the shared structural fingerprint", () => {
-    // Three identical "create company Acme" attempts + one distinct → 3 of 4
-    // land in a size>1 cluster.
+  it("derives duplicateRate from the twin key: the same change filed again", () => {
+    // Three attempts at the same "create company Acme" (each with its own
+    // minted target id, keys in another order) + one distinct → 3 of 4 have
+    // a twin.
     const rows: ScorecardProposalRow[] = [
-      proposalRow({ data: { name: "Acme" }, targetId: "x1" }),
-      proposalRow({ data: { name: "acme" }, targetId: "x2" }),
-      proposalRow({ data: { name: " Acme " }, targetId: "x3" }),
-      proposalRow({ data: { name: "Globex" }, targetId: "x4" }),
+      proposalRow({ data: { name: "Acme", kind: "company" }, targetId: "x1" }),
+      proposalRow({ data: { kind: "company", name: "Acme" }, targetId: "x2" }),
+      proposalRow({ data: { name: "Acme", kind: "company" }, targetId: "x3" }),
+      proposalRow({
+        data: { name: "Globex", kind: "company" },
+        targetId: "x4",
+      }),
     ];
     const card = computeAgentScorecard(rows, {
       agentId: "a",
@@ -189,6 +193,44 @@ describe("computeAgentScorecard", () => {
       pendingCount: 0,
     });
     expect(card.rates.duplicateRate).toBeCloseTo(0.75, 5);
+  });
+
+  // Finding 9ae52db7: every run of one capability shares the capability as
+  // its target, so the review fingerprint read seven deletes of seven
+  // different notes as one cluster of 7, and the card as 100% duplicates.
+  const deleteRun = (noteId: string) =>
+    proposalRow({
+      proposalType: "capability.run",
+      targetType: "capability",
+      targetId: "cap-delete",
+      data: { verbId: "entities.delete", params: { entityId: noteId } },
+    });
+
+  it("seven deletes of seven different notes are not duplicates", () => {
+    const rows = Array.from({ length: 7 }, (_, i) => deleteRun(`note-${i}`));
+    const card = computeAgentScorecard(rows, {
+      agentId: "a",
+      agentName: null,
+      agentType: null,
+      pendingCount: 0,
+    });
+    expect(card.rates.duplicateRate).toBe(0);
+  });
+
+  it("the same delete of the same note proposed twice counts both", () => {
+    const rows = [
+      deleteRun("note-a"),
+      deleteRun("note-a"),
+      deleteRun("note-b"),
+      deleteRun("note-c"),
+    ];
+    const card = computeAgentScorecard(rows, {
+      agentId: "a",
+      agentName: null,
+      agentType: null,
+      pendingCount: 0,
+    });
+    expect(card.rates.duplicateRate).toBe(0.5);
   });
 
   it("reads the duplicate rate from the newest DUPLICATE_SAMPLE_LIMIT rows and divides by the sample", () => {

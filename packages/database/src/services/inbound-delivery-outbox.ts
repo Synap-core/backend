@@ -132,7 +132,8 @@ export async function settleInboundDelivery(
       dispatchedAt: outcome.complete ? sql`now()` : null,
       claimedUntil: outcome.complete
         ? null
-        : sql`now() + make_interval(secs => least(power(2, ${inboundDeliveries.attempts})::int, ${INBOUND_DELIVERY_MAX_BACKOFF_SECONDS}))`,
+        : // Cap BEFORE the cast: `power(2, 31)::int` overflows (finding 5226a61b).
+          sql`now() + make_interval(secs => least(power(2, ${inboundDeliveries.attempts}), ${INBOUND_DELIVERY_MAX_BACKOFF_SECONDS})::int)`,
     })
     .where(eq(inboundDeliveries.id, id));
 }

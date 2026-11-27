@@ -69,7 +69,7 @@ export function registerFrameReadRoutes(app: HubHono): void {
     summary: "A framed surface's read, checked against what it declares",
     description:
       'The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:"cell", typeKey}`, `{kind:"document", id}` for an html page, or `{kind:"draft", draftId}` for the caller\'s own unsaved draft) and its lens (`workspaceId`, used for a cell or a draft; a page reads in its own space). ' +
-      "The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. A draft declares nothing: it is answered with the caller's access and logged as a draft (a preview); another person's draft is refused (403, `code: FRAME_DRAFT_NOT_YOURS`). The read runs as the caller, floored to what they may see. Every call is logged. " +
+      "The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. A draft declares nothing: it is answered with the caller's access and logged as a draft (a preview); another person's draft is refused (403, `code: FRAME_DRAFT_NOT_YOURS`). The read runs as the caller, floored to what they may see. Every call is logged. Reads are budgeted per caller and surface: past the budget the door answers 429 (`code: FRAME_READ_RATE_LIMITED`). " +
       `Surface kinds: ${FRAME_SURFACE_KINDS.join(", ")}.`,
     request: { body: FrameReadBodySchema },
     responses: {
@@ -84,6 +84,11 @@ export function registerFrameReadRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: FrameReadErrorSchema },
       403: { description: "Forbidden", schema: FrameReadErrorSchema },
       404: { description: "Not found", schema: FrameReadErrorSchema },
+      429: {
+        description:
+          "Too many reads of this surface by this caller (`code: FRAME_READ_RATE_LIMITED`); try again shortly",
+        schema: FrameReadErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });

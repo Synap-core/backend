@@ -2352,8 +2352,8 @@ export type LinkType =
   // capability(add-on) --extends--> capability(base): written by the
   // capability applier only (founder decision D6).
   | "extends"
-  // <anchor> --attaches--> view|document|cell_instance: an ATTACHED surface
-  // (Surfaces P3). Written by the surfaces door only.
+  // <anchor> --attaches--> view|document|cell_instance: an ATTACHED surface.
+  // Written by the surfaces door only.
   | "attaches";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */

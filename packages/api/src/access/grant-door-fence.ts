@@ -203,7 +203,7 @@ export const SURFACES_FIND = READS(
   "share"
 );
 /**
- * The surface inspect (`inspectSurface`, Surfaces P7): Hub
+ * The surface inspect (`inspectSurface`): Hub
  * `GET /surfaces/inspect` and MCP `synap_inspect_surface` share it. The view,
  * the page and the cell instance are read through `scopedDb`; the cell type
  * (`widget_definitions`) and the frame read log are read outside the seams

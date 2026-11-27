@@ -3,8 +3,9 @@
  *
  * Pure SQL over `proposals` keyed by `proposals.agentUserId`, over the last 7
  * days (`scorecardWindow`): approve/reject/revise rates, a rejection-reason
- * histogram, and a duplicate rate derived from the SAME structural fingerprint
- * the review inbox uses (read from a bounded sample, which the card names). It describes an agent's
+ * histogram, and a duplicate rate counted with the ONE twin key diagnose's
+ * duplicate clusters use (`findProposalTwins`; read from a bounded sample,
+ * which the card names). It describes an agent's
  * *behaviour* from governance data the pod already owns — never its
  * implementation, so there is NO `switch(agentType)` and NO Intelligence-Service
  * coupling (root CLAUDE.md: `agentType ⟂ intelligenceServiceId`).
@@ -39,8 +40,10 @@ import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
-import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
-import type { ClusterInputRow } from "../proposals/fingerprint.js";
+import {
+  findProposalTwins,
+  type ProposalTwinInput,
+} from "../proposals/twin-key.js";
 import {
   AGENT_PENDING_PROPOSAL_CAP,
   agentProposalCap,
@@ -48,13 +51,15 @@ import {
 } from "../../utils/permission-check.js";
 import type { AgentScorecard } from "./types.js";
 
-/** The minimum a proposal row must expose to score an agent. Fingerprint-shaped. */
+/** The minimum a proposal row must expose to score an agent. Twin-key-shaped. */
 export interface ScorecardProposalRow {
   proposalType: string;
   targetType: string;
   targetId: string;
+  /** `proposals.dedup_hash`, the twin key an agent row stores when filed. */
+  dedupHash?: string | null;
   /**
-   * The stored `proposals.data`. Feeds the duplicate fingerprint AND —
+   * The stored `proposals.data`. Feeds the twin key AND —
    * via `isPartiallyApprovedData` — the partial-approval split below, so a
    * gutted package is never scored as a full endorsement. Deliberately NOT a
    * pre-computed reject-count field: `data` is already on the row, and a second
@@ -107,14 +112,14 @@ export function scorecardWindow(now: Date): ScorecardWindow {
  */
 export const DUPLICATE_SAMPLE_LIMIT = 500;
 
-/** One fingerprint-shaped row of the duplicate sample. */
-export type ScorecardSampleRow = Omit<ClusterInputRow, "id">;
+/** One row of the duplicate sample: what the twin key reads. */
+export type ScorecardSampleRow = ProposalTwinInput;
 
 /**
  * What the card is folded from. The DB tier fills it with SQL aggregates over
  * the window; {@link scorecardAggregatesFromRows} fills it from raw rows (the
  * pure tests). Either way the RULES — partial apply, human revision, reason
- * bucket, duplicate fingerprint — are applied once, in {@link foldAgentScorecard}.
+ * bucket, twin key — are applied once, in {@link foldAgentScorecard}.
  */
 export interface ScorecardAggregates {
   /** `count(*)` per status over the window — every proposal, never capped. */
@@ -185,7 +190,7 @@ export function scorecardAggregatesFromRows(
  * PURE scorecard math over raw rows: {@link scorecardAggregatesFromRows} then
  * {@link foldAgentScorecard}. DB-free so the rules are unit-testable: hand it
  * rows, get back counts + rates + the rejection histogram + a duplicate rate
- * (share of the sample in a same-shape cluster > 1).
+ * (share of the sample that has a twin: `findProposalTwins`).
  */
 export function computeAgentScorecard(
   rows: ScorecardProposalRow[],
@@ -269,17 +274,16 @@ export function foldAgentScorecard(
     if (bucket) reasonHist.set(bucket, (reasonHist.get(bucket) ?? 0) + r.count);
   }
 
-  // Duplicate rate — reuse the EXACT structural fingerprint the review inbox
-  // clusters on, so "duplicate" means the same thing everywhere. A row counts
-  // as a duplicate if it shares its fingerprint with at least one sibling.
-  // Its denominator is the SAMPLE, not the window total.
+  // Duplicate rate: the share of the sample that has a TWIN (the same change
+  // proposed again), by the ONE twin key diagnose's duplicate clusters use.
+  // Not the review fingerprint: it groups every run of one capability as one
+  // target, which read 44% "duplicates" for an agent whose writes all differed
+  // (finding 9ae52db7). Its denominator is the SAMPLE, not the window total.
   const sampleSize = agg.duplicateSample.length;
-  const clusters = collapseProposalsToClusters(
-    agg.duplicateSample.map((r, i) => ({ ...r, id: String(i) }))
+  const inDuplicateCluster = findProposalTwins(agg.duplicateSample).reduce(
+    (sum, group) => sum + group.count,
+    0
   );
-  const inDuplicateCluster = clusters
-    .filter((c) => c.count > 1)
-    .reduce((sum, c) => sum + c.count, 0);
 
   const rate = (n: number) => (total > 0 ? Number((n / total).toFixed(4)) : 0);
 
@@ -460,6 +464,7 @@ export async function agentScorecard(params: {
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
         targetId: proposals.targetId,
+        dedupHash: proposals.dedupHash,
         data: proposals.data,
         createdAt: proposals.createdAt,
         workspaceId: proposals.workspaceId,

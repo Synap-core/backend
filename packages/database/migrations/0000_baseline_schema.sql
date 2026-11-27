@@ -3594,6 +3594,13 @@ CREATE INDEX IF NOT EXISTS "frame_read_log_user_idx"
 CREATE INDEX IF NOT EXISTS "frame_read_log_at_idx"
   ON "frame_read_log" ("at");
 
+-- frame_drafts (0463): who owns a draft id the frame read door answered for.
+CREATE TABLE IF NOT EXISTS "frame_drafts" (
+  "draft_id"   text PRIMARY KEY,
+  "user_id"    text NOT NULL,
+  "claimed_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS "widget_def_workspace_id_idx"
   ON "widget_definitions" ("workspace_id");
 

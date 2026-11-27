@@ -1,5 +1,5 @@
 /**
- * synap_find_surfaces — the MCP door onto `surfacesForObject` (Surfaces P1).
+ * synap_find_surfaces — the MCP door onto `surfacesForObject`.
  *
  * The service is mocked: what is pinned here is the DOOR — the anchor reaches
  * the service as given, a key confined to one space reads that space, the

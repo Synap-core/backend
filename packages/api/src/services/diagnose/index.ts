@@ -61,10 +61,7 @@ import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { readUsageForCaller } from "../usage/read-usage.js";
 import { TRPCError } from "@trpc/server";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
-import {
-  collapseProposalsToClusters,
-  type ClusterInputRow,
-} from "../proposals/fingerprint.js";
+import { findProposalTwins } from "../proposals/twin-key.js";
 import { AGENT_PENDING_PROPOSAL_CAP } from "../../utils/permission-check.js";
 import {
   getObjectGraph,
@@ -955,7 +952,8 @@ async function diagnoseClass(
   workspaceId?: string
 ): Promise<ClassReport | { error: string }> {
   switch (type) {
-    // The review queue as a product: backlog + duplicate clusters.
+    // The review queue as a product: backlog + duplicate clusters (real twins:
+    // the same change proposed twice, `findProposalTwins`).
     case "proposal": {
       const lensWhere = and(
         userVisibleWhere(proposals.workspaceId, userId),
@@ -973,27 +971,17 @@ async function diagnoseClass(
         .where(lensWhere);
       const rows = await db
         .select({
-          id: proposals.id,
           proposalType: proposals.proposalType,
           targetType: proposals.targetType,
           targetId: proposals.targetId,
+          dedupHash: proposals.dedupHash,
           data: proposals.data,
-          createdAt: proposals.createdAt,
           workspaceId: proposals.workspaceId,
         })
         .from(proposals)
         .where(lensWhere)
         .orderBy(desc(proposals.createdAt))
         .limit(PROPOSAL_CLASS_SCAN_LIMIT);
-      const clusterRows: ClusterInputRow[] = rows.map((r) => ({
-        id: r.id,
-        proposalType: r.proposalType,
-        targetType: r.targetType,
-        targetId: r.targetId,
-        data: r.data,
-        createdAt: r.createdAt,
-        workspaceId: r.workspaceId ?? null,
-      }));
       // Same lens gap the GLOBAL door now names (`services/diagnose/global.ts`,
       // `mineOutsideLens`). `userVisibleWhere` is a WORKSPACE-membership
       // predicate, so a pending row whose `workspaceId` does not resolve to a
@@ -1014,9 +1002,11 @@ async function diagnoseClass(
             workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
           )
         );
-      const duplicates = collapseProposalsToClusters(clusterRows)
-        .filter((c) => c.count > 1)
-        .map((c) => ({ targetLabel: c.targetLabel, count: c.count }));
+      // Twins, not the review fingerprint's groups: seven runs of one delete
+      // verb on seven different notes share a capability target but are seven
+      // different proposals (finding 9ae52db7). The agent scorecard's
+      // `duplicateRate` counts with the same function.
+      const duplicates = findProposalTwins(rows);
       const { summary, detail } = summarizeProposalClass({
         pending: exactRow?.pending ?? 0,
         mine: mineRow?.mine ?? 0,

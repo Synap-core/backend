@@ -188,3 +188,60 @@ export function isReadDeclared(
     return true;
   });
 }
+
+/**
+ * The reads a PUBLISHED page may carry onto the public web (surfaces review
+ * D2 / M2, 27 Nov 2026): at publish, each declared read runs once and its
+ * answer is frozen into the public page, so only reads of records a person
+ * would show a stranger are publishable: entities, documents, views and
+ * kinds. Work status (`sessions.*`, `attention.*`, `lifecycle.*`,
+ * `lens.page`, `flow.of`), playbooks, projects and the graph never are.
+ * The ONE allowlist: the publish door refuses the rest, and the review card
+ * names what will be frozen public through it.
+ */
+export const CELL_BRIDGE_PUBLISHABLE_READ_OPS: ReadonlySet<CellBridgeReadOp> =
+  new Set<CellBridgeReadOp>([
+    "entities.list",
+    "entities.get",
+    "documents.get",
+    "views.list",
+    "views.get",
+    "views.execute",
+    "profiles.list",
+    "profiles.get",
+  ]);
+
+/**
+ * Why a declared read may NOT be published, or null when it may. Outside the
+ * allowlist: refused. `entities.list` must name its kind (`profileSlug`,
+ * pinned to one value) and may hold no `"*"` param: a list of every record
+ * the publisher sees is never frozen public.
+ */
+export function publishedReadRefusal(
+  entry: CellBridgeDeclaredRead
+): string | null {
+  if (!CELL_BRIDGE_PUBLISHABLE_READ_OPS.has(entry.op)) {
+    return `"${entry.op}" is not a read a published page may carry: only entity, document, view and kind reads are published.`;
+  }
+  if (entry.op === "entities.list") {
+    const params = entry.params ?? {};
+    const kind = params.profileSlug;
+    if (!kind || kind === CELL_BRIDGE_ANY_VALUE) {
+      return 'A published page lists records of ONE kind: declare "entities.list" with a profileSlug value, not "*".';
+    }
+    if (Object.values(params).some((v) => v === CELL_BRIDGE_ANY_VALUE)) {
+      return 'A published "entities.list" holds no "*" param: pin each param it names.';
+    }
+  }
+  return null;
+}
+
+/** One declared read as words: `entities.list (profileSlug: deal)`. */
+export function describeDeclaredRead(entry: CellBridgeDeclaredRead): string {
+  const params = Object.entries(entry.params ?? {}).filter(
+    ([, v]) => v !== undefined
+  );
+  return params.length === 0
+    ? entry.op
+    : `${entry.op} (${params.map(([k, v]) => `${k}: ${v}`).join(", ")})`;
+}

@@ -1575,10 +1575,10 @@ export const mutateProcs = {
         });
         bentoViewId = newViewId;
         // The bento is ATTACHED to the entity (links `attaches`, the one
-        // store of an object's surfaces since the founder decision of 23 Nov
-        // 2026): the edge the `entity-bento` conversion folds
-        // `system_data.bentoViewId` into, written here so this door keeps
-        // both stores in step. Same gate as the view above.
+        // store of an object's surfaces). `system_data.bentoViewId` below is
+        // only the mirror the hosts' renderer ladder still reads; the find
+        // door never lists it, and detaching the bento clears it. Same gate
+        // as the view above.
         const { insertAttachment } =
           await import("../../services/surfaces/attach.js");
         await insertAttachment({
@@ -1699,6 +1699,19 @@ export const mutateProcs = {
         };
       }
 
+      // The look IS an attached surface: the entity's `detail` slot
+      // attachment is the record. `system_data.renderer` below is its mirror
+      // for the clients that still read it, written once the record is.
+      const { replaceDetailCellLook } =
+        await import("../../services/surfaces/attach.js");
+      await replaceDetailCellLook({
+        anchor: { kind: "entity", id: input.entityId },
+        cellKey: input.ref?.cellKey ?? null,
+        props: (input.ref as { props?: Record<string, unknown> } | null)?.props,
+        workspaceId: entity.workspaceId,
+        ownerUserId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? null,
+      });
       // MERGE — `systemData` is a shared bag (viewMode, bentoViewId,
       // onboardingScaffold, mergedInto, media, …). Patched in SQL on the
       // CURRENT row, so neither a wholesale write nor a stale read can destroy
@@ -1710,20 +1723,6 @@ export const mutateProcs = {
           updatedAt: new Date(),
         })
         .where(eq(entities.id, input.entityId));
-      // The look IS an attached surface (founder decision
-      // 23 Nov 2026): the entity's `detail` slot attachment is the record;
-      // `system_data.renderer` above stays as its mirror for the clients that
-      // still read it, until they read `attached` (one release).
-      const { replaceDetailCellLook } =
-        await import("../../services/surfaces/attach.js");
-      await replaceDetailCellLook({
-        anchor: { kind: "entity", id: input.entityId },
-        cellKey: input.ref?.cellKey ?? null,
-        props: (input.ref as { props?: Record<string, unknown> } | null)?.props,
-        workspaceId: entity.workspaceId,
-        ownerUserId: ctx.userId,
-        agentUserId: ctx.agentUserId ?? null,
-      });
 
       logger.info(
         {

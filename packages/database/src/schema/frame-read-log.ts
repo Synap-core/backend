@@ -65,5 +65,3 @@ export const frameReadLog = pgTable(
 
 /** How long a frame read line is kept (the inspect door's longest window). */
 export const FRAME_READ_LOG_RETENTION_DAYS = 30;
-
-export type FrameReadLogRow = typeof frameReadLog.$inferSelect;

@@ -24,9 +24,9 @@
 
 import { Parser } from "htmlparser2";
 
-export const HTML_BLOCK_ID_ATTRIBUTE = "data-block-id";
-export const HTML_SLIDE_ATTRIBUTE = "data-slide";
-export const HTML_BLOCK_TITLE_ATTRIBUTE = "data-title";
+const HTML_BLOCK_ID_ATTRIBUTE = "data-block-id";
+const HTML_SLIDE_ATTRIBUTE = "data-slide";
+const HTML_BLOCK_TITLE_ATTRIBUTE = "data-title";
 
 /** Bumped when what the manifest holds changes: a stamp from another extractor is stale. */
 export const HTML_BLOCK_EXTRACTOR = 1;

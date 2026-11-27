@@ -41,6 +41,7 @@ import {
   type SurfaceActor,
 } from "../../../services/surfaces/attach.js";
 import { createSurface } from "../../../services/surfaces/create.js";
+import { surfaceKeyRefusal } from "../../../services/surfaces/key-binding.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { resolveVerifiedSessionId } from "../_middleware/session.js";
 
@@ -424,6 +425,14 @@ export function registerSurfacesRoutes(app: HubHono): void {
     const who = await surfaceActor(c, parsed.data, "POST /surfaces");
     if (!who.ok) return c.json({ error: who.error }, who.status);
     try {
+      // A key bound to one space makes surfaces in that space only (H3).
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: c.get("keyWorkspaceId"),
+        userId: who.actor.userId,
+        anchor: parsed.data.anchor,
+        bodyWorkspaceId: parsed.data.spec?.workspaceId,
+      });
+      if (offKey) return answer(c, offKey);
       return answer(c, await createSurface(who.actor, parsed.data));
     } catch (err) {
       // A refusal the caller can act on (not found, forbidden, conflict)
@@ -470,6 +479,14 @@ export function registerSurfacesRoutes(app: HubHono): void {
     const who = await surfaceActor(c, parsed.data, "POST /surfaces/attach");
     if (!who.ok) return c.json({ error: who.error }, who.status);
     try {
+      // A key bound to one space touches surfaces in that space only (H3).
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: c.get("keyWorkspaceId"),
+        userId: who.actor.userId,
+        anchor: parsed.data.anchor,
+        surface: parsed.data.surface,
+      });
+      if (offKey) return answer(c, offKey);
       return answer(c, await attachSurface(who.actor, parsed.data));
     } catch (err) {
       // A refusal the caller can act on (not found, forbidden, conflict)
@@ -512,6 +529,14 @@ export function registerSurfacesRoutes(app: HubHono): void {
     const who = await surfaceActor(c, parsed.data, "DELETE /surfaces/attach");
     if (!who.ok) return c.json({ error: who.error }, who.status);
     try {
+      // A key bound to one space touches surfaces in that space only (H3).
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: c.get("keyWorkspaceId"),
+        userId: who.actor.userId,
+        anchor: parsed.data.anchor,
+        surface: parsed.data.surface,
+      });
+      if (offKey) return answer(c, offKey);
       return answer(c, await detachSurface(who.actor, parsed.data));
     } catch (err) {
       // A refusal the caller can act on (not found, forbidden, conflict)

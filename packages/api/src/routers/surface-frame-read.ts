@@ -37,6 +37,7 @@ const TRPC_CODE = {
   400: "BAD_REQUEST",
   403: "FORBIDDEN",
   404: "NOT_FOUND",
+  429: "TOO_MANY_REQUESTS",
 } as const;
 
 export const surfaceFrameReadRouter = router({

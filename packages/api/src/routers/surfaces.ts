@@ -41,6 +41,7 @@ import {
   type SurfaceRefusal,
 } from "../services/surfaces/attach.js";
 import { createSurface } from "../services/surfaces/create.js";
+import { surfaceKeyRefusal } from "../services/surfaces/key-binding.js";
 import {
   INSPECT_SURFACE_KINDS,
   inspectSurface,
@@ -219,10 +220,17 @@ export const surfacesRouter = router({
     )
     .mutation(async ({ ctx, input }) =>
       settle(
-        await createSurface(
-          { ...actorOf(ctx, "surfaces.create"), reasoning: input.reasoning },
-          input
-        )
+        // A key bound to one space makes surfaces in that space only (H3).
+        (await surfaceKeyRefusal({
+          keyWorkspaceId: ctx.keyWorkspaceId,
+          userId: requireUserId(ctx.userId),
+          anchor: input.anchor,
+          bodyWorkspaceId: input.spec?.workspaceId,
+        })) ??
+          (await createSurface(
+            { ...actorOf(ctx, "surfaces.create"), reasoning: input.reasoning },
+            input
+          ))
       )
     ),
 
@@ -243,10 +251,17 @@ export const surfacesRouter = router({
     )
     .mutation(async ({ ctx, input }) =>
       settle(
-        await attachSurface(
-          { ...actorOf(ctx, "surfaces.attach"), reasoning: input.reasoning },
-          input
-        )
+        // A key bound to one space touches surfaces in that space only (H3).
+        (await surfaceKeyRefusal({
+          keyWorkspaceId: ctx.keyWorkspaceId,
+          userId: requireUserId(ctx.userId),
+          anchor: input.anchor,
+          surface: input.surface,
+        })) ??
+          (await attachSurface(
+            { ...actorOf(ctx, "surfaces.attach"), reasoning: input.reasoning },
+            input
+          ))
       )
     ),
 
@@ -261,10 +276,17 @@ export const surfacesRouter = router({
     )
     .mutation(async ({ ctx, input }) =>
       settle(
-        await detachSurface(
-          { ...actorOf(ctx, "surfaces.detach"), reasoning: input.reasoning },
-          input
-        )
+        // A key bound to one space touches surfaces in that space only (H3).
+        (await surfaceKeyRefusal({
+          keyWorkspaceId: ctx.keyWorkspaceId,
+          userId: requireUserId(ctx.userId),
+          anchor: input.anchor,
+          surface: input.surface,
+        })) ??
+          (await detachSurface(
+            { ...actorOf(ctx, "surfaces.detach"), reasoning: input.reasoning },
+            input
+          ))
       )
     ),
 });

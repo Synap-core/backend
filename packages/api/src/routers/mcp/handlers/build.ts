@@ -92,6 +92,11 @@ import {
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { SurfaceSpec } from "@synap-core/types/surfaces";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
+import type {
+  AttachOutcome,
+  DetachOutcome,
+} from "../../../services/surfaces/attach.js";
+import type { CreateOutcome } from "../../../services/surfaces/create.js";
 import {
   createPlaybookDoor,
   getPlaybookDoor,
@@ -114,21 +119,28 @@ import {
  */
 function surfaceAnswer(
   toolName: string,
-  outcome: { status: string }
+  outcome: CreateOutcome | AttachOutcome | DetachOutcome
 ): CallToolResult {
-  const o = outcome as unknown as Record<string, unknown>;
-  if (o.status === "refused") {
-    return toolError(`Tool '${toolName}': ${o.error as string}`);
+  return refusalOf(toolName, outcome) ?? ok(outcome);
+}
+
+/** The tool error for a refusal or a denial; null for any other outcome. */
+function refusalOf(
+  toolName: string,
+  outcome: CreateOutcome | AttachOutcome | DetachOutcome
+): CallToolResult | null {
+  if (outcome.status === "refused") {
+    return toolError(`Tool '${toolName}': ${outcome.error}`);
   }
-  if (o.status === "denied") {
-    return toolError(`Tool '${toolName}': ${o.reason as string}`);
+  if (outcome.status === "denied") {
+    return toolError(`Tool '${toolName}': ${outcome.reason}`);
   }
-  return ok(outcome);
+  return null;
 }
 
 /**
  * `synap_promote_cell_to_renderer` for ONE playbook, aliased onto the surface
- * door (Surfaces P3): binding makes the cell the playbook's look in `slot`
+ * door: binding makes the cell the playbook's look in `slot`
  * (a new cell instance, attached, replacing the slot's earlier look); `clear`
  * takes the slot's looks off. Same governance as the surface door: an agent's
  * call is a proposal.
@@ -154,7 +166,17 @@ async function promoteOntoAttachment(
   };
   const anchor = { kind: "playbook" as const, id: input.playbookId };
   const target = { kind: "playbook", id: input.playbookId };
+  const { surfaceKeyRefusal } =
+    await import("../../../services/surfaces/key-binding.js");
   if (input.cellKey) {
+    // A key bound to one space makes surfaces in that space only (H3).
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      bodyWorkspaceId: input.workspaceId,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const { createSurface } =
       await import("../../../services/surfaces/create.js");
     const outcome = await createSurface(
@@ -172,11 +194,10 @@ async function promoteOntoAttachment(
       },
       { replaceSlot: true }
     );
-    const o = outcome as unknown as Record<string, unknown>;
-    if (o.status === "refused" || o.status === "denied") {
-      return surfaceAnswer(toolName, outcome);
-    }
-    return ok({ ...o, target, slot: input.slot, via: "attached" });
+    return (
+      refusalOf(toolName, outcome) ??
+      ok({ ...outcome, target, slot: input.slot, via: "attached" })
+    );
   }
   // Clear: every look the playbook carries in that slot comes off.
   const { attachmentsInSlot, detachSurface } =
@@ -184,11 +205,16 @@ async function promoteOntoAttachment(
   const inSlot = await attachmentsInSlot(anchor, input.slot);
   const outcomes = [];
   for (const row of inSlot) {
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      surface: row,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome = await detachSurface(actor, { anchor, surface: row });
-    const o = outcome as unknown as Record<string, unknown>;
-    if (o.status === "refused" || o.status === "denied") {
-      return surfaceAnswer(toolName, outcome);
-    }
+    const refused = refusalOf(toolName, outcome);
+    if (refused) return refused;
     outcomes.push(outcome);
   }
   return ok({
@@ -369,7 +395,17 @@ export const buildHandlers = {
       throw new Error(`Invalid synap_create_cell args: ${declared.error}`);
     }
     const declaredFields = declaredFrameIoFields(declared);
-    const cellWorkspaceId = args.workspaceId ?? null;
+    // A key bound to one space defines in that space only, never pod-wide
+    // (review H3); a pod-wide cell needs a pod admin (review M1).
+    const { confineCellScope } =
+      await import("../../hub-protocol/confine-workspace.js");
+    const scope = confineCellScope(ctx.keyWorkspaceId, args.workspaceId);
+    if (!scope.ok) throw new Error(scope.error);
+    const cellWorkspaceId = scope.workspaceId;
+    const { cellDefineScopeRefusal } =
+      await import("../../../services/cells/marketplace-cell-lifecycle.js");
+    const podWide = await cellDefineScopeRefusal(userId, cellWorkspaceId);
+    if (podWide) throw new Error(podWide.error);
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
     // proposal a person approves and then watches fail on every open.
@@ -495,9 +531,8 @@ export const buildHandlers = {
     const reasoning = readReasoning(args);
     const props = args.props;
 
-    // ONE playbook's own look is an ATTACHED surface since Surfaces P3
-    // (founder decision 23 Nov 2026): the door is aliased onto the surface
-    // door — a cell instance attached to the playbook in its slot, the slot's
+    // ONE playbook's own look is an ATTACHED surface: the door is aliased
+    // onto the surface door — a cell instance attached to the playbook in its slot, the slot's
     // earlier look taken off (`surface/create`); `clear` takes the slot's look
     // off (`surface/detach`). A VIEW's own look stays a renderer binding: a
     // view is not an anchor kind (`ANCHOR_KINDS`).
@@ -563,7 +598,7 @@ export const buildHandlers = {
     return ok({ ...result, target, slot, nowBound });
   },
   /**
-   * Make a surface FOR one object (Surfaces P3): the body and its `attaches`
+   * Make a surface FOR one object: the body and its `attaches`
    * link in one governed act (`surface/create`), through the service tRPC
    * `surfaces.create` and Hub `POST /surfaces` call.
    */
@@ -573,6 +608,16 @@ export const buildHandlers = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const { createSurface } =
       await import("../../../services/surfaces/create.js");
+    // A key bound to one space makes surfaces in that space only (H3).
+    const { surfaceKeyRefusal } =
+      await import("../../../services/surfaces/key-binding.js");
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor: args.anchor,
+      bodyWorkspaceId: ((args.spec ?? {}) as SurfaceSpec).workspaceId,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome = await createSurface(
       {
         userId,
@@ -610,6 +655,16 @@ export const buildHandlers = {
       door: toolName,
     };
     const { anchor, surface } = args;
+    // A key bound to one space touches surfaces in that space only (H3).
+    const { surfaceKeyRefusal } =
+      await import("../../../services/surfaces/key-binding.js");
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      surface,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome =
       args.detach === true
         ? await detachSurface(actor, { anchor, surface })
@@ -1131,7 +1186,7 @@ export const buildHandlers = {
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // A view FOR one object (`attachTo`) is made by the surface door: the
-    // view and its `attaches` link in one governed act (Surfaces P3). Without
+    // view and its `attaches` link in one governed act. Without
     // it, the view's anchor is its space or project pin, as before.
     if (args.attachTo !== undefined) {
       if (args.initialContent !== undefined) {
@@ -1142,6 +1197,18 @@ export const buildHandlers = {
       const { createSurface } =
         await import("../../../services/surfaces/create.js");
       const type = args.type;
+      // A key bound to one space makes surfaces in that space only (H3).
+      const { surfaceKeyRefusal } =
+        await import("../../../services/surfaces/key-binding.js");
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: ctx.keyWorkspaceId,
+        userId,
+        anchor: args.attachTo,
+        bodyWorkspaceId: requestedWorkspaceId
+          ? (confinedWorkspaceId ?? requestedWorkspaceId)
+          : undefined,
+      });
+      if (offKey) return surfaceAnswer(toolName, offKey);
       const outcome = await createSurface(
         {
           userId,

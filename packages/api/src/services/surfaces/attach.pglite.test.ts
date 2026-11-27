@@ -1,5 +1,5 @@
 /**
- * Attached surfaces (Surfaces P3) on PGlite, through the REAL tRPC doors
+ * Attached surfaces on PGlite, through the REAL tRPC doors
  * (`surfaces.attach | detach | create | forObject`), the real endpoint floor
  * (`checkLinkEndpointsVisible`: the views, cell-instance and entity rules),
  * the real `links` writes and the real reader. Governance is stubbed with its
@@ -70,6 +70,9 @@ const V_RADAR = randomUUID(); // Alice's view in W
 const V_BOB_PRIVATE = randomUUID(); // Bob's view in WB: Alice cannot see it
 const V_AGENT = randomUUID(); // the view an agent attaches
 const V_DETACH = randomUUID();
+const E2 = randomUUID(); // a second deal in W: the legacy writers and positions
+const E3 = randomUUID(); // a third: two attaches at once
+const CELL_LINKED = randomUUID(); // a cell instance linked to E2 the old way
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -110,8 +113,12 @@ beforeAll(async () => {
     [W, ALICE, BOB, WB]
   );
   await q(
-    `insert into entities (id, user_id, workspace_id, type, title) values ($1,$2,$3,'deal','Seed round')`,
-    [E, ALICE, W]
+    `insert into entities (id, user_id, workspace_id, type, title) values ($1,$2,$3,'deal','Seed round'), ($4,$2,$3,'deal','Series A'), ($5,$2,$3,'deal','Bridge')`,
+    [E, ALICE, W, E2, E3]
+  );
+  await q(
+    `insert into cell_instances (id, workspace_id, user_id, cell_type) values ($1,$2,$3,'entity-header')`,
+    [CELL_LINKED, W, ALICE]
   );
   for (const [id, ws, owner, name] of [
     [V_RADAR, W, ALICE, "Investor radar"],
@@ -443,5 +450,174 @@ describe("entities.setEntityRenderer (aliased onto the attach door)", () => {
 
     await setLook(null);
     expect(await detailLooks()).toEqual([]);
+  });
+});
+
+describe("detach takes a surface off everywhere it was listed", () => {
+  const entityCaller = () =>
+    entitiesRouter.createCaller({
+      authenticated: true,
+      userId: ALICE,
+      workspaceId: W,
+    } as never);
+  const listedIds = async (anchorId: string) =>
+    (await caller(ALICE).forObject({ kind: "entity", id: anchorId })).rows.map(
+      (r) => r.id
+    );
+
+  it("the entity's bento (view-mode toggle): attached, then detached, is listed nowhere and drawn nowhere", async () => {
+    const res = await entityCaller().setEntityViewMode({
+      entityId: E2,
+      mode: "bento",
+    });
+    const bento = res.bentoViewId!;
+    expect(bento).toBeTruthy();
+    const before = await caller(ALICE).forObject({ kind: "entity", id: E2 });
+    expect(before.rows.filter((r) => r.id === bento)).toEqual([
+      expect.objectContaining({ relation: "attached", source: "attaches" }),
+    ]);
+
+    const out = await caller(ALICE).detach({
+      anchor: { kind: "entity", id: E2 },
+      surface: { type: "view", id: bento },
+    });
+    expect(out).toEqual({ status: "detached" });
+    expect(await listedIds(E2)).not.toContain(bento);
+    // The renderer mirror the hosts read goes with it.
+    const [row] = (
+      await q<{ system_data: Record<string, unknown> }>(
+        `select system_data from entities where id=$1`,
+        [E2]
+      )
+    ).rows;
+    expect(row!.system_data.bentoViewId).toBeUndefined();
+    expect(row!.system_data.viewMode).toBe("document");
+  });
+
+  it("a cell linked to the entity (a relation, the old store): detached, it is listed nowhere", async () => {
+    // The state the conversion and `cellInstances.link` leave: the typed
+    // relation AND the attachment.
+    await q(
+      `insert into relations (id, user_id, workspace_id, source_kind, source_cell_id, target_kind, target_entity_id, type)
+       values ($1,$2,$3,'cell',$4,'entity',$5,'references')`,
+      [randomUUID(), ALICE, W, CELL_LINKED, E2]
+    );
+    await caller(ALICE).attach({
+      anchor: { kind: "entity", id: E2 },
+      surface: { type: "cell_instance", id: CELL_LINKED },
+    });
+    expect(await listedIds(E2)).toContain(CELL_LINKED);
+    await caller(ALICE).detach({
+      anchor: { kind: "entity", id: E2 },
+      surface: { type: "cell_instance", id: CELL_LINKED },
+    });
+    expect(await listedIds(E2)).not.toContain(CELL_LINKED);
+  });
+});
+
+describe("attachment positions", () => {
+  const positions = async (anchorId: string) =>
+    (
+      await q<{ to_id: string; position: number }>(
+        `select to_id, (metadata->>'position')::int as position from links
+         where from_type='entity' and from_id=$1 and link_type='attaches'`,
+        [anchorId]
+      )
+    ).rows;
+
+  it("a detach then an attach never reuses a live position", async () => {
+    const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()];
+    for (const [id, name] of [
+      [a, "A"],
+      [b, "B"],
+      [c, "C"],
+    ] as const) {
+      await q(
+        `insert into views (id, workspace_id, user_id, name, type, category) values ($1,$2,$3,$4,'table','structured')`,
+        [id, W, ALICE, name]
+      );
+    }
+    const anchor = { kind: "entity" as const, id: E2 };
+    await caller(ALICE).attach({ anchor, surface: { type: "view", id: a } });
+    await caller(ALICE).attach({ anchor, surface: { type: "view", id: b } });
+    await caller(ALICE).detach({ anchor, surface: { type: "view", id: a } });
+    await caller(ALICE).attach({ anchor, surface: { type: "view", id: c } });
+    const at = await positions(E2);
+    const pb = at.find((p) => p.to_id === b)!.position;
+    const pc = at.find((p) => p.to_id === c)!.position;
+    expect(pc).toBeGreaterThan(pb);
+    expect(new Set(at.map((p) => p.position)).size).toBe(at.length);
+  });
+
+  it("two attaches to one object at once take two positions", async () => {
+    const [a, b] = [randomUUID(), randomUUID()];
+    for (const id of [a, b]) {
+      await q(
+        `insert into views (id, workspace_id, user_id, name, type, category) values ($1,$2,$3,'Board','table','structured')`,
+        [id, W, ALICE]
+      );
+    }
+    const anchor = { kind: "entity" as const, id: E3 };
+    await Promise.all(
+      [a, b].map((id) =>
+        caller(ALICE).attach({ anchor, surface: { type: "view", id } })
+      )
+    );
+    const at = await positions(E3);
+    expect(at).toHaveLength(2);
+    expect(new Set(at.map((p) => p.position)).size).toBe(2);
+  });
+});
+
+describe("replacing an object's look in a slot", () => {
+  const setLook = (cellKey: string) =>
+    entitiesRouter
+      .createCaller({
+        authenticated: true,
+        userId: ALICE,
+        workspaceId: W,
+      } as never)
+      .setEntityRenderer({ entityId: E3, ref: { kind: "cell", cellKey } });
+  const looks = async () =>
+    (
+      await q<{ to_id: string }>(
+        `select to_id from links where from_type='entity' and from_id=$1
+           and link_type='attaches' and metadata->>'slot' = 'detail'`,
+        [E3]
+      )
+    ).rows.map((r) => r.to_id);
+
+  it("the replaced look's cell instance is deleted, not left behind", async () => {
+    await setLook("entity-header");
+    const [first] = await looks();
+    await setLook("entity-properties");
+    const [second] = await looks();
+    expect(second).not.toBe(first);
+    const gone = await q(`select id from cell_instances where id::text=$1`, [
+      first,
+    ]);
+    expect(gone.rows).toEqual([]);
+  });
+
+  it("a replacement that fails leaves the earlier look in place", async () => {
+    const [before] = await looks();
+    await h.client!.exec(`
+      create or replace function fail_cell_insert() returns trigger
+        language plpgsql as $$ begin raise exception 'cell insert failed (test)'; end $$;
+      create trigger fail_cell_insert before insert on cell_instances
+        for each row execute function fail_cell_insert();
+    `);
+    try {
+      await expect(setLook("entity-links")).rejects.toThrow();
+    } finally {
+      await h.client!.exec(
+        `drop trigger if exists fail_cell_insert on cell_instances`
+      );
+    }
+    expect(await looks()).toEqual([before]);
+    const kept = await q(`select id from cell_instances where id::text=$1`, [
+      before,
+    ]);
+    expect(kept.rows).toHaveLength(1);
   });
 });

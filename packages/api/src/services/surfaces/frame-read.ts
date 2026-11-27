@@ -31,20 +31,25 @@
  *      whatever the person may read), and a host-named lens is read with the
  *      key's grant (`canRead` with the caller's principal).
  *
- * PREVIEWS (founder, 2026-11-26, proposal 356c4d9d). A person's OWN unsaved
- * draft (the desktop's Cell Studio) is `{kind: "draft", draftId}`: nothing of
- * it is stored, so it declares nothing and reads live with that person's
- * access, logged `surface_kind = "draft"` (the preview mark) and
- * `declared = false`. The draft id is the host's (one per draft); the first
- * person whose read the door answered for it owns it, and anyone else naming
- * it is refused (403 `FRAME_DRAFT_NOT_YOURS`, logged refused). A marketplace
+ * PREVIEWS. A person's OWN unsaved draft (the desktop's Cell Studio) is
+ * `{kind: "draft", draftId}`: nothing of it is stored, so it declares nothing
+ * and reads live with that person's access, logged `surface_kind = "draft"`
+ * (the preview mark) and `declared = false`. The draft id is the host's (one
+ * per draft); the first person whose read reaches it claims it
+ * (`frame_drafts`, one insert on its key, kept past the log's retention), and
+ * anyone else naming it is refused (403 `FRAME_DRAFT_NOT_YOURS`, logged
+ * refused). A marketplace
  * preview of code from outside the pod never comes here: its host answers
  * from a sample dataset. A frame with no surface reads nothing (its host).
  */
 
 import { createHash } from "node:crypto";
-import { db, and, eq, getRequestGrant, isNull, ne, or } from "@synap/database";
-import { frameReadLog, widgetDefinitions } from "@synap/database/schema";
+import { db, and, eq, getRequestGrant, isNull, or } from "@synap/database";
+import {
+  frameDrafts,
+  frameReadLog,
+  widgetDefinitions,
+} from "@synap/database/schema";
 import {
   FRAME_READ_UNDECLARED,
   isCellBridgeReadOp,
@@ -58,6 +63,11 @@ import { canRead, type Principal } from "../../access/door.js";
 import { loadReadableDocument } from "../../utils/document-edit-access.js";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import { runFrameReadOp } from "./frame-read-ops.js";
+import { TRPCError } from "@trpc/server";
+import {
+  assertUserRateLimit,
+  type UserRateLimit,
+} from "../../middleware/ai-rate-limit.js";
 
 /** The surface a frame draws, as its host names it. */
 export type FrameSurface =
@@ -70,13 +80,43 @@ export const FRAME_SURFACE_KINDS = ["cell", "document", "draft"] as const;
 /** Another person's draft: refused, whatever it asks. */
 export const FRAME_DRAFT_NOT_YOURS = "FRAME_DRAFT_NOT_YOURS" as const;
 
+/** Too many reads by one caller for one surface: 429, try again shortly. */
+export const FRAME_READ_RATE_LIMITED = "FRAME_READ_RATE_LIMITED" as const;
+
+/**
+ * The frame read door's budget, per caller (the person, and the agent when
+ * one acts) and per SURFACE (security review M4, code-quality S1,
+ * architecture S5): every read costs a log row and a pod read, and a frame
+ * in a loop must not flood either. Counted before anything is loaded or
+ * logged. 240 a minute is four a second for ONE surface: a bento of many
+ * tiles of one cell shares it, a page's normal reads stay far under it.
+ */
+export const FRAME_READ_LIMIT: UserRateLimit = {
+  name: "frame-read",
+  max: 240,
+  windowMs: 60_000,
+};
+
+/** The surface as the budget counts it: the host's own name for it. */
+function surfaceBudgetKey(surface: FrameSurface): string {
+  switch (surface.kind) {
+    case "cell":
+      return `cell:${surface.typeKey}`;
+    case "document":
+      return `document:${surface.id}`;
+    case "draft":
+      return `draft:${surface.draftId}`;
+  }
+}
+
 /** A refusal of the door, with the HTTP status Hub REST answers. */
 export class FrameReadError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404,
+    readonly status: 400 | 403 | 404 | 429,
     readonly code:
       | typeof FRAME_READ_UNDECLARED
       | typeof FRAME_DRAFT_NOT_YOURS
+      | typeof FRAME_READ_RATE_LIMITED
       | "FRAME_READ_UNKNOWN_OP"
       | "FRAME_SURFACE_NOT_FOUND"
       | "FRAME_SPACE_FORBIDDEN",
@@ -194,27 +234,30 @@ async function loadPageSurface(
 
 /**
  * A person's own unsaved draft (a preview): nothing stored, so it declares
- * nothing and reads in the host's lens. It is `mine: false` when the door
- * already answered another person's read for this draft id.
+ * nothing and reads in the host's lens. The first caller claims the draft id
+ * (one insert on its key: two first reads at once cannot both win); it is
+ * `mine: false` when another person holds it.
  */
 async function loadDraftSurface(
   userId: string,
   draftId: string,
   workspaceId: string | null
 ): Promise<LoadedSurface & { mine: boolean }> {
-  const [other] = await db
-    .select({ userId: frameReadLog.userId })
-    .from(frameReadLog)
-    .where(
-      and(
-        eq(frameReadLog.surfaceKind, "draft"),
-        eq(frameReadLog.surfaceKey, draftId),
-        eq(frameReadLog.allowed, true),
-        ne(frameReadLog.userId, userId)
-      )
-    )
+  await db
+    .insert(frameDrafts)
+    .values({ draftId, userId })
+    .onConflictDoNothing({ target: frameDrafts.draftId });
+  const [owner] = await db
+    .select({ userId: frameDrafts.userId })
+    .from(frameDrafts)
+    .where(eq(frameDrafts.draftId, draftId))
     .limit(1);
-  return { key: draftId, workspaceId, declared: null, mine: !other };
+  return {
+    key: draftId,
+    workspaceId,
+    declared: null,
+    mine: owner?.userId === userId,
+  };
 }
 
 /**
@@ -266,7 +309,7 @@ export async function callerReadsLens(
 }
 
 /** sha256 of the forwarded params, canonical (sorted keys). */
-export function frameParamsHash(params: Record<string, unknown>): string {
+function frameParamsHash(params: Record<string, unknown>): string {
   return createHash("sha256").update(stableStringify(params)).digest("hex");
 }
 
@@ -287,6 +330,18 @@ export async function frameRead(
   const userId = ctx.userId;
   if (!userId) {
     throw new FrameReadError(403, "FRAME_SPACE_FORBIDDEN", "Sign in to read.");
+  }
+  // The budget first: a refused read of a looping frame costs no row.
+  try {
+    assertUserRateLimit(
+      `${ctx.agentUserId ? `${userId}/${ctx.agentUserId}` : userId}:${surfaceBudgetKey(input.surface)}`,
+      FRAME_READ_LIMIT
+    );
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "TOO_MANY_REQUESTS") {
+      throw new FrameReadError(429, FRAME_READ_RATE_LIMITED, err.message);
+    }
+    throw err;
   }
   const { op } = input;
   if (!isCellBridgeReadOp(op)) {

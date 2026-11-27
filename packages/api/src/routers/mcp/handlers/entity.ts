@@ -558,7 +558,7 @@ export const entityHandlers = {
       );
     }
     // A document FOR one object (`attachTo`): the surface door makes it and
-    // attaches it in one governed act (Surfaces P3). Kept apart from
+    // attaches it in one governed act. Kept apart from
     // `entityId`, the entity's ONE body.
     if (args.attachTo !== undefined) {
       if (attachEntityId) {
@@ -568,6 +568,16 @@ export const entityHandlers = {
       }
       const { createSurface } =
         await import("../../../services/surfaces/create.js");
+      // A key bound to one space makes surfaces in that space only (H3).
+      const { surfaceKeyRefusal } =
+        await import("../../../services/surfaces/key-binding.js");
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: ctx.keyWorkspaceId,
+        userId,
+        anchor: args.attachTo as SurfaceAnchor,
+        bodyWorkspaceId: requestedWorkspaceId,
+      });
+      if (offKey) throw new Error(offKey.error);
       const outcome = (await createSurface(
         {
           userId,

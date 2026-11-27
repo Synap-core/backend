@@ -286,7 +286,7 @@ export function isOpenFlowTypeValue(
 
 /**
  * The address query a typed link keeps on its way on — `flowType` for a run,
- * and `surface` (Surfaces P3: the object's page opened on one surface
+ * and `surface` (the object's page opened on one surface
  * attached to it, `/open/<kind>/<id>?surface=<id>`) for any typed kind.
  * Anything else (a `?flowType=` on an entity link, a surface that is not one
  * uuid) is noise, dropped.

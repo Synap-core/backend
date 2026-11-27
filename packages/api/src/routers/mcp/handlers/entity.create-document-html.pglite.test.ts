@@ -263,7 +263,7 @@ describe("synap_create_document — type html makes a page", () => {
     expect(await documentCount()).toBe(before);
   });
 
-  it("DECLARED READS (P6a): a page's `reads` are stored in its metadata, where the frame read door reads them", async () => {
+  it("DECLARED READS: a page's `reads` are stored in its metadata, where the frame read door reads them", async () => {
     const reads = [{ op: "entities.list", params: { profileSlug: "deal" } }];
     const res = await mcpCreate({
       title: "Deals page",

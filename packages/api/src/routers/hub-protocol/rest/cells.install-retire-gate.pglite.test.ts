@@ -1,5 +1,5 @@
 /**
- * The Hub REST cell doors go through the governance gate (Surfaces P0-fix):
+ * The Hub REST cell doors go through the governance gate:
  * `POST /cells/install` and `DELETE /cells/:typeKey` wrote with no gate, and
  * the delete with no `workspaceId` retired a POD-WIDE cell type with no access
  * check at all.
@@ -24,7 +24,7 @@
  *  - an agent's install → 202 proposed, nothing fetched, nothing written;
  *    approving it installs the cell in the reviewed space; a person installs
  *    directly;
- *  - TRUST (Surfaces P6a): both person-approved installs stamp
+ *  - TRUST: both person-approved installs stamp
  *    `trust_level = 'installed'` (rules out "nothing writes installed", so an
  *    installed cell's writes would still propose); an agent's define,
  *    approved, stays `generated` and keeps its declared reads (rules out "an

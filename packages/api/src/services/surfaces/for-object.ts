@@ -1,6 +1,6 @@
 /**
- * surfacesForObject — the ONE find door for surfaces (Surfaces wave P1, plan
- * 187bbb25 §0 and P1): "which UI does this object already carry?".
+ * surfacesForObject — the ONE find door for surfaces: "which UI does this
+ * object already carry?".
  *
  * Every door calls this: tRPC `surfaces.forObject`, MCP `synap_find_surfaces`,
  * Hub REST `GET /api/hub/surfaces` (and through it hub-rest-client
@@ -8,35 +8,35 @@
  * an object today, each read under ITS OWN visibility floor:
  *
  *   attaches        `links <anchor> --attaches--> view|document|cell_instance`
- *                   (the `attached` relation, Surfaces P3,
- *                   `services/surfaces/attach.ts`), every anchor kind, each
- *                   surface under its own table's floor.
+ *                   (the `attached` relation, `services/surfaces/attach.ts`),
+ *                   every anchor kind, each surface under its own table's
+ *                   floor. The ONE store of an object's attached surfaces.
  *   renders         `readBoundRenderer` (the one ladder,
  *                   `getEffectiveRendererWithSource` over `renderer_bindings`
  *                   then the legacy stores) for the anchor's kind, per slot.
  *                   An entity's own look is no longer a renderer: its old
  *                   override (`entities.system_data.renderer`) is an
- *                   attachment (conversion `p3.surfaces.*`, and
- *                   `entities.setEntityRenderer` writes one).
+ *                   attachment (`entities.setEntityRenderer` writes one).
  *   views           `scopedDb` on `views` (the VISIBLE floor,
  *                   `viewReadableWhere`, never owner-only): project pins and
  *                   exposures, a kind's views (`scope_profile_ids`,
  *                   `config.profileSlug`), a space's home boards
  *                   (`metadata.homeScope`, `metadata.scopedSurface`), a
- *                   session's board (`metadata.sessionId`), an entity's bento
- *                   (`entities.system_data.bentoViewId`).
+ *                   session's board (`metadata.sessionId`).
  *   profile-bento   `workspaces.settings.profileBentoViewIds[slug]`.
  *   entity-body     the entity's one document (`entities.document_id`).
  *   session-outputs the `artifacts` ledger of a session.
- *   cell-relations  cell instances linked `cell --references--> entity`
- *                   (`relations`, the tRPC `cellInstances.link` writer).
  *   start-page      a space's `settings.layout.primarySurface`.
  *   sites           a project's Site (`resource_shares`, public, 0336).
  *
- * The legacy anchors the P3 conversions moved onto `attaches` (an entity's
- * bento, a cell linked to an entity) are still read, because their old
- * writers still write them; `dedupe` names each surface once, the
- * attachment first.
+ * An entity's bento (`system_data.bentoViewId`) and a cell linked to an
+ * entity (`relations` cell → entity) are NOT read: the conversions copied
+ * them onto `attaches`, and their writers (`setEntityViewMode`,
+ * `cellInstances.link`) write the attachment. Reading them again would list a
+ * detached surface.
+ *
+ * Each store answers at most `SURFACE_SOURCE_LIMIT` rows; a store that had
+ * more says so in `unavailable` (the rows listed are not all of them).
  *
  * A store that throws lands in `unavailable` with its error: an empty `rows`
  * means "nothing there", never "could not look" (Critical Rule). The anchor
@@ -57,14 +57,12 @@ import {
 } from "@synap/database";
 import {
   artifacts,
-  cellInstances,
   documents,
   entities,
   focusSessions,
   playbooks,
   projectTracks,
   projects,
-  relations,
   resourceShares,
   views,
   workspaces,
@@ -81,13 +79,14 @@ import {
   type SurfaceRow,
   type SurfacesForObject,
 } from "@synap-core/types/surfaces";
+import { isUuid } from "@synap-core/types/property-render";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { openLink } from "../../utils/deep-links.js";
 import { readBoundRenderer } from "../renderers/renderer-target-checks.js";
 import { RENDERER_TARGETS } from "../renderers/renderer-targets.js";
-import { readAttachedSurfaces } from "./attach.js";
+import { readAttachedSurfaces, SURFACE_SOURCE_LIMIT } from "./attach.js";
 
 export interface SurfacesForObjectContext {
   userId: string;
@@ -110,16 +109,14 @@ interface LoadedAnchor {
   profileSlug?: string;
   /** profile: the profile row id (views scope by id). */
   profileId?: string;
-  entity?: {
-    documentId: string | null;
-    systemData: Record<string, unknown>;
-  };
+  entity?: { documentId: string | null };
   workspaceSettings?: Record<string, unknown>;
 }
 
 interface Source {
   source: string;
-  read: () => Promise<SurfaceRow[]>;
+  /** `truncated` reports that the store had more rows than it answered. */
+  read: (truncated: (limit: number) => void) => Promise<SurfaceRow[]>;
 }
 
 export async function surfacesForObject(
@@ -139,9 +136,18 @@ export async function surfacesForObject(
   const loaded = await loadAnchor(ctx, access, input);
   const sources = sourcesFor(ctx, access, loaded, workspaceId);
 
-  const settled = await Promise.allSettled(sources.map((s) => s.read()));
-  const rows: SurfaceRow[] = [];
   const unavailable: SurfacesForObject["unavailable"] = [];
+  const settled = await Promise.allSettled(
+    sources.map((s) =>
+      s.read((limit) =>
+        unavailable.push({
+          source: s.source,
+          error: `More than ${limit} surfaces: only the first ${limit} are listed.`,
+        })
+      )
+    )
+  );
+  const rows: SurfaceRow[] = [];
   settled.forEach((result, i) => {
     if (result.status === "fulfilled") rows.push(...result.value);
     else
@@ -192,26 +198,16 @@ async function loadAnchor(
         workspaceId: string | null;
         type: string;
         documentId: string | null;
-        systemData: Record<string, unknown> | null;
       }>(entities, {
         where: byId(entities),
-        columns: {
-          id: true,
-          workspaceId: true,
-          type: true,
-          documentId: true,
-          systemData: true,
-        },
+        columns: { id: true, workspaceId: true, type: true, documentId: true },
       });
       if (!row) throw notFound(anchor);
       return {
         anchor,
         workspaceId: input.workspaceId ?? row.workspaceId,
         profileSlug: row.type,
-        entity: {
-          documentId: row.documentId,
-          systemData: row.systemData ?? {},
-        },
+        entity: { documentId: row.documentId },
       };
     }
     case "profile": {
@@ -219,16 +215,11 @@ async function loadAnchor(
       // accessible-profiles read is its floor (as in renderer-usage). The
       // anchor id may be the profile's id or its slug.
       const repo = new ProfileRepository(await getDb());
-      const visible = await repo.getAccessibleProfiles(
+      const [profile] = await repo.getAccessibleProfiles(
         ctx.userId,
-        input.workspaceId ?? ""
+        input.workspaceId ?? "",
+        isUuid(input.id) ? { ids: [input.id] } : { slugs: [input.id] }
       );
-      const profile = visible.find(
-        (p) =>
-          p.id === input.id ||
-          (p as unknown as { slug?: string }).slug === input.id
-      ) as unknown as
-        { id: string; slug: string; workspaceId?: string | null } | undefined;
       if (!profile) throw notFound(anchor);
       return {
         anchor,
@@ -284,21 +275,19 @@ function sourcesFor(
   lens: string | null
 ): Source[] {
   const { anchor } = loaded;
-  // Read FIRST: `dedupe` keeps the first row naming a surface, so a legacy
-  // store the conversions copied onto `attaches` never names it twice.
+  // Read FIRST: `dedupe` keeps the first row naming a surface.
   const out: Source[] = [
-    { source: "attaches", read: () => readAttachedSurfaces(access, anchor) },
+    {
+      source: "attaches",
+      read: (truncated) =>
+        readAttachedSurfaces(access, anchor, SURFACE_SOURCE_LIMIT, truncated),
+    },
   ];
   switch (anchor.kind) {
     case "entity":
       out.push(
         { source: "renderers", read: () => readRenders(ctx, loaded) },
-        { source: "entity-body", read: () => readEntityBody(access, loaded) },
-        { source: "views", read: () => readEntityBento(access, loaded) },
-        {
-          source: "cell-relations",
-          read: () => readCellRelations(access, anchor),
-        }
+        { source: "entity-body", read: () => readEntityBody(access, loaded) }
       );
       break;
     case "profile":
@@ -306,8 +295,9 @@ function sourcesFor(
         { source: "renderers", read: () => readRenders(ctx, loaded) },
         {
           source: "views",
-          read: () =>
+          read: (truncated) =>
             readViews(
+              truncated,
               access,
               anchor,
               or(
@@ -327,8 +317,9 @@ function sourcesFor(
       out.push(
         {
           source: "views",
-          read: () =>
+          read: (truncated) =>
             readViews(
+              truncated,
               access,
               anchor,
               and(
@@ -356,13 +347,18 @@ function sourcesFor(
       out.push(
         {
           source: "views",
-          read: () =>
-            readViews(access, anchor, eq(views.projectId, anchor.id), (v) =>
-              isScopedSurface(v.metadata)
-                ? "home"
-                : v.exposedAt
-                  ? "exposed"
-                  : "pinned"
+          read: (truncated) =>
+            readViews(
+              truncated,
+              access,
+              anchor,
+              eq(views.projectId, anchor.id),
+              (v) =>
+                isScopedSurface(v.metadata)
+                  ? "home"
+                  : v.exposedAt
+                    ? "exposed"
+                    : "pinned"
             ),
         },
         { source: "sites", read: () => readSites(access, anchor) }
@@ -372,8 +368,9 @@ function sourcesFor(
       out.push(
         {
           source: "views",
-          read: () =>
+          read: (truncated) =>
             readViews(
+              truncated,
               access,
               anchor,
               drizzleSql`${views.metadata}->>'sessionId' = ${anchor.id}`,
@@ -387,9 +384,8 @@ function sourcesFor(
       );
       break;
     case "playbook":
-      // A playbook's own look was a per-object renderer binding; since P3 it
-      // is an attachment (conversion `p3.surfaces.renderer-binding`, and the
-      // aliased `synap_promote_cell_to_renderer`), read above.
+      // A playbook's own look is an attachment (the aliased
+      // `synap_promote_cell_to_renderer`), read above.
       break;
     case "track":
       // A goal's only surfaces are the ones attached to it.
@@ -470,6 +466,7 @@ const VIEW_COLUMNS = {
 
 /** Views anchored by `where`, read under the visible floor. */
 async function readViews(
+  truncated: (limit: number) => void,
   access: AccessContext,
   anchor: SurfaceAnchor,
   where: SQL,
@@ -478,7 +475,12 @@ async function readViews(
   const rows = await scopedDb(access).findMany<ViewRow>(views, {
     where,
     columns: VIEW_COLUMNS,
+    limit: SURFACE_SOURCE_LIMIT + 1,
   });
+  if (rows.length > SURFACE_SOURCE_LIMIT) {
+    rows.length = SURFACE_SOURCE_LIMIT;
+    truncated(SURFACE_SOURCE_LIMIT);
+  }
   return rows.map((v) => viewRow(v, anchor, relationOf(v), "views"));
 }
 
@@ -577,22 +579,6 @@ async function readEntityBody(
   return doc ? [documentRow(doc, loaded.anchor, "body", "entity-body")] : [];
 }
 
-/**
- * The entity's bento (`entities.system_data.bentoViewId`, the view-mode
- * toggle): an ATTACHED surface since P3 (conversion `p3.surfaces.entity-bento`
- * copied each onto `attaches`). Still read because `setEntityViewMode` still
- * writes the old key; `dedupe` folds it into the attachment.
- */
-async function readEntityBento(
-  access: AccessContext,
-  loaded: LoadedAnchor
-): Promise<SurfaceRow[]> {
-  const id = loaded.entity?.systemData.bentoViewId;
-  if (typeof id !== "string" || !id) return [];
-  const rows = await readViewsByIds(access, [id]);
-  return rows.map((v) => viewRow(v, loaded.anchor, "attached", "views"));
-}
-
 /** A kind's bento per space (`workspaces.settings.profileBentoViewIds[slug]`). */
 async function readProfileBentos(
   ctx: SurfacesForObjectContext,
@@ -600,67 +586,25 @@ async function readProfileBentos(
   loaded: LoadedAnchor,
   lens: string | null
 ): Promise<SurfaceRow[]> {
+  // Only the one key, never each space's whole settings document.
+  const viewId = drizzleSql<
+    string | null
+  >`${workspaces.settings}->'profileBentoViewIds'->>${loaded.profileSlug!}`;
   const rows = await db
-    .select({ settings: workspaces.settings })
+    .selectDistinct({ id: viewId })
     .from(workspaces)
     .where(
       and(
         lens ? eq(workspaces.id, lens) : undefined,
-        userVisibleWhere(workspaces.id, ctx.userId)
+        userVisibleWhere(workspaces.id, ctx.userId),
+        drizzleSql`coalesce(${viewId}, '') <> ''`
       )
     );
-  const ids = new Set<string>();
-  for (const row of rows) {
-    const map = (row.settings as { profileBentoViewIds?: unknown } | null)
-      ?.profileBentoViewIds as Record<string, unknown> | undefined;
-    const id = map?.[loaded.profileSlug!];
-    if (typeof id === "string" && id) ids.add(id);
-  }
-  const found = await readViewsByIds(access, [...ids]);
-  return found.map((v) => viewRow(v, loaded.anchor, "home", "profile-bento"));
-}
-
-/** Cell instances linked to the entity (`relations` cell → entity). */
-async function readCellRelations(
-  access: AccessContext,
-  anchor: SurfaceAnchor
-): Promise<SurfaceRow[]> {
-  const scoped = scopedDb(access);
-  const links = await scoped.findMany<{ sourceCellId: string | null }>(
-    relations,
-    {
-      where: and(
-        eq(relations.sourceKind, "cell"),
-        eq(relations.targetEntityId, anchor.id)
-      ),
-      columns: { sourceCellId: true },
-    }
+  const found = await readViewsByIds(
+    access,
+    rows.map((r) => r.id!).filter(Boolean)
   );
-  const ids = [
-    ...new Set(
-      links.map((l) => l.sourceCellId).filter((id): id is string => !!id)
-    ),
-  ];
-  if (ids.length === 0) return [];
-  const cells = await scoped.findMany<{
-    id: string;
-    cellType: string;
-    name: string | null;
-  }>(cellInstances, {
-    where: inArray(cellInstances.id, ids),
-    columns: { id: true, cellType: true, name: true },
-  });
-  return cells.map((c) => ({
-    id: c.id,
-    body: "cell" as const,
-    relation: "attached" as const,
-    anchor,
-    title: c.name || c.cellType,
-    cellKey: c.cellType,
-    openUrl: openLink(c.id),
-    readOnly: false,
-    source: "cell-relations",
-  }));
+  return found.map((v) => viewRow(v, loaded.anchor, "home", "profile-bento"));
 }
 
 /** A space's start page (`settings.layout.primarySurface`). */

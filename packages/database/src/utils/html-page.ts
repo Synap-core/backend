@@ -1,5 +1,5 @@
 /**
- * THE HTML PAGE DOOR (founder decision, 27 Nov 2026, session 53d7cbed): every
+ * THE HTML PAGE DOOR: every
  * HTML page Synap stores is written here, whoever asks for it — a document
  * (`synap_create_document {type: "html"}`, Hub `POST /documents`, the app's
  * `documents.create` / `upload`), an HTML surface (`synap_create_surface`
@@ -29,7 +29,6 @@
 
 import {
   CELL_FRAME_MAX_BYTES,
-  htmlByteLength,
   parseDeclaredReads,
   type CellBridgeDeclaredReads,
 } from "@synap-core/types/cell-bridge";
@@ -39,9 +38,13 @@ import {
   type CreateDocumentWithContentInput,
   type CreatedDocument,
 } from "./claim-document-revision.js";
-import { HTML_PAGE_DOOR_MARK, isHtmlPageBody } from "./html-page-door-token.js";
+import {
+  HTML_PAGE_DOOR_MARK,
+  htmlPageSizeRefusal,
+  isHtmlPageBody,
+} from "./html-page-door-token.js";
 
-export { isHtmlPageBody };
+export { htmlPageSizeRefusal, isHtmlPageBody };
 
 /** The largest page the door stores: the size a host's frame runs (2 MB). */
 export const HTML_PAGE_MAX_BYTES = CELL_FRAME_MAX_BYTES;
@@ -67,14 +70,8 @@ export function checkHtmlPage(input: {
   content: string;
   reads?: unknown;
 }): HtmlPageCheck {
-  const bytes = htmlByteLength(input.content ?? "");
-  if (bytes > HTML_PAGE_MAX_BYTES) {
-    return {
-      ok: false,
-      field: "content",
-      error: `This HTML page is ${bytes} bytes; a page is at most ${HTML_PAGE_MAX_BYTES} bytes (2 MB), the size a host runs. Make it smaller (inline less, or split it into several pages).`,
-    };
-  }
+  const tooLarge = htmlPageSizeRefusal(input.content ?? "");
+  if (tooLarge) return { ok: false, field: "content", error: tooLarge };
   if (input.reads === undefined || input.reads === null) {
     return { ok: true, reads: null };
   }
