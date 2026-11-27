@@ -229,7 +229,15 @@ beforeAll(async () => {
 
   await run("automation", AU_MIXED, "failed", 7 * DAY, 7 * DAY, null, "budget");
   await run("automation", AU_MIXED, "failed", 6 * DAY, 6 * DAY);
-  await run("automation", AU_MIXED, "failed", 5 * DAY, 5 * DAY, null, "stages_left");
+  await run(
+    "automation",
+    AU_MIXED,
+    "failed",
+    5 * DAY,
+    5 * DAY,
+    null,
+    "stages_left"
+  );
 });
 
 describe("listRecentlyFailingFlows — only what diagnose shows", () => {
