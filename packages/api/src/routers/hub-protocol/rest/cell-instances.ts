@@ -18,7 +18,6 @@
 
 import { z } from "zod";
 import { db, eq, and, desc, cellInstances } from "@synap/database";
-import { randomUUID } from "node:crypto";
 import { insertCellInstance } from "../../../services/cells/create-cell-instance.js";
 import {
   getCaller,
@@ -362,9 +361,9 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         ...(body.reads !== undefined ? { reads: body.reads } : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        // The cell id is reserved by the document door itself.
         placeAs: {
           kind: "html-embed-cell",
-          cellId: randomUUID(),
           ...(body.name ? { name: body.name } : {}),
         },
       });

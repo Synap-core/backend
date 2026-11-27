@@ -1,11 +1,22 @@
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import {
+  db,
+  proposals,
+  documents,
+  eq,
+  and,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { readDeclaredFrameIo } from "../../../services/cells/declared-frame-io.js";
 import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
-import { placeHtmlPage } from "../../../services/cells/create-cell-instance.js";
+import {
+  isPlacementIdUsable,
+  placeHtmlPage,
+} from "../../../services/cells/create-cell-instance.js";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
 import { stampMaterialized } from "../../../services/proposals/stamp-materialized.js";
@@ -102,35 +113,100 @@ export function registerDocumentExecutors(): void {
         podDocumentScopeFloor(docUserId)
       );
       const rider = placeAsRiderOf(data, proposal.workspaceId);
-      const created = await materializeApprovedDocument({
-        documentId,
-        title: (data.title as string) || "Untitled",
-        type: (data.type as string) || "markdown",
-        content: (data.content as string) || "",
-        url: typeof data.url === "string" ? data.url : null,
-        userId: docUserId,
-        workspaceId: proposal.workspaceId,
-        sourceProposalId: input.proposalId,
-        fields,
-        // An html page's declared reads (`documents.metadata.reads`), carried
-        // by the create door; re-checked against the ceiling, never trusted.
-        ...declaredPageReadsOf(data),
-      });
+      const placement = rider
+        ? {
+            documentId,
+            workspaceId: proposal.workspaceId!,
+            userId: docUserId,
+          }
+        : null;
+      // The cell id reserved at filing, checked BEFORE anything is written. One
+      // that names any other cell (a proposal filed while the door still took
+      // a caller's id) is replaced by a fresh one: the approval neither fails
+      // on it nor says that the cell exists.
+      const cellId =
+        placement && rider?.cellId
+          ? (await isPlacementIdUsable(rider.cellId, placement))
+            ? rider.cellId
+            : randomUUID()
+          : undefined;
+
+      // An approval run again after it stopped part-way (the page written,
+      // the placement or the status flip not): the page THIS proposal wrote
+      // is reused, never written twice. Any other row under the id refuses.
+      const [existing] = await db
+        .select({
+          userId: documents.userId,
+          sourceProposalId: documents.sourceProposalId,
+          deletedAt: documents.deletedAt,
+        })
+        .from(documents)
+        .where(eq(documents.id, documentId))
+        .limit(1);
+      if (
+        existing &&
+        (existing.userId !== docUserId ||
+          existing.sourceProposalId !== input.proposalId ||
+          existing.deletedAt)
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This document proposal's id is already in use; nothing was written.",
+        });
+      }
+      const created = existing
+        ? { id: documentId }
+        : await materializeApprovedDocument({
+            documentId,
+            title: (data.title as string) || "Untitled",
+            type: (data.type as string) || "markdown",
+            content: (data.content as string) || "",
+            url: typeof data.url === "string" ? data.url : null,
+            userId: docUserId,
+            workspaceId: proposal.workspaceId,
+            sourceProposalId: input.proposalId,
+            fields,
+            // An html page's declared reads (`documents.metadata.reads`),
+            // carried by the create door; re-checked against the ceiling,
+            // never trusted.
+            ...declaredPageReadsOf(data),
+          });
 
       // A page filed by the html-embed cell routes is placed as its cell now,
       // under the id reserved at filing (idempotent: a re-approval finds it).
-      const placed = rider
-        ? (
+      // A placement that fails takes back the page this run wrote, so the
+      // proposal is left as it was (no page, nothing placed) and can be
+      // approved again. Not one transaction: the create door announces
+      // `document.create.completed` after its own commit and uploads the
+      // body outside any transaction, so an outer rollback could not take
+      // those back.
+      let placed: string | null = null;
+      if (placement) {
+        try {
+          placed = (
             await placeHtmlPage({
-              ...(rider.cellId ? { id: rider.cellId } : {}),
+              ...(cellId ? { id: cellId } : {}),
+              ...placement,
               documentId: created.id,
-              workspaceId: proposal.workspaceId!,
-              userId: docUserId,
-              ...(rider.name ? { name: rider.name } : {}),
-              agentUserId: rider.agentUserId,
+              ...(rider?.name ? { name: rider.name } : {}),
+              agentUserId: rider?.agentUserId ?? null,
             })
-          ).id
-        : null;
+          ).id;
+        } catch (err) {
+          if (!existing) {
+            await db
+              .delete(documents)
+              .where(
+                and(
+                  eq(documents.id, created.id),
+                  eq(documents.sourceProposalId, input.proposalId)
+                )
+              );
+          }
+          throw err;
+        }
+      }
 
       await transitionProposal(db, {
         to: ProposalStatus.APPROVED,
