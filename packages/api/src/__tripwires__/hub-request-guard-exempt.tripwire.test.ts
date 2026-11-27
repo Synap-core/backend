@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
+import { openWorldToolNames } from "../routers/mcp/define-tool.js";
 import {
   classifyHubRestRequest,
   classifyMcpToolCall,
@@ -159,14 +160,11 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
     ).toEqual([]);
   });
 
-  it("MCP: every tool that declares openWorldHint is never timed", () => {
-    const src = readFileSync(join(MCP_DIR, "tools/index.ts"), "utf8");
-    const openWorld = [
-      ...src.matchAll(
-        /name:\s*"(synap_\w+)",\s*annotations:\s*\{[^}]*openWorldHint:\s*true/g
-      ),
-    ].map((m) => m[1]);
-    expect(openWorld.length).toBeGreaterThan(0);
+  it("MCP: every tool that declares openWorldHint is never timed", async () => {
+    // Read off the tools' own definitions (`define-tool.ts`), the set the
+    // handler uses: a source scan of the definitions broke on their layout.
+    const openWorld = [...(await openWorldToolNames())];
+    expect(openWorld).toContain("synap_run_capability");
     // The handler reads them from the tools' own metadata
     // (`openWorldToolNames`); the classification honours that set.
     expect(

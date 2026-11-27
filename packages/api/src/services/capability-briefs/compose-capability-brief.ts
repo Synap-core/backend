@@ -422,9 +422,9 @@ export async function composeCapabilityBrief(
 ): Promise<string | null> {
   try {
     const aliases = resolveTeachingAliases(toolName);
-    const teaching = toolTeachingKeys();
-    const teachingKeys = teaching[toolName] ?? [
-      ...new Set([toolName, ...aliases.flatMap((a) => teaching[a] ?? [])]),
+    const keysOf = toolTeachingKeys();
+    const teachingKeys = keysOf[toolName] ?? [
+      ...new Set([toolName, ...aliases.flatMap((a) => keysOf[a] ?? [])]),
     ];
     // An alias lends posture emphases + the write footer, never its governance
     // door: a verb run through the execute gate is governed by that gate, and
