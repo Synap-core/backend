@@ -388,10 +388,11 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: inbound-delivery-sweeper (every minute)");
   await sendSafe(boss, INBOUND_DELIVERY_SWEEPER_QUEUE, {});
 
-  // Hold resume (hourly — a paused thing whose hold date has come goes back
-  // to the status it left; status-flow W4)
+  // Hold resume (every 10 minutes — a paused thing whose hold date has come
+  // goes back to the status it left, and a hold on a thing's move whose one
+  // wake was lost is caught; status-flow W4)
   await scheduleSafe(boss, HOLD_RESUME_QUEUE, HOLD_RESUME_CRON, {});
-  logger.info("Registered cron: hold-resume (hourly)");
+  logger.info("Registered cron: hold-resume (every 10 minutes)");
 
   // Status watcher (hourly — what is late, close to its date, stuck in its
   // step, or paused past its review date is raised once per episode, and its
