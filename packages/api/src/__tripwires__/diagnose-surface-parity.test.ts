@@ -47,9 +47,17 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GLOBAL = join(HERE, "../services/diagnose/global.ts");
 const CLASS = join(HERE, "../services/diagnose/index.ts");
+// The class door's proposal summary (lens gap included) is computed in
+// review-queue.ts's `summarizeProposalClass`, which index.ts calls: the class
+// surface is both files, and the call itself is asserted below.
+const CLASS_SUMMARY = join(HERE, "../services/diagnose/review-queue.ts");
 
 const globalSrc = stripComments(readFileSync(GLOBAL, "utf8"), "ts");
-const classSrc = stripComments(readFileSync(CLASS, "utf8"), "ts");
+const classDoorSrc = stripComments(readFileSync(CLASS, "utf8"), "ts");
+const classSrc =
+  classDoorSrc +
+  "\n" +
+  stripComments(readFileSync(CLASS_SUMMARY, "utf8"), "ts");
 
 describe("tripwire: diagnose's two surfaces agree", () => {
   it("scans real files — not passing over nothing", () => {
@@ -59,6 +67,8 @@ describe("tripwire: diagnose's two surfaces agree", () => {
     // would hold vacuously over an unrelated file.
     expect(globalSrc).toContain("proposals");
     expect(classSrc).toContain("proposals");
+    // The class door must actually use the summary the lens-gap checks read.
+    expect(classDoorSrc).toContain("summarizeProposalClass(");
   });
 
   it("the per-agent cap is RESOLVED, never the hardcoded base constant", () => {

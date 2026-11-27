@@ -47,6 +47,10 @@ let db: UsageDb;
 
 beforeAll(async () => {
   pg = new PGlite();
+  // Only the columns the name lookup reads (the real table has many more).
+  await pg.exec(
+    `CREATE TABLE api_keys (id uuid PRIMARY KEY, key_name text NOT NULL)`
+  );
   await pg.exec(MIGRATION);
   await pg.exec(MIGRATION); // idempotent
   db = drizzle(pg) as unknown as UsageDb;
@@ -171,6 +175,32 @@ describe("0364 api_usage_buckets", () => {
         conversations: 1,
       },
     ]);
+  });
+
+  it("names each key it groups by; a missing key is null + apiKeyDeleted", async () => {
+    await pg.exec(`DELETE FROM api_usage_buckets`);
+    await pg.exec(
+      `INSERT INTO api_keys (id, key_name) VALUES ('${KEY}', 'bridge key')`
+    );
+    const at = Date.now() - 60_000;
+    const c = new ApiUsageCounter();
+    c.record(dims(), 1, at);
+    c.record(dims({ apiKeyId: OTHER }), 1, at); // no api_keys row
+    c.record(dims({ apiKeyId: null, outcome: "429" }), 1, at);
+    await flushApiUsage(c.drain(), db);
+
+    const r = await readApiUsage(db, { groupBy: ["apiKeyId"] });
+    const by = (id: string | null) => r.groups.find((g) => g.apiKeyId === id)!;
+    expect(by(KEY).apiKeyName).toBe("bridge key");
+    expect(by(KEY).apiKeyDeleted).toBeUndefined();
+    expect(by(OTHER).apiKeyName).toBeNull();
+    expect(by(OTHER).apiKeyDeleted).toBe(true);
+    expect(by(null).apiKeyName).toBeNull();
+    expect(by(null).apiKeyDeleted).toBeUndefined();
+
+    // Not grouped by key: no name fields at all.
+    const n = await readApiUsage(db, { groupBy: ["client"] });
+    expect(n.groups.every((g) => !("apiKeyName" in g))).toBe(true);
   });
 
   it("schema, baseline and boot coherence agree with 0364", () => {

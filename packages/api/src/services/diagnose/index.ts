@@ -87,6 +87,8 @@ import {
   type CapabilityShadow,
 } from "../capabilities/capability-shadows.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
+import { summarizeProposalClass } from "./review-queue.js";
+import { RUNNING_RUNS_LIMIT, cappedCount } from "./stall.js";
 import { readPlaybookSkillReadiness } from "../playbooks/playbook-skill-preflight.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
@@ -902,6 +904,9 @@ async function diagnoseObject(
   }
 }
 
+/** Rows the proposal class scans for duplicate clusters (not for the count). */
+const PROPOSAL_CLASS_SCAN_LIMIT = 1000;
+
 // ── CLASS usage (0364) ───────────────────────────────────────────────────────
 
 /** Calls per key / client / conversation / class / outcome — pod admins only. */
@@ -952,6 +957,20 @@ async function diagnoseClass(
   switch (type) {
     // The review queue as a product: backlog + duplicate clusters.
     case "proposal": {
+      const lensWhere = and(
+        userVisibleWhere(proposals.workspaceId, userId),
+        eq(proposals.status, ProposalStatus.PENDING),
+        workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
+      );
+      // EXACT count + oldest: the scan below is capped and feeds only the
+      // duplicate clusters, so its length is never the number reported.
+      const [exactRow] = await db
+        .select({
+          pending: drizzleSql<number>`count(*)::int`,
+          oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+        })
+        .from(proposals)
+        .where(lensWhere);
       const rows = await db
         .select({
           id: proposals.id,
@@ -963,15 +982,9 @@ async function diagnoseClass(
           workspaceId: proposals.workspaceId,
         })
         .from(proposals)
-        .where(
-          and(
-            userVisibleWhere(proposals.workspaceId, userId),
-            eq(proposals.status, ProposalStatus.PENDING),
-            workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
-          )
-        )
+        .where(lensWhere)
         .orderBy(desc(proposals.createdAt))
-        .limit(1000);
+        .limit(PROPOSAL_CLASS_SCAN_LIMIT);
       const clusterRows: ClusterInputRow[] = rows.map((r) => ({
         id: r.id,
         proposalType: r.proposalType,
@@ -1001,33 +1014,18 @@ async function diagnoseClass(
             workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
           )
         );
-      // Clamped: the author floor is not a superset of the workspace floor (a
-      // teammate's row in a shared workspace is workspace-visible, not mine).
-      const mineOutsideLens = Math.max(0, (mineRow?.mine ?? 0) - rows.length);
-
-      const clusters = collapseProposalsToClusters(clusterRows);
-      const duplicates = clusters.filter((c) => c.count > 1);
-      const oldest = rows.length > 0 ? rows[rows.length - 1]!.createdAt : null;
-      return {
-        mode: "class",
-        type,
-        summary:
-          rows.length === 0
-            ? "No pending proposals in the review queue."
-            : `${rows.length} pending proposal(s), ${duplicates.length} duplicate cluster(s).` +
-              (mineOutsideLens > 0
-                ? ` ${mineOutsideLens} more of yours sit outside your workspace lens (unresolvable placement).`
-                : ""),
-        detail: {
-          pending: rows.length,
-          mineOutsideLens,
-          oldestCreatedAt: oldest,
-          duplicateClusters: duplicates
-            .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 20),
-        },
-      };
+      const duplicates = collapseProposalsToClusters(clusterRows)
+        .filter((c) => c.count > 1)
+        .map((c) => ({ targetLabel: c.targetLabel, count: c.count }));
+      const { summary, detail } = summarizeProposalClass({
+        pending: exactRow?.pending ?? 0,
+        mine: mineRow?.mine ?? 0,
+        oldestCreatedAt: exactRow?.oldest ?? null,
+        scanned: rows.length,
+        scanLimit: PROPOSAL_CLASS_SCAN_LIMIT,
+        duplicateClusters: duplicates,
+      });
+      return { mode: "class", type, summary, detail };
     }
 
     // Stuck-session list — running sessions, oldest first.
@@ -1037,8 +1035,9 @@ async function diagnoseClass(
         flowType: "session",
         status: "running",
         scope: workspaceId ? { workspaceId } : undefined,
-        limit: 100,
+        limit: RUNNING_RUNS_LIMIT,
       });
+      const capped = runs.length >= RUNNING_RUNS_LIMIT;
       const sessions = runs
         .map((r) => ({
           id: r.id,
@@ -1053,8 +1052,8 @@ async function diagnoseClass(
         summary:
           sessions.length === 0
             ? "No running sessions."
-            : `${sessions.length} running session(s); oldest ${Math.round(sessions[0]!.ageHours)}h.`,
-        detail: { running: sessions },
+            : `${cappedCount(sessions.length, capped)} running session(s); oldest ${Math.round(sessions[0]!.ageHours)}h.`,
+        detail: { running: sessions, capped },
       };
     }
 

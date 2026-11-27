@@ -221,3 +221,48 @@ export async function reviewQueueApproval(params: {
     truncated: decided.length >= REVIEW_DECISION_SCAN_LIMIT,
   });
 }
+
+/**
+ * `diagnose({type: "proposal"})` headline + detail, PURE. `pending` and the
+ * outside-lens count are EXACT (`count(*)`), never the length of the capped
+ * scan; the scan feeds only the duplicate clusters, so a scan that hit its cap
+ * says so (`capped`) instead of passing as the whole queue.
+ */
+export function summarizeProposalClass(input: {
+  /** Exact `count(*)` of pending proposals in the caller's lens. */
+  pending: number;
+  /** Exact `count(*)` of pending proposals the caller authored (any lens). */
+  mine: number;
+  oldestCreatedAt: Date | null;
+  scanned: number;
+  scanLimit: number;
+  duplicateClusters: Array<{ targetLabel: string; count: number }>;
+}) {
+  const mineOutsideLens = Math.max(0, input.mine - input.pending);
+  const capped =
+    input.scanned >= input.scanLimit && input.pending > input.scanned;
+  const duplicates = input.duplicateClusters;
+  return {
+    summary:
+      input.pending === 0
+        ? "No pending proposals in the review queue."
+        : `${input.pending} pending proposal(s), ${duplicates.length}${capped ? "+" : ""} duplicate cluster(s)` +
+          (capped
+            ? ` (clusters read from the newest ${input.scanLimit})`
+            : "") +
+          "." +
+          (mineOutsideLens > 0
+            ? ` ${mineOutsideLens} more of yours sit outside your workspace lens (unresolvable placement).`
+            : ""),
+    detail: {
+      pending: input.pending,
+      mineOutsideLens,
+      oldestCreatedAt: input.oldestCreatedAt,
+      capped,
+      duplicateClusters: duplicates
+        .slice()
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20),
+    },
+  };
+}
