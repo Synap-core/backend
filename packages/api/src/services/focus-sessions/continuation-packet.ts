@@ -410,6 +410,13 @@ export interface PacketChildItem {
    * dependents (`classifyDependencyBlocker`). Absent otherwise.
    */
   skipped?: true;
+  /**
+   * The key of the parent's output this child was spawned to deliver (W7:
+   * `forOutput` on the start, recorded on the `spawned_from` edge as
+   * `metadata.forOutput`; `lane-rollup.ts`). On `children` items only;
+   * absent when it was spawned for no output.
+   */
+  forOutput?: string;
 }
 
 /**
@@ -1491,6 +1498,9 @@ async function readInboundSessions(
         status: focusSessions.status,
         closedNotDone: closedNotDoneRecordedSql(),
         skipped: notTakenRecordedSql(),
+        // One text field off the edge, never its whole jsonb: the parent
+        // output a lane delivers (`children` only, see below).
+        forOutput: drizzleSql<string | null>`${links.metadata}->>'forOutput'`,
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1512,6 +1522,9 @@ async function readInboundSessions(
       statusLabel: resolveStatusLabel(r.status),
       closedAs: sessionClosedAs(r.status, r.closedNotDone),
       ...(r.skipped ? { skipped: true as const } : {}),
+      ...(linkType === "spawned_from" && r.forOutput?.trim()
+        ? { forOutput: r.forOutput.trim() }
+        : {}),
     })),
   };
 }

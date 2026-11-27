@@ -566,6 +566,37 @@ describe("focusSessions.get returns the continuation packet", () => {
     expectSamePacket(mcp.continuation, trpc);
   });
 
+  it("a child names the parent output it was spawned to deliver (W7 forOutput) — the same on both doors", async () => {
+    await h.client!.exec("delete from links;");
+    const parent = await seed({ owed: false });
+    const lane = randomUUID();
+    const plain = randomUUID();
+    for (const [id, goal, metadata] of [
+      [lane, "Open the pull request", { forOutput: "pull-request" }],
+      [plain, "Look around", {}],
+    ] as const) {
+      await q(
+        `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+         values ($1, $2, $3, 'active', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+        [id, USER, goal]
+      );
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata)
+         values ($1, 'session', $2, 'session', $3, 'spawned_from', $4::jsonb)`,
+        [randomUUID(), id, parent, JSON.stringify(metadata)]
+      );
+    }
+
+    const trpc = (await get(parent)).continuation;
+    if (trpc.children.status !== "ok") throw new Error("children unavailable");
+    const byId = new Map(trpc.children.items.map((c) => [c.id, c]));
+    expect(byId.get(lane)?.forOutput).toBe("pull-request");
+    // Spawned for no output: the field is absent, never an empty string.
+    expect(byId.get(plain)).not.toHaveProperty("forOutput");
+    const mcp = await mcpGet(parent);
+    expectSamePacket(mcp.continuation, trpc);
+  });
+
   it("parent and blockedBy arrive from the edges, owner-floored — the same on both doors", async () => {
     await h.client!.exec("delete from links;");
     const session = await seed({ owed: false });

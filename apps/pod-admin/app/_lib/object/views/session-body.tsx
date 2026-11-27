@@ -79,7 +79,8 @@ import {
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { trpc } from "../../../../lib/trpc";
-import { openIn } from "../../../../lib/open-in";
+import { openIn, publisherExit } from "../../../../lib/open-in";
+import { ExitLink } from "../../../../lib/exit-link";
 import {
   formatRelative,
   formatTimestamp,
@@ -101,6 +102,9 @@ import {
   criterionRows,
   deliverableRows,
   draftSummary,
+  fillsOutputLabel,
+  madeSection,
+  outputLanes,
   holdsRun,
   lineageRow,
   sessionChildren,
@@ -170,6 +174,7 @@ const MOVE_ICON: Record<SessionMoveKey, LucideIcon> = {
 
 export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
   const router = useRouter();
+  const t = objectViewsT();
   const utils = trpc.useUtils();
   const query = trpc.focusSessions.get.useQuery({ id }, { retry: false });
   const report = trpc.focusSessions.document.useQuery(
@@ -277,6 +282,10 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
   // page in this frame (`/open/session/:id`).
   const parent = sessionParent(session.continuation.parent);
   const children = sessionChildren(session.continuation.children);
+  // Which lane fills which output (W7): the output names its lanes, each
+  // child row names the output it fills.
+  const lanes = outputLanes(children);
+  const made = madeSection(outputs);
   const sessionHref = (sid: string) =>
     frame.pathFor?.("session", sid) ?? objectPage("session", sid);
   // Picking a move that ends work opens its confirm; the rest go straight
@@ -411,7 +420,11 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           gradeIn={owner ? id : null}
           graded={railGraded}
         />
-        <DeliverablesSection rows={deliverables} />
+        <DeliverablesSection
+          rows={deliverables}
+          lanes={lanes}
+          hrefFor={sessionHref}
+        />
       </>
     ),
     railLabel: "Criteria, deliverables and facts",
@@ -528,14 +541,22 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           />
         ) : null}
 
-        {(outputs.data?.outputs.length ?? 0) > 0 && (
+        {made.state === "failed" && (
+          <SectionCard variant="flat" title={t("session.made.title")}>
+            <ResourceRowError
+              message={t("session.made.failed")}
+              onRetry={() => void outputs.refetch()}
+            />
+          </SectionCard>
+        )}
+        {made.state === "ok" && (
           <SectionCard
             variant="flat"
-            title="What it made"
-            count={outputs.data!.outputs.length}
+            title={t("session.made.title")}
+            count={made.items.length}
           >
             <CappedList
-              items={outputs.data!.outputs.map((output) => ({
+              items={made.items.map((output) => ({
                 key: output.id,
                 output,
               }))}
@@ -572,6 +593,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         <SubSessionsSection
           sessionId={id}
           view={children}
+          deliverables={deliverables}
           hrefFor={sessionHref}
           onRetry={() => void query.refetch()}
         />
@@ -1025,11 +1047,14 @@ const CHILDREN_PAGE = 100;
 function SubSessionsSection({
   sessionId,
   view,
+  deliverables,
   hrefFor,
   onRetry,
 }: {
   sessionId: string;
   view: SessionChildren;
+  /** This session's outputs: a lane's row names the one it fills. */
+  deliverables: DeliverableRow[];
   hrefFor: (id: string) => string | null;
   onRetry: () => void;
 }) {
@@ -1058,6 +1083,10 @@ function SubSessionsSection({
       </SectionCard>
     );
   }
+  // `browse` rows carry no edge: a lane's output comes from the packet's rows.
+  const forOutputOf = new Map(
+    view.state === "ok" ? view.rows.map((r) => [r.id, r.forOutput]) : []
+  );
   const rows: LineageRow[] =
     all && rest.data
       ? rest.data.items.map((row) =>
@@ -1065,6 +1094,7 @@ function SubSessionsSection({
             id: row.id,
             title: resolveSessionTitle(row),
             status: row.status,
+            forOutput: forOutputOf.get(row.id) ?? null,
           })
         )
       : view.rows;
@@ -1073,10 +1103,11 @@ function SubSessionsSection({
       <ul className="flex flex-col">
         {rows.map((row) => {
           const href = hrefFor(row.id);
+          const fills = fillsOutputLabel(row.forOutput, deliverables);
           return (
             <li
               key={row.key}
-              className="flex items-center gap-2 border-b border-foreground/[0.05] py-2 last:border-b-0"
+              className="flex flex-wrap items-center gap-2 border-b border-foreground/[0.05] py-2 last:border-b-0"
             >
               {row.mark && (
                 <StatusPill kind={row.mark.kind} label={row.mark.label} />
@@ -1091,6 +1122,11 @@ function SubSessionsSection({
               ) : (
                 <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/85">
                   {row.title}
+                </span>
+              )}
+              {fills && (
+                <span className="shrink-0 text-[12px] text-foreground/65">
+                  {t("session.subSessions.fills", { output: fills })}
                 </span>
               )}
             </li>
@@ -1155,8 +1191,21 @@ function RowMark({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
   return <Icon aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${tone}`} />;
 }
 
-/** What the session declared it would deliver. OMITTED when it declared none. */
-function DeliverablesSection({ rows }: { rows: DeliverableRow[] }) {
+/**
+ * What the session declared it would deliver. OMITTED when it declared none.
+ * Each one is a door to where it lives (its `ref`: a pull request, an object),
+ * and names the lanes spawned to deliver it, each a door to its session.
+ */
+function DeliverablesSection({
+  rows,
+  lanes,
+  hrefFor,
+}: {
+  rows: DeliverableRow[];
+  lanes: ReadonlyMap<string, LineageRow[]>;
+  hrefFor: (id: string) => string | null;
+}) {
+  const t = objectViewsT();
   if (rows.length === 0) return null;
   const done = rows.filter((r) => r.done).length;
   return (
@@ -1174,9 +1223,30 @@ function DeliverablesSection({ rows }: { rows: DeliverableRow[] }) {
               icon={r.done ? CircleCheck : CircleDashed}
               tone={r.done ? "text-success" : "text-foreground/45"}
             />
-            <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/85">
-              {r.label}
-            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <DeliverableLabel row={r} />
+              {(lanes.get(r.key)?.length ?? 0) > 0 && (
+                <p className="flex flex-wrap items-baseline gap-x-2 text-[12px] text-foreground/65">
+                  <span>{t("session.deliverables.lanes")}</span>
+                  {lanes.get(r.key)!.map((lane) => {
+                    const href = hrefFor(lane.id);
+                    return href ? (
+                      <Link
+                        key={lane.key}
+                        href={href}
+                        className="break-words rounded-sm text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      >
+                        {lane.title}
+                      </Link>
+                    ) : (
+                      <span key={lane.key} className="break-words">
+                        {lane.title}
+                      </span>
+                    );
+                  })}
+                </p>
+              )}
+            </div>
             <span className="shrink-0 text-[12px] text-foreground/65">
               {resolveStatusLabel(r.done ? "done" : "pending")}
             </span>
@@ -1184,6 +1254,37 @@ function DeliverablesSection({ rows }: { rows: DeliverableRow[] }) {
         )}
       />
     </SectionCard>
+  );
+}
+
+/**
+ * A deliverable's name as a door to where it lives: a page outside the pod
+ * through `ExitLink` (only an https address, `publisherExit`), an object in
+ * it through its console page. With no door, or one that does not resolve,
+ * the name alone.
+ */
+function DeliverableLabel({ row }: { row: DeliverableRow }) {
+  const door = row.door;
+  if (door && "url" in door) {
+    const exit = publisherExit(door.url);
+    if (exit) return <ExitLink exit={exit} label={row.label} />;
+  } else if (door) {
+    const href = objectPage(door.kind, door.id);
+    if (href) {
+      return (
+        <Link
+          href={href}
+          className="break-words rounded-sm text-[13px] text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          {row.label}
+        </Link>
+      );
+    }
+  }
+  return (
+    <span className="break-words text-[13px] text-foreground/85">
+      {row.label}
+    </span>
   );
 }
 

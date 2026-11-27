@@ -37,12 +37,14 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { getEnumTone } from "@synap-core/types/property-render";
 import {
+  deriveSlotKeys,
   isDeliverableDelivered,
   statusMark,
   type DeliverableFacts,
   type StatusGlyph,
 } from "@synap-core/types/units";
 import {
+  humanizeToken,
   resolveActionLabel,
   resolveProvenanceLabel,
   resolveStatusLabel,
@@ -265,10 +267,29 @@ export function draftSummary(
 
 // ─── What it owes ────────────────────────────────────────────────────────────
 
+/**
+ * Where a deliverable lives — its declared `ref` (`OutputRef` in
+ * `@synap/playbooks`: ONE union, two arms): a page outside the pod (a pull
+ * request, a deploy) or an object in it. The page draws the first through
+ * `publisherExit` (https only) and the second through `objectPage`.
+ */
+export type DeliverableDoor = { url: string } | { kind: string; id: string };
+
 export interface DeliverableRow {
   key: string;
   label: string;
   done: boolean;
+  /** Its `ref`, a door; null when it declares none. */
+  door: DeliverableDoor | null;
+}
+
+function deliverableDoor(ref: unknown): DeliverableDoor | null {
+  if (!ref || typeof ref !== "object") return null;
+  const r = ref as { url?: unknown; kind?: unknown; id?: unknown };
+  if (typeof r.url === "string" && r.url.trim()) return { url: r.url.trim() };
+  if (typeof r.kind === "string" && r.kind && typeof r.id === "string" && r.id)
+    return { kind: r.kind, id: r.id };
+  return null;
 }
 
 /**
@@ -276,22 +297,84 @@ export interface DeliverableRow {
  * SSOT is `ExpectedOutput` in `@synap/playbooks`). `done` is THE delivered
  * rule (`isDeliverableDelivered`): the pod's own stamp (`status: "done"`), or a
  * confirm / choose the person answered whose decision the pod filed. An
- * agent's `claimedDone` is NOT delivery.
+ * agent's `claimedDone` is NOT delivery. `key` is THE slot key
+ * (`deriveSlotKeys`: the stored one, else the one the pod would stamp), so a
+ * lane's `forOutput` and a criterion's `outputKey` find their row by it.
  */
 export function deliverableRows(raw: unknown): DeliverableRow[] {
   if (!Array.isArray(raw)) return [];
+  const keys = deriveSlotKeys(raw);
   const rows: DeliverableRow[] = [];
   raw.forEach((item, i) => {
     if (!item || typeof item !== "object") return;
-    const o = item as DeliverableFacts & { key?: unknown; label?: unknown };
+    const o = item as DeliverableFacts & {
+      key?: unknown;
+      label?: unknown;
+      ref?: unknown;
+    };
     if (typeof o.label !== "string" || !o.label.trim()) return;
     rows.push({
-      key: typeof o.key === "string" && o.key ? o.key : `${i}`,
+      key: keys[i] ?? `${i}`,
       label: o.label.trim(),
       done: isDeliverableDelivered(o),
+      door: deliverableDoor(o.ref),
     });
   });
   return rows;
+}
+
+/**
+ * Which lanes deliver which output (W7): each child spawned FOR one of this
+ * session's outputs (`forOutput`, from the packet's `children`), grouped by
+ * that output's key. The packet carries the first few children only; a lane
+ * past that cut is named on its own page, not here.
+ */
+export function outputLanes(
+  children: SessionChildren
+): ReadonlyMap<string, LineageRow[]> {
+  const byKey = new Map<string, LineageRow[]>();
+  if (children.state !== "ok") return byKey;
+  for (const row of children.rows) {
+    if (!row.forOutput) continue;
+    const list = byKey.get(row.forOutput) ?? [];
+    list.push(row);
+    byKey.set(row.forOutput, list);
+  }
+  return byKey;
+}
+
+/**
+ * The name of the parent output a lane fills: the deliverable's own label,
+ * else its key in words (an output since withdrawn, or past an old key) —
+ * never the raw key. Null for a child spawned for no output.
+ */
+export function fillsOutputLabel(
+  forOutput: string | null,
+  deliverables: ReadonlyArray<Pick<DeliverableRow, "key" | "label">>
+): string | null {
+  if (!forOutput) return null;
+  return (
+    deliverables.find((d) => d.key === forOutput)?.label ??
+    (humanizeToken(forOutput) || null)
+  );
+}
+
+/**
+ * What the session made (`focusSessions.outputs`), as the page draws it:
+ * nothing yet and a failed read are two facts. A failed read is a section
+ * with its retry, never an omitted one (an EMPTY result and a FAILED read are
+ * different facts). Still loading draws nothing, as before.
+ */
+export type MadeSection<T> =
+  { state: "none" } | { state: "failed" } | { state: "ok"; items: T[] };
+
+export function madeSection<T>(read: {
+  error: unknown;
+  data?: { outputs: T[] } | null;
+}): MadeSection<T> {
+  if (read.error) return { state: "failed" };
+  const items = read.data?.outputs ?? [];
+  return items.length > 0 ? { state: "ok", items } : { state: "none" };
 }
 
 /** The fields of the pod's session verdict (`SessionVerdict`) a mark reads. */
@@ -464,6 +547,8 @@ interface LinkedSessionLike {
   statusLabel?: string;
   /** How it ended (`sessionClosedAs`), when the packet says. */
   closedAs?: string | null;
+  /** The parent output it was spawned to deliver (W7), on a child. */
+  forOutput?: string | null;
 }
 
 /** A linked session as a row: its name, its status mark, its id for the door. */
@@ -472,6 +557,8 @@ export interface LineageRow {
   id: string;
   title: string;
   mark: { kind: StatusKind; label: string } | null;
+  /** The parent output key it delivers (a lane, W7); null otherwise. */
+  forOutput: string | null;
 }
 
 export type SessionParent =
@@ -491,6 +578,7 @@ export function lineageRow(s: LinkedSessionLike): LineageRow {
     mark: machinePill("session", s.status, {
       closedNotDone: s.closedAs === "not_done",
     }),
+    forOutput: s.forOutput?.trim() || null,
   };
 }
 

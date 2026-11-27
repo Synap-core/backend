@@ -9,6 +9,9 @@ import {
   railGradedKeys,
   deliverableRows,
   draftSummary,
+  fillsOutputLabel,
+  madeSection,
+  outputLanes,
   moveNotice,
   sessionMoves,
   sessionChildren,
@@ -207,8 +210,9 @@ describe("deliverables and criteria", () => {
         "junk",
       ])
     ).toEqual([
-      { key: "brief", label: "Brief", done: true },
-      { key: "1", label: "Draft", done: false },
+      { key: "brief", label: "Brief", done: true, door: null },
+      // No stored key: THE slot key the pod would stamp, never an index.
+      { key: "draft", label: "Draft", done: false, door: null },
     ]);
     expect(deliverableRows(null)).toEqual([]);
   });
@@ -447,6 +451,7 @@ describe("sessionParent — no parent and a failed read are two facts", () => {
         id: "p1",
         title: "Ship the wave",
         mark: { kind: expect.any(String), label: "Active" },
+        forOutput: null,
       },
     });
   });
@@ -499,8 +504,92 @@ describe("sessionChildren — the first rows and the exact total", () => {
           id: "a",
           title: "Untitled session",
           mark: { kind: expect.any(String), label: expect.any(String) },
+          forOutput: null,
         },
       ],
+    });
+  });
+});
+
+describe("a deliverable is a door to where it lives", () => {
+  it("carries its ref: a page outside the pod, or an object in it", () => {
+    const rows = deliverableRows([
+      {
+        key: "pull-request",
+        label: "Pull request",
+        status: "done",
+        ref: { url: "https://github.com/Synap-core/backend/pull/1" },
+      },
+      { key: "brief", label: "Brief", ref: { kind: "document", id: "d1" } },
+      { key: "none", label: "None", ref: { url: "  " } },
+      { key: "bare", label: "Bare" },
+    ]);
+    expect(rows.map((r) => r.door)).toEqual([
+      { url: "https://github.com/Synap-core/backend/pull/1" },
+      { kind: "document", id: "d1" },
+      null,
+      null,
+    ]);
+  });
+});
+
+describe("which lane fills which output (W7 forOutput)", () => {
+  const children = sessionChildren({
+    status: "ok",
+    total: 3,
+    items: [
+      { id: "a", title: "Lane A", status: "active", forOutput: "pull-request" },
+      { id: "b", title: "Lane B", status: "closed", forOutput: "pull-request" },
+      { id: "c", title: "Look around", status: "active" },
+    ],
+  });
+  const deliverables = deliverableRows([
+    { key: "pull-request", label: "Pull request" },
+  ]);
+
+  it("each child row keeps the output it was spawned for", () => {
+    expect(
+      children.state === "ok" && children.rows.map((r) => r.forOutput)
+    ).toEqual(["pull-request", "pull-request", null]);
+  });
+
+  it("an output names every lane that delivers it, and no other", () => {
+    const lanes = outputLanes(children);
+    expect(lanes.get("pull-request")?.map((r) => r.id)).toEqual(["a", "b"]);
+    expect([...lanes.keys()]).toEqual(["pull-request"]);
+    expect(outputLanes({ state: "failed" }).size).toBe(0);
+  });
+
+  it("a lane names the output it fills by its label, never the raw key", () => {
+    expect(fillsOutputLabel("pull-request", deliverables)).toBe("Pull request");
+    // An output since withdrawn: its key in words.
+    expect(fillsOutputLabel("release-notes", deliverables)).toBe(
+      "Release notes"
+    );
+    expect(fillsOutputLabel(null, deliverables)).toBeNull();
+  });
+});
+
+describe("madeSection — what it made: nothing and a failed read are two facts", () => {
+  it("a failed read is a section that says so, never an omitted one", () => {
+    expect(madeSection({ error: new Error("x"), data: undefined })).toEqual({
+      state: "failed",
+    });
+  });
+
+  it("nothing made, or still loading, draws nothing", () => {
+    expect(madeSection({ error: null, data: { outputs: [] } })).toEqual({
+      state: "none",
+    });
+    expect(madeSection({ error: null, data: undefined })).toEqual({
+      state: "none",
+    });
+  });
+
+  it("lists what it made", () => {
+    expect(madeSection({ error: null, data: { outputs: [1, 2] } })).toEqual({
+      state: "ok",
+      items: [1, 2],
     });
   });
 });
