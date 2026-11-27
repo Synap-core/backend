@@ -171,7 +171,7 @@ beforeAll(async () => {
       { permission: "chat.stream", workspaceId: null },
       { permission: "view.create", workspaceId: null },
       { permission: "playbook", workspaceId: null },
-      { permission: "agent.read", workspaceId: null },
+      { permission: "skill.read", workspaceId: null },
       { permission: "*", workspaceId: null },
     ]),
     expiresAt: null,
@@ -440,7 +440,7 @@ describe("a pod-wide read of a subject (playbooks, runs, …)", () => {
       "chat.stream",
       "view.create",
       "playbook",
-      "agent.read",
+      "skill.read",
       "*",
     ])
       expect(all, forged).not.toContain(forged);

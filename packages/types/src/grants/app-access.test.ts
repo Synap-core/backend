@@ -57,7 +57,7 @@ const C = "space-c"; // never approved: a request there is always outside
 
 const R_NOTE = "entity.note.read"; // pod-wide readable
 const R_TASK = "entity.task.read"; // pod-wide readable
-const R_TRACK = "track.read"; // a read, NOT on the pod-wide list
+const R_SKILL = "skill.read"; // a read, NOT on the pod-wide list (track.read joined it on 2026-11-27)
 const W_NOTE = "entity.note.create";
 const W_TASK = "entity.task.update";
 
@@ -168,7 +168,7 @@ const ASKED = [
   R_TASK,
   "entity.zz.read",
   "entity.read",
-  R_TRACK,
+  R_SKILL,
   W_NOTE,
   W_TASK,
   "entity.note.update",
@@ -217,7 +217,7 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
   for (const [label, perms, subsumption] of [
     [
       "reads, one not pod-wide, and a write",
-      [R_NOTE, R_TASK, R_TRACK, W_NOTE],
+      [R_NOTE, R_TASK, R_SKILL, W_NOTE],
       false,
     ],
     ["two writes and a read", [R_NOTE, W_NOTE, W_TASK], false],
@@ -245,8 +245,8 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
       false,
     ],
     [
-      "a phantom candidate: track.read, *, entity.note.read",
-      [R_TRACK, FULL, R_NOTE],
+      "a phantom candidate: skill.read, *, entity.note.read",
+      [R_SKILL, FULL, R_NOTE],
       false,
     ],
     [
@@ -538,15 +538,14 @@ describe("liftApprovedRequests — table", () => {
       ]);
   });
 
-  // synap-chat as it asks today (site.config.ts, 18 Nov 2026): 36 reads
-  // pod-wide (7 subjects, 29 kinds), and in each chosen space 5 reads
-  // (entity.read, document.read, relation.read, track.read, agent.read) and
-  // 3 acts. v2 holds ONE read place for all of a connection's reads, and
-  // these reads sit at two widths, so neither fits: "all" spaces would read
-  // every kind, document and relation everywhere (entity.read & co. are
-  // pod-wide readable: WIDENS), and would drop track.read and agent.read,
-  // which are not (NARROWS); a list of spaces would drop the 36 pod-wide
-  // reads everywhere else. It re-consents, by meaning, not by key.
+  // synap-chat as it asked (site.config.ts, 18 Nov 2026): 36 reads pod-wide
+  // (7 subjects, 29 kinds), and in each chosen space 5 reads (entity.read,
+  // document.read, relation.read, track.read, agent.read) and 3 acts. v2
+  // holds ONE read place for all of a connection's reads, and these reads sit
+  // at two widths, so neither fits: "all" spaces would read every kind,
+  // document, relation, goal and agent everywhere (all five are pod-wide
+  // readable since 2026-11-27: WIDENS); a list of spaces would drop the 36
+  // pod-wide reads everywhere else. It re-consents, by meaning, not by key.
   it("synap-chat's shape re-consents: it reads at two widths", () => {
     const kinds = Array.from({ length: 29 }, (_, i) => `kind${i}`);
     const podReads = [
@@ -583,10 +582,35 @@ describe("liftApprovedRequests — table", () => {
       permission: "entity.read",
       where: { kind: "pod" },
     });
-    expect(r.reconsent.narrows).toContainEqual({
+    // track.read is pod-wide readable since 2026-11-27 (decision 153b612c):
+    // it widens with the others, it is no longer dropped (narrowed).
+    expect(r.reconsent.widens).toContainEqual({
+      permission: "track.read",
+      where: { kind: "pod" },
+    });
+    expect(r.reconsent.narrows).not.toContainEqual({
       permission: "track.read",
       where: { kind: "space", id: A },
     });
+  });
+
+  // Founder, 2026-11-27 (decision 153b612c): an "All spaces" consent keeps
+  // what runs made, installed widgets, goals and agents. Before, the reads off
+  // the pod-wide list were dropped here without a word (chat.synap.live could
+  // list none of them). Rules out: the four subjects falling out of the
+  // pod-wide grant again.
+  it("All spaces keeps artifact, widget, track and agent reads, pod-wide", () => {
+    const reads = ["artifact.read", "widget.read", "track.read", "agent.read"];
+    const scopes = grantScopesForAccess({
+      version: 2,
+      permissions: [...reads, "view.read", "chat.stream"],
+      read: { spaces: "all", projects: [] },
+      write: { spaces: [A], projects: [] },
+    });
+    expect(scopes).toEqual([
+      { permissions: [...reads, "view.read"] },
+      { permissions: ["chat.stream"], workspaceIds: [A] },
+    ]);
   });
 
   it("nothing approved lifts to nothing", () => {
@@ -684,12 +708,12 @@ describe("grantScopesForAccess — v2 with projects (no lift makes one yet)", ()
     expect(
       grantScopesForAccess(
         access({
-          permissions: [R_NOTE, R_TRACK],
+          permissions: [R_NOTE, R_SKILL],
           read: { spaces: "all", projects: [] },
         })
       )
     ).toEqual([{ permissions: [R_NOTE] }]);
-    expect(isPodWideReadPermission(R_TRACK)).toBe(false);
+    expect(isPodWideReadPermission(R_SKILL)).toBe(false);
   });
 
   // Rules out: "all projects" read as the pod. W3d mints it as the projects

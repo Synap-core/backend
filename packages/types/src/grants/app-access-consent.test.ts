@@ -61,13 +61,13 @@ const R = "proj-r"; // the person may give nothing here
 
 const R_NOTE = "entity.note.read"; // pod-wide readable, declared pod-wide
 const R_TASK = "entity.task.read"; // pod-wide readable, declared PER SPACE
-const R_TRACK = "track.read"; // declared pod-wide, but NOT a pod-wide read
+const R_SKILL = "skill.read"; // declared pod-wide, but NOT a pod-wide read (track.read joined it on 2026-11-27)
 const W_NOTE = "entity.note.create";
 const W_UNASKED = "entity.task.create"; // never asked
 
 const CEILING: AppAccessCeiling = {
-  permissions: [R_NOTE, R_TASK, R_TRACK, W_NOTE],
-  allSpacesReads: [R_NOTE, R_TRACK],
+  permissions: [R_NOTE, R_TASK, R_SKILL, W_NOTE],
+  allSpacesReads: [R_NOTE, R_SKILL],
   read: { spaces: [A, B], projects: [P, Q] },
   write: { spaces: [A], projects: [P] },
 };
@@ -78,7 +78,7 @@ const ALL_PROJECTS = [P, Q];
 const ASKED = [
   R_NOTE,
   R_TASK,
-  R_TRACK,
+  R_SKILL,
   "entity.zz.read",
   "entity.read", // a record of unknown kind
   W_NOTE,
@@ -168,7 +168,7 @@ function* subsets<T>(items: readonly T[]): Generator<T[]> {
 }
 
 function* accessUniverse(
-  perms: readonly string[] = [R_NOTE, R_TASK, R_TRACK, W_NOTE, W_UNASKED]
+  perms: readonly string[] = [R_NOTE, R_TASK, R_SKILL, W_NOTE, W_UNASKED]
 ): Generator<AppAccess> {
   const readSpaces: Array<"all" | string[]> = [
     "all",
@@ -289,7 +289,7 @@ describe("appAccessBeyond — a stored access never grants beyond asked ∩ floo
       appAccessBeyond(
         {
           ...base,
-          permissions: [R_TRACK],
+          permissions: [R_SKILL],
           read: { spaces: "all", projects: [] },
         },
         CEILING
