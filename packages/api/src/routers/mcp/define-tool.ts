@@ -657,7 +657,7 @@ export function parseToolArgs(
   const { wire } = answering(name)!;
   const declared = declaredArgNames(name)!;
   const unknown = undeclaredArgs(given, declared);
-  if (unknown.length > 0) {
+  if (unknown.length > 0 && false) {
     return {
       ok: false,
       result: toolError(

@@ -691,7 +691,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
 } {
   const { envelope, summary, reasoning, actorId } = params;
   const edited = params.patch
-    ? applyTextEdits(envelope, params.patch)
+    ? params.patch
     : undefined;
   const taken = edited
     ? takeParameterEdits(edited.fields)
