@@ -38,6 +38,7 @@ import {
   BOX_RUNNER_SCOPE,
   HOST_RUNNER_SCOPE,
   apiKeys,
+  devices,
   grants,
   users,
   type AgentMetadata,
@@ -414,7 +415,9 @@ export function machineName(row: {
   agentMetadata: unknown;
 }): string {
   const meta = (row.agentMetadata ?? {}) as AgentMetadata;
-  return row.name?.trim() || meta.hostname || resolveMachineFallbackName();
+  const hostname =
+    typeof meta.hostname === "string" ? meta.hostname.trim() : "";
+  return row.name?.trim() || hostname || resolveMachineFallbackName();
 }
 
 /** A computer row with no name and no hostname (never expected): its noun. */
@@ -463,12 +466,22 @@ export async function renameMachine(
       code: "BAD_REQUEST",
       message: "A computer's name is 1 to 80 characters.",
     });
-  await db
-    .update(users)
-    .set({ name: trimmed, updatedAt: new Date() })
-    .where(
-      and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
-    );
+  // Its device carries the same name: one rename, never half of one.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({ name: trimmed, updatedAt: new Date() })
+      .where(
+        and(
+          eq(users.id, machineUserId),
+          eq(users.agentType, MACHINE_AGENT_TYPE)
+        )
+      );
+    await tx
+      .update(devices)
+      .set({ name: trimmed, updatedAt: new Date() })
+      .where(eq(devices.principalUserId, machineUserId));
+  });
 }
 
 /**

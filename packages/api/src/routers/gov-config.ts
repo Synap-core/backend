@@ -10,15 +10,37 @@
  * This is the API surface a future browser/relay "settings" screen calls; it
  * ships with no UI by design (the AI door and the cron recommenders already
  * file `settings.update` proposals for the human to approve).
+ *
+ * THE OUTSIDE-HOST LIST of `http.get_json` (pod admin's Security › Network):
+ * `allowedHosts` reads it for any signed-in pod user (who may read what, and
+ * since when, is no secret: every agent's refusal names the list), with what
+ * uses each host and `canManage`; `allowHost` adds one by RUNNING the verb
+ * `http.allow_host` as the person (its own checks: a pod admin, a public host
+ * name), a sensitive action with the proof of presence; `revoke` removes one
+ * (`store: "config_settings"`, the row id).
  */
 
 import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
-import { router, assertPodAdmin, credentialProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { automations, and, ne, drizzleSql } from "@synap/database";
+import {
+  router,
+  assertPodAdmin,
+  credentialProcedure,
+  protectedProcedure,
+} from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import {
   applyGovConfigChange,
   type GovConfigSpec,
 } from "../services/proposals/gov-config.js";
+import {
+  listAllowedHostRows,
+  runAllowHostAsPerson,
+} from "../services/capabilities/http-get-json.js";
+import { httpGetJsonFlowHosts } from "../services/proposals/part-reach.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
 
 const STORE_ENUM = z.enum([
   "governance_rules",
@@ -53,6 +75,108 @@ const setInput = z.object({
 });
 
 export const govConfigRouter = router({
+  /**
+   * The hosts `http.get_json` may read, each with who added it, when, why,
+   * the approval behind it, and the automations whose steps read it (a URL
+   * written out; `unreadAutomations` counts those that build it while they
+   * run, so "no automation" is never said for "could not tell"). Automations
+   * through the canonical read door (`scopedDb`): only those the reader sees.
+   * `canManage`: the reader is a pod admin (add and remove).
+   */
+  allowedHosts: protectedProcedure.query(async ({ ctx }) => {
+    const [rows, canManage, flows] = await Promise.all([
+      listAllowedHostRows(),
+      isPodAdmin(ctx.userId),
+      scopedDb(AccessContext.from(ctx)).findMany<{
+        id: string;
+        name: string;
+        flowDefinition: unknown;
+      }>(automations, {
+        columns: { id: true, name: true, flowDefinition: true },
+        where: and(
+          ne(automations.status, "archived"),
+          drizzleSql`${automations.flowDefinition}::text like '%"http.get_json"%'`
+        ),
+      }),
+    ]);
+    // Per host, the automations that read it: `{ id, name }`.
+    const usedBy = new Map<string, Array<{ id: string; name: string }>>();
+    let unreadAutomations = 0;
+    for (const flow of flows) {
+      const read = httpGetJsonFlowHosts(flow.flowDefinition);
+      if (read.unreadSteps > 0) unreadAutomations++;
+      for (const host of read.hosts) {
+        usedBy.set(host, [
+          ...(usedBy.get(host) ?? []),
+          { id: flow.id, name: flow.name },
+        ]);
+      }
+    }
+    return {
+      canManage,
+      hosts: rows.map((row) => ({
+        ...row,
+        usedBy: (usedBy.get(row.host) ?? []).sort((a, b) =>
+          a.name.localeCompare(b.name)
+        ),
+      })),
+      unreadAutomations,
+    };
+  }),
+
+  /**
+   * Add a host to the list: RUNS `http.allow_host` as the person through the
+   * run door (`executeCapability`), so the verb's own checks hold (a pod
+   * admin, a public host name, normalised). A sensitive action
+   * (`SENSITIVE_ACTIONS`): it widens where the pod's AIs may read.
+   */
+  allowHost: credentialProcedure
+    .input(presenceInput)
+    .input(
+      z.object({
+        host: z.string().trim().min(1).max(253),
+        reason: z.string().trim().max(1000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      const out = await runAllowHostAsPerson({
+        host: input.host,
+        ...(input.reason ? { reason: input.reason } : {}),
+        userId: ctx.userId,
+      });
+      switch (out.kind) {
+        case "run":
+          return out.result as {
+            status: "allowed";
+            host: string;
+            alreadyAllowed: boolean;
+          };
+        case "error":
+          // The verb's own refusal: a host that is not a public name, or the
+          // caller is no pod admin.
+          throw new TRPCError({
+            code: out.errorClass === "validation" ? "BAD_REQUEST" : "FORBIDDEN",
+            message: out.message,
+          });
+        case "deny":
+          throw new TRPCError({ code: "FORBIDDEN", message: out.reason });
+        case "proposed":
+          // Never for a pod admin's own run; said rather than reported as added.
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The host was filed as a request instead of being added: approve it in Review.",
+          });
+        default:
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "The pod could not run http.allow_host: nothing was added.",
+          });
+      }
+    }),
+
   set: credentialProcedure
     .input(presenceInput)
     .input(setInput)

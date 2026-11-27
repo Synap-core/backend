@@ -58,6 +58,7 @@ import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type { DeviceStatus } from "../device-manifest/index.js";
 import type { ProcessNeed } from "../processes/read.js";
 import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
 import type {
@@ -1052,6 +1053,21 @@ const OBJECT_NOUN_ROWS = {
   bento: "Bento",
   whiteboard: "Whiteboard",
   site: "Site",
+  // The kinds of a device (`DEVICE_KINDS`, `@synap-core/types/device-manifest`)
+  // that the registry has no kind for: the Devices page names a device's kind
+  // through `resolveObjectNoun(kind)`. `computer` is an alias of `machine`
+  // (OBJECT_KIND_ALIASES): one word for a computer.
+  vm: "Virtual machine",
+  container: "Container",
+  cloud_server: "Cloud server",
+  storage: "Storage",
+  phone: "Phone",
+  printer: "Printer",
+  camera: "Camera",
+  sensor: "Sensor",
+  // `other` keeps the word it humanized to, so no other "other" token reads
+  // differently; only its French is new.
+  other: "Other",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1098,6 +1114,15 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   bento: "Bentos",
   whiteboard: "Whiteboards",
   site: "Sites",
+  vm: "Virtual machines",
+  container: "Containers",
+  cloud_server: "Cloud servers",
+  storage: "Storage",
+  phone: "Phones",
+  printer: "Printers",
+  camera: "Cameras",
+  sensor: "Sensors",
+  other: "Others",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -2607,6 +2632,25 @@ export const STEP_RUNNER_KIND_LABELS = {
 export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
 
 /**
+ * A device's status, the read verdict `deriveDeviceStatus` (`DEVICE_STATUSES`,
+ * `@synap-core/types/device-manifest`). Its own door, not `STATUS_LABELS`:
+ * `unknown` here is a device that never reported (so it says that, where the
+ * generic status reads "Unknown"), and `retired` is a device the person
+ * removed ("Removed", the group the Devices page folds it into). Keyed by
+ * EVERY status.
+ */
+export const DEVICE_STATUS_LABELS = {
+  online: "Online",
+  offline: "Offline",
+  degraded: "Degraded",
+  unknown: "Not reported yet",
+  retired: "Removed",
+} as const satisfies Readonly<Record<DeviceStatus, string>>;
+
+/** The device status rows, exactly typed: the keys of the `deviceStatus.*` catalog. */
+export type DeviceStatusLabelRows = typeof DEVICE_STATUS_LABELS;
+
+/**
  * A NEED's name (0426, `NEEDS` in `@synap-core/types/needs`): what a process
  * read, the need picker and a run's "missing" line call it. Keyed by EVERY
  * need slug; `needs-labels.test.ts` pins each English word to `NEEDS`' own
@@ -2784,6 +2828,24 @@ export function resolveStepRunnerLabel(
   return (
     translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
     STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * A device's status (`online`, `offline`, `degraded`, `unknown`), in
+ * `opts.locale` (else the ambient catalog locale), through
+ * `deviceStatus.<status>`. An unknown token humanizes; none is "".
+ */
+export function resolveDeviceStatusLabel(
+  status: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  if (!Object.hasOwn(DEVICE_STATUS_LABELS, key)) return humanizeToken(status);
+  return (
+    translatedWord(`deviceStatus.${key}`, catalogLocaleOf(opts?.locale)) ??
+    DEVICE_STATUS_LABELS[key as keyof DeviceStatusLabelRows]
   );
 }
 
@@ -4494,6 +4556,7 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
+  deviceStatuses: DEVICE_STATUS_LABELS,
   needs: NEED_LABELS,
   intents: INTENT_LABELS,
 });

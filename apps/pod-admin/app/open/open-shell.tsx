@@ -17,6 +17,8 @@ import { OpenInAppLink } from "../_lib/object/open-in-app-link";
 import { objectReadsWide } from "../_lib/object/object-width";
 import type { ObjectFrame } from "../_lib/object/views/object-frame";
 import { labelForOpenType } from "./open-params";
+import { OpenReader } from "./open-reader";
+import type { ReaderLayout } from "./reader-model";
 
 export function OpenCard({
   children,
@@ -40,11 +42,29 @@ export function OpenLoading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-/** An object page in the receiver card; `width` as `ReceiverShell` takes it. */
+/**
+ * An object page in the receiver card; `width` as `ReceiverShell` takes it.
+ * With `reader` (`readerLayout`: big content that is drawn), the same page
+ * reads in the whole window instead (`OpenReader`): its header becomes the
+ * bar, its facts and Advanced move into the bar's ⋯.
+ */
 export function OpenObject({
   width,
+  reader,
   ...props
-}: ObjectPageProps & { width?: ReceiverWidth }) {
+}: ObjectPageProps & { width?: ReceiverWidth; reader?: ReaderLayout | null }) {
+  if (reader) {
+    return (
+      <OpenReader
+        layout={reader}
+        header={props.header}
+        facts={props.facts}
+        advanced={props.advanced}
+      >
+        {props.children}
+      </OpenReader>
+    );
+  }
   return (
     <OpenCard width={width}>
       <ObjectPage {...props} />

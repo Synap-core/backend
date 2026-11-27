@@ -46,6 +46,7 @@ import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenFailure, OpenLoading, OpenObject, openWidth } from "../open-shell";
 import { BounceView } from "./bounce-view";
 import { openT } from "../copy";
+import { readerLayout } from "../reader-model";
 
 /** The stored type, as a reader calls it. */
 const TYPE_LABEL: Record<string, string> = {
@@ -98,9 +99,15 @@ export function DocumentView({ id }: { id: string }) {
   const openInApp = <OpenInAppLink type="document" id={id} />;
   const living = query.data ? isLivingDocument(query.data) : false;
   const t = openT();
+  // A body that reads here (text, a stored HTML page, an image) opens in the
+  // full-window reader at the document frame; an empty, linked or failed body
+  // keeps the card, where its one sentence reads (`readerLayout`).
+  const drawn =
+    Boolean(media) || content.kind === "page" || content.kind === "content";
   return (
     <OpenObject
       width={openWidth({ header: { kind: "document" } })}
+      reader={readerLayout("document", { drawn })}
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",

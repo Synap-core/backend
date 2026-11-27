@@ -37,9 +37,12 @@ import {
   EntityBodyService,
   eventRepository,
   createDocumentWithContent,
+  createHtmlPage,
+  isHtmlPageBody,
   resolveWorkspacePlacement,
   filedDocumentWhere,
 } from "@synap/database";
+import { assertHtmlPage } from "../services/document-patch/html-page-check.js";
 
 import { requireUserId } from "../utils/user-scoped.js";
 import { resolveActorNames } from "../utils/resolve-actor-names.js";
@@ -84,7 +87,8 @@ const DocumentTypeSchema = z.enum([
 function mimeTypeForDocType(type: string): string {
   const map: Record<string, string> = {
     markdown: "text/markdown",
-    html: "text/html",
+    // html is not here: a page is written only by the HTML page door
+    // (`createHtmlPage`), which sets its type and mime type itself.
     code: "text/plain",
     text: "text/plain",
     pdf: "application/pdf",
@@ -213,18 +217,26 @@ export const documentsRouter = router({
         input,
         podDocumentScopeFloor(userId)
       );
-      // The ONE create door: fresh-key upload + row + v1 checkpoint.
-      const document = await createDocumentWithContent(db, eventRepository, {
+      // The ONE create door: fresh-key upload + row + v1 checkpoint; an html
+      // page through the HTML page door (its checks, refused before writing).
+      const createInput = {
         ownerUserId: userId,
         workspaceId,
         title: input.title,
-        type: docType,
         content: input.content || "",
-        mimeType: mimeTypeForDocType(docType),
         ...scoped,
         ...(duplicatedFrom ? { metadata: { duplicatedFrom } } : {}),
-        provenance: { createdByKind: "human" },
-      });
+        provenance: { createdByKind: "human" as const },
+      };
+      if (docType === "html") assertHtmlPage({ content: createInput.content });
+      const document =
+        docType === "html"
+          ? await createHtmlPage(db, eventRepository, createInput)
+          : await createDocumentWithContent(db, eventRepository, {
+              ...createInput,
+              type: docType,
+              mimeType: mimeTypeForDocType(docType),
+            });
 
       // OUTPUT LEDGER — the same writer the Hub twin and `entities.create` use.
       // `ctx.sessionId` is the VERIFIED header handle (`resolveHubSessionHeader`
@@ -272,18 +284,27 @@ export const documentsRouter = router({
       // write on the RESOLVED workspace, never a request-supplied id.
       await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
       const docType = normalizeDocumentType(input.type, "markdown");
-      // The ONE create door: fresh-key upload + row + v1 checkpoint.
-      const document = await createDocumentWithContent(db, eventRepository, {
+      // The ONE create door: fresh-key upload + row + v1 checkpoint; an html
+      // page (by type or mime type) through the HTML page door.
+      const mimeType = input.mimeType || "text/plain";
+      const uploadInput = {
         ownerUserId: userId,
         workspaceId,
         // No name → the door takes a markdown body's leading `# `, else "Untitled".
         title: input.title ?? "",
-        type: docType,
-        language: input.language || undefined,
         content: input.content,
-        mimeType: input.mimeType || "text/plain",
-        provenance: { createdByKind: "human" },
-      });
+        provenance: { createdByKind: "human" as const },
+      };
+      const isPage = isHtmlPageBody({ type: docType, mimeType });
+      if (isPage) assertHtmlPage({ content: input.content });
+      const document = isPage
+        ? await createHtmlPage(db, eventRepository, uploadInput)
+        : await createDocumentWithContent(db, eventRepository, {
+            ...uploadInput,
+            type: docType,
+            language: input.language || undefined,
+            mimeType,
+          });
 
       return {
         status: "created",

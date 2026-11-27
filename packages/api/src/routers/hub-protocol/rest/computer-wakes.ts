@@ -51,6 +51,7 @@ import {
   recordWorkerServed,
   workerRunnerVersion,
 } from "../../../services/worker-served.js";
+import { recordDeviceReport } from "../../../services/fleet/devices.js";
 
 /** What `GET /computers/me/wakes` answers (200). */
 const ComputerWakesSchema = z
@@ -149,6 +150,12 @@ export function registerComputerWakesRoutes(app: HubHono): void {
         ? header
         : WAKER_RUNNER;
     await recordWorkerServed(keyId, said);
+    // The poll is also the computer reporting: its device's report time
+    // moves. Never fails the poll.
+    await recordDeviceReport({
+      machineUserId: machine.id,
+      reporter: "waker",
+    });
 
     const wakesAgents = wakesAgentsOf(machine.meta);
     const computer = { id: machine.id, name: machine.name ?? null };

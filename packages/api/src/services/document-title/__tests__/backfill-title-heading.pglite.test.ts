@@ -80,6 +80,7 @@ vi.mock("@synap/jobs/utils/realtime-broadcast.js", async (importOriginal) => ({
 
 import {
   createDocumentWithContent,
+  createHtmlPage,
   documents,
   documentVersions,
   podSettings,
@@ -105,16 +106,26 @@ async function seed(input: {
   type?: "markdown" | "html";
   metadata?: Record<string, unknown>;
 }): Promise<string> {
-  const doc = await createDocumentWithContent(h.db, eventRepo, {
-    ownerUserId: USER,
-    title: input.title,
-    type: input.type ?? "markdown",
-    content: input.content,
-    mimeType: "text/markdown",
-    metadata: input.metadata,
-    provenance: { createdByKind: "human" },
-    verbatim: true,
-  });
+  // An html page is written only through the HTML page door.
+  const doc =
+    input.type === "html"
+      ? await createHtmlPage(h.db, eventRepo, {
+          ownerUserId: USER,
+          title: input.title,
+          content: input.content,
+          metadata: input.metadata,
+          provenance: { createdByKind: "human" },
+        })
+      : await createDocumentWithContent(h.db, eventRepo, {
+          ownerUserId: USER,
+          title: input.title,
+          type: input.type ?? "markdown",
+          content: input.content,
+          mimeType: "text/markdown",
+          metadata: input.metadata,
+          provenance: { createdByKind: "human" },
+          verbatim: true,
+        });
   // The pass's cutoff is "now" at its first run: seed strictly before it.
   await q(
     `update documents set created_at = now() - interval '1 hour' where id = $1`,

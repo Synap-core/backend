@@ -1402,7 +1402,7 @@ export interface ListFocusSessionsOptions {
    * just opened, which a human `"default"` lens would hide.
    */
   lens?: "default" | "triage" | "all";
-  /** Population lens. Default here is `"all"` (differs from the human tRPC lens). */
+  /** Population lens. Absent = every kind but the sessions an automation opened (differs from the human tRPC lens, `work`); `"all"` includes them. */
   kind?: FocusSessionKind | "all";
   /** Narrow to the sessions of ONE flow definition. */
   playbookId?: string;
@@ -1432,7 +1432,7 @@ export interface GetWorkGraphOptions {
   projectId?: string;
   /** Settled sessions from this many hours back (1–720, default 72). Open ones whatever their age. */
   windowHours?: number;
-  /** Population of the window. Default here is `"all"` (the agent-door default). */
+  /** Population of the window. Absent = every kind but the sessions an automation opened; `"all"` includes them. */
   kind?: FocusSessionKind | "all";
   /** Triage lens of the window. Default here is `"all"`. */
   lens?: "default" | "triage" | "all";

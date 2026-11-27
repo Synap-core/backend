@@ -4,7 +4,9 @@
  * the run door would call (`answeringSkillsWhere`, approved first), each
  * `skill` step to its skill by id, each written-out URL to its host. A step
  * it cannot read (a verb this viewer cannot see, a URL built at run time) is
- * counted as unread, never folded into "reaches nothing". A code skill also
+ * counted as unread, never folded into "reaches nothing". A built-in that
+ * reaches outside says where: `http.get_json` the host of its written-out URL,
+ * `web.read` any public page (`ANY_PUBLIC_HOST`). A code skill also
  * reaches the connections its code calls through `callProvider` (a provider
  * the code does not write out is counted as unread). An `update_skill` says
  * what the skill it rewrites can reach.
@@ -33,6 +35,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { resolveServiceName } from "@synap-core/types/service-marks";
+import { ANY_PUBLIC_HOST } from "@synap-core/types/proposals";
 import { enrichProposalsForDisplay } from "./display.js";
 
 const VIEWER = "viewer-1";
@@ -136,6 +139,9 @@ beforeAll(async () => {
   });
   // Runs in the pod.
   await skill({ kind: "builtin", name: "entity_facet.attach" });
+  // Built-ins that reach outside: a JSON API on the allow-list, any page.
+  await skill({ kind: "builtin", name: "http.get_json" });
+  await skill({ kind: "builtin", name: "web.read" });
   // A code skill that calls Apify through the pod (no allowed host of its
   // own): the shape of the pod's real apify_run_actor.
   await skill({
@@ -343,6 +349,67 @@ describe("an automation in a mixed proposal says what its steps reach", () => {
     );
     expect(review.graph?.automations?.[0]?.reach).toEqual({
       hosts: [],
+      connections: [],
+      unreadSteps: 0,
+    });
+  });
+
+  it("an http.get_json step reaches the host its written-out URL names", async () => {
+    const review = await reviewOf(
+      automation([
+        {
+          type: "capability",
+          data: {
+            verbId: "http.get_json",
+            inputMapping: {
+              url: "https://recherche-entreprises.api.gouv.fr/search?q={{trigger.name}}",
+            },
+          },
+        },
+      ])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: ["recherche-entreprises.api.gouv.fr"],
+      connections: [],
+      unreadSteps: 0,
+    });
+  });
+
+  it("an http.get_json step whose URL is built while it runs is counted, never read as nothing", async () => {
+    const review = await reviewOf(
+      automation([
+        {
+          type: "capability",
+          data: {
+            verbId: "http.get_json",
+            inputMapping: { url: "{{trigger.apiUrl}}" },
+          },
+        },
+        { type: "capability", data: { verbId: "http.get_json" } },
+      ])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: [],
+      connections: [],
+      unreadSteps: 2,
+    });
+  });
+
+  it("a web.read step may read any public page, and says so", async () => {
+    const review = await reviewOf(
+      automation([
+        {
+          type: "capability",
+          data: {
+            verbId: "web.read",
+            inputMapping: { url: "https://example.org/a" },
+          },
+        },
+        { type: "capability", data: { verbId: "entity_facet.attach" } },
+      ])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: [ANY_PUBLIC_HOST],
       connections: [],
       unreadSteps: 0,
     });

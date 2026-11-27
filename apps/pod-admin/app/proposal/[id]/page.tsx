@@ -20,6 +20,7 @@
 import { headers } from "next/headers";
 import { ConsoleRoleProvider } from "../../(admin)/components/side-nav-role";
 import { podAdminRole } from "../../../lib/kratos";
+import { opensHome } from "../../../lib/route-policy";
 import { ProposalReview } from "./ProposalReview";
 
 export const dynamic = "force-dynamic";
@@ -38,13 +39,15 @@ export default async function ProposalPage({ params }: ProposalPageProps) {
   // `/proposal` is self-service, so the proxy does not ask the role; asked
   // here so a phone is offered only the console pages this reader may open
   // (a space it names, as a provenance link). Unanswered → the member's page.
-  const role = (await podAdminRole(h)) === "admin" ? "admin" : "member";
+  const answer = await podAdminRole(h);
+  const role = answer === "admin" ? "admin" : "member";
   return (
     <ConsoleRoleProvider role={role}>
       <ProposalReview
         proposalId={id}
         podHost={h.get("host") ?? undefined}
         identity={h.get("x-pod-admin-email") ?? undefined}
+        canGoHome={opensHome(answer)}
       />
     </ConsoleRoleProvider>
   );

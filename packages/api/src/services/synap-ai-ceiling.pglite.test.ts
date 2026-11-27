@@ -9,6 +9,9 @@
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const holder = vi.hoisted(() => {
   process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
@@ -156,6 +159,32 @@ async function addGrant(
     ]
   );
 }
+/**
+ * The pod's `api_keys_key_prefix_check` as the migrations last declare it (the newest migration that adds it), so the
+ * key this file mints meets the rule the real table enforces. `ddlFor` reads the Drizzle schema, which does not carry
+ * that CHECK: without this, a refused prefix (`synap_ai_…`, 2026-11-27: every app chat turn answered 500) stayed green.
+ */
+function prefixRule(): string {
+  const dir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../database/migrations"
+  );
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  const rule =
+    /ALTER TABLE "?api_keys"? ADD CONSTRAINT "?api_keys_key_prefix_check"? CHECK \([\s\S]*?\);/i;
+  const found = files
+    .map((f) => rule.exec(readFileSync(join(dir, f), "utf8"))?.[0])
+    .filter((m): m is string => Boolean(m));
+  // Non-vacuity: the scan must find the rule (it lives in 0028 today); a rename or a move makes this throw, not pass.
+  if (found.length === 0)
+    throw new Error(
+      "api_keys_key_prefix_check not found in packages/database/migrations"
+    );
+  return found[found.length - 1]!;
+}
+
 async function reset() {
   await q(`delete from grants`);
   await q(`delete from api_keys`);
@@ -167,6 +196,7 @@ beforeAll(async () => {
   holder.client = client as never;
   for (const t of [users, apiKeys, grants])
     await client.exec(ddlFor(t as unknown as PgTable));
+  await client.exec(prefixRule());
   holder.db = drizzle(client);
   const agent = (id: string, by: string, personal: boolean) =>
     q(
@@ -317,6 +347,11 @@ describe("ensureSynapAiKey", () => {
       key_name: "Synap AI",
     });
     expect(rows.rows[0]!.scope).toEqual([]);
+    // The table here enforces the pod's prefix rule (prefixRule): the key was accepted, with a declared prefix.
+    const prefix = (await q(`select key_prefix from api_keys where id = $1`, [
+      first.keyId,
+    ])) as { rows: { key_prefix: string }[] };
+    expect(prefix.rows[0]!.key_prefix).toBe("synap_user_");
     expect((await ensureSynapAiKey(OPERATOR)).keyId).toBe(first.keyId);
     const count = (await q(
       `select count(*)::int as n from api_keys where user_id = $1`,

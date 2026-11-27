@@ -584,6 +584,18 @@ const OBJECT_KIND_ROWS = {
     label: "Computer",
     labelPlural: "Computers",
   },
+  // A device: anything the person connects that describes itself (a
+  // computer, a VM, a printer, a camera, a sensor), a `devices` row. The
+  // product word that replaces "Computers" in the nav; a computer stays a
+  // device KIND. `fleet` is only the code word.
+  device: {
+    kind: "device",
+    category: "agent",
+    icon: "MonitorSmartphone",
+    color: ID(7),
+    label: "Device",
+    labelPlural: "Devices",
+  },
   // A `governance_rules` row: "which AI writes wait for me?" (concepts.md).
   // The user word is "Approvals" — never "Trust rules" (the old nav label),
   // and never "Rules", which is the automation (`automation` above).
@@ -875,6 +887,9 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // link (Surfaces P3): the same kind as a cell.
   cell_instance: "cell",
   cell_instances: "cell",
+  // A device of kind `computer` (`DEVICE_KINDS`) is what the registry calls a
+  // machine: one word, "Computer", wherever either token is read.
+  computer: "machine",
   // The package layer's tag for a bundle (`workspace` package tagged `suite`).
   suite: "pack",
   suites: "pack",

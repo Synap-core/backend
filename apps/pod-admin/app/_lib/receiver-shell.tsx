@@ -21,12 +21,18 @@
  *
  * Deliberately NOT provided: navigation into the `(admin)` console. Most people
  * arriving here are not pod admins, and offering them a door they will be
- * bounced out of by `proxy.ts` is worse than offering none.
+ * bounced out of by `proxy.ts` is worse than offering none. The ONE exception
+ * is Home, behind the Synap mark, and only when the route's server read the
+ * role and found a member or an admin (`canGoHome`, `opensHome` in
+ * `lib/route-policy.ts`): every member has a Home (backend#1312), so that door
+ * never bounces. Anyone else sees the mark as plain brand.
  */
 
 import { Card } from "@heroui/react";
 import { createContext, useContext, type ReactNode } from "react";
 import { HostName } from "./host-name";
+import { SynapLockup } from "./brand/synap-mark";
+import { navHref } from "../../lib/console-nav";
 
 /**
  * Pod identity for a receiver page, provided once per route.
@@ -39,17 +45,28 @@ import { HostName } from "./host-name";
 interface ReceiverIdentity {
   podHost?: string;
   identity?: string;
+  /**
+   * The reader is a member or an admin of this pod, as the server asked it
+   * (`opensHome`): the mark becomes the door to Home. Absent = plain brand.
+   */
+  canGoHome?: boolean;
 }
 
 const ReceiverIdentityContext = createContext<ReceiverIdentity>({});
 
+/** The route's identity, for a frame that draws its own bar (the reader). */
+export function useReceiverIdentity(): ReceiverIdentity {
+  return useContext(ReceiverIdentityContext);
+}
+
 export function ReceiverIdentityProvider({
   podHost,
   identity,
+  canGoHome,
   children,
 }: ReceiverIdentity & { children: ReactNode }) {
   return (
-    <ReceiverIdentityContext.Provider value={{ podHost, identity }}>
+    <ReceiverIdentityContext.Provider value={{ podHost, identity, canGoHome }}>
       {children}
     </ReceiverIdentityContext.Provider>
   );
@@ -60,6 +77,8 @@ interface ReceiverShellProps {
   podHost?: string;
   /** Who the reader is signed in as, when known. */
   identity?: string;
+  /** The mark leads Home (`ReceiverIdentity.canGoHome`). */
+  canGoHome?: boolean;
   /**
    * WHO asked, on WHAT, and WHEN — the third header line.
    *
@@ -134,6 +153,7 @@ export function receiverCardClass(pinsBar: boolean): string {
 export function ReceiverShell({
   podHost,
   identity,
+  canGoHome,
   requested,
   children,
   footer,
@@ -144,12 +164,13 @@ export function ReceiverShell({
   const inherited = useContext(ReceiverIdentityContext);
   const host = podHost ?? inherited.podHost;
   const who = identity ?? inherited.identity;
+  const home = canGoHome ?? inherited.canGoHome ?? false;
   return (
     <main className="flex min-h-screen flex-col items-center px-4 py-12 sm:px-6 sm:py-16">
       <div
         className={`flex w-full flex-col gap-4 ${receiverWidthClass(width)}`}
       >
-        <ReceiverHeader podHost={host} identity={who} />
+        <ReceiverHeader podHost={host} identity={who} canGoHome={home} />
 
         {/* Sits between the pod line and the card: it qualifies the REQUEST,
             not the reader, so it belongs above the decision it describes. */}
@@ -179,25 +200,19 @@ export function ReceiverShell({
 function ReceiverHeader({
   podHost,
   identity,
+  canGoHome = false,
 }: {
   podHost?: string;
   identity?: string;
+  canGoHome?: boolean;
 }) {
   return (
     <header className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
-      <span className="flex items-center gap-2">
-        <span
-          aria-hidden
-          className="flex h-5 w-5 items-center justify-center rounded-md bg-primary"
-        >
-          <span className="text-[9px] font-semibold text-primary-foreground">
-            S
-          </span>
-        </span>
-        <span className="text-sm font-medium tracking-tight text-foreground">
-          Synap
-        </span>
-      </span>
+      <SynapLockup
+        href={canGoHome ? navHref("home") : undefined}
+        size={18}
+        wordmarkClassName="text-sm font-medium"
+      />
 
       {podHost && (
         <HostName host={podHost} className="text-xs text-foreground/75" />

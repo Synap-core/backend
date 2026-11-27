@@ -117,6 +117,8 @@ describe("migrations 0429-0431 — compute lifecycle", () => {
     expect(cols.rows.map((r) => r.column_name).sort()).toEqual(
       getTableConfig(computeLeases)
         .columns.map((c) => c.name)
+        // `device_id` arrives with 0461; migrations-0461.pglite.test.ts asserts it.
+        .filter((name) => name !== "device_id")
         .sort()
     );
     await lease();

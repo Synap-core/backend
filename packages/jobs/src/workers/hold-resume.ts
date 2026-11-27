@@ -97,6 +97,7 @@ import {
   DEV_LOOP_EVENT_TYPES,
   aiHoldMet,
   devboxJobWorkflow,
+  holdWaitsOnPrChecks,
   holdDevRefMet,
   type DevLoopEventRowLike,
   type HoldDevEventRef,
@@ -194,6 +195,24 @@ async function readDevFactRows(
       ? [{ user: h.userId, repo: ref.repo.toLowerCase(), number: ref.number }]
       : []
   );
+  // Only a hold on the PR's checks verdict reads its CI runs: a merged or
+  // closed hold reads exactly the PR facts it read before.
+  const onChecks = (h: CurrentHold) =>
+    h.hold.until != null &&
+    "moves" in h.hold.until &&
+    holdWaitsOnPrChecks(h.hold.until.to);
+  const prChecks = holds.flatMap(({ ref, h }) =>
+    ref.kind === "pr" && onChecks(h)
+      ? [
+          {
+            user: h.userId,
+            repo: ref.repo.toLowerCase(),
+            number: ref.number,
+            since: h.hold.since,
+          },
+        ]
+      : []
+  );
   const mains = holds.flatMap(({ ref, h }) =>
     ref.kind === "main"
       ? [{ user: h.userId, repo: ref.repo.toLowerCase(), since: h.hold.since }]
@@ -224,7 +243,7 @@ async function readDevFactRows(
       drizzleSql`, `
     );
   type Row = DevLoopEventRowLike & { userId: string };
-  const [prRows, mainRows, jobRows] = await Promise.all([
+  const [prRows, mainRows, jobRows, prCheckRows] = await Promise.all([
     prs.length
       ? db
           .select(select)
@@ -279,6 +298,20 @@ async function readDevFactRows(
             desc(events.timestamp)
           )
       : Promise.resolve([] as Row[]),
+    prChecks.length
+      ? db
+          .select(select)
+          .from(events)
+          .where(
+            and(
+              eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
+              drizzleSql`(${events.userId}, ${repoOf}, ${events.data}->>'pr') in (${tuples(
+                prChecks.map((p) => [p.user, p.repo, String(p.number)])
+              )})`,
+              gt(events.timestamp, earliest(prChecks))
+            )
+          )
+      : Promise.resolve([] as Row[]),
   ]);
   const data = (r: Row) => (r.data ?? {}) as Record<string, unknown>;
   const after = (r: Row, since: string) =>
@@ -288,12 +321,23 @@ async function readDevFactRows(
     switch (ref.kind) {
       case "pr": {
         const repo = ref.repo.toLowerCase();
-        return (prRows as Row[]).filter(
+        const facts = (prRows as Row[]).filter(
           (r) =>
             mine(r) &&
             String(data(r).repo ?? "").toLowerCase() === repo &&
             data(r).number === ref.number
         );
+        if (!onChecks(h)) return facts;
+        return [
+          ...facts,
+          ...(prCheckRows as Row[]).filter(
+            (r) =>
+              mine(r) &&
+              String(data(r).repo ?? "").toLowerCase() === repo &&
+              data(r).pr === ref.number &&
+              after(r, h.hold.since)
+          ),
+        ];
       }
       case "main": {
         const repo = ref.repo.toLowerCase();

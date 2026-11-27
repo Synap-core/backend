@@ -40,11 +40,10 @@ import {
   sql,
   db as sharedDb,
   eventRepository as sharedEventRepository,
-  createDocumentWithContent,
+  createHtmlPage,
   eq,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
-  normalizeDocumentType,
   links,
   type LinkEndpointType,
   type LinkType,
@@ -895,9 +894,11 @@ async function materializeView(
  *
  * The proposal data payload carries everything written by the REST route into
  * checkPermissionOrPropose({ data: { cellType, name, html?, userId, workspaceId, ... } }).
- * For html-embed cells the `html` field is present and a backing document is
- * created in MinIO + document_versions (mirroring the inline path in
- * rest/cell-instances.ts POST /cell-instances/html). For generic cells only a
+ * An `html` payload is a `cell/create` proposal filed before the ONE HTML
+ * write door (27 Nov 2026; the cell routes now file the page as a
+ * `document/create` proposal that places its cell on approval): its page is
+ * written by the HTML page door (`createHtmlPage`: checked, `type: "html"`)
+ * and the cell is a placement pointing at it. For generic cells only a
  * cell_instances row is inserted.
  */
 async function materializeCell(
@@ -936,30 +937,29 @@ async function materializeCell(
   const agentUserId = data.agentUserId as string | undefined;
   const html = data.html as string | undefined;
 
-  // For html-embed cells: create a backing document in MinIO + document_versions,
-  // then create the cell_instances row referencing it. Mirrors the inline path in
-  // rest/cell-instances.ts POST /cell-instances/html.
+  // A legacy html-embed proposal: the page through the HTML page door, then
+  // the cell points at it (in its props too: a placement holds no content).
   let sourceDocumentId: string | undefined =
     (data.sourceDocumentId as string) || undefined;
+  let config = (data.config as Record<string, unknown>) ?? {};
 
   if (cellType === "html-embed" && html && !sourceDocumentId) {
-    // The ONE create door: fresh-key upload + row + v1 checkpoint.
-    const { id: documentId } = await createDocumentWithContent(
+    const { id: documentId } = await createHtmlPage(
       sharedDb,
       sharedEventRepository,
       {
         ownerUserId: effectiveUserId,
         workspaceId: effectiveWorkspaceId || null,
         title: name ?? "HTML Cell",
-        type: normalizeDocumentType("text", "text"),
-        extension: "html",
         content: html,
-        mimeType: "text/html",
-        provenance: { createdByKind: "human" },
+        provenance: agentUserId
+          ? { createdByKind: "ai_agent", agentUserId }
+          : { createdByKind: "human" },
       }
     );
 
     sourceDocumentId = documentId;
+    config = { ...config, sourceDocumentId: documentId };
   }
 
   await sharedDb
@@ -969,7 +969,7 @@ async function materializeCell(
       workspaceId: effectiveWorkspaceId,
       userId: effectiveUserId,
       cellType,
-      config: (data.config as Record<string, unknown>) ?? {},
+      config,
       name,
       isTemplate: (data.isTemplate as boolean) ?? false,
       sourceDocumentId,

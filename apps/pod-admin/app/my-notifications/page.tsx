@@ -2,7 +2,7 @@
 
 /**
  * /my-notifications — what may interrupt YOU on your phone, and which of
- * your phones get it. Self-service, like `/my-computers`: every call is a
+ * your phones get it. Self-service, like `/my-devices`: every call is a
  * `protectedProcedure` floored on the caller (`notifCenter.pushPrefs` /
  * `setPushPrefs` / `listDevices` / `revokeDevice`), so a member sees and
  * turns off only their own phones — and a pod admin has no view of anyone

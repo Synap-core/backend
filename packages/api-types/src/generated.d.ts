@@ -10292,6 +10292,164 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"compute_spend_daily_cents"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
+declare const DeviceConnectionSchema: z.ZodDiscriminatedUnion<[
+	z.ZodObject<{
+		mode: z.ZodLiteral<"agent">;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		driver: z.ZodString;
+		externalId: z.ZodOptional<z.ZodString>;
+		installationId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"bridge">;
+		viaDeviceId: z.ZodString;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		leaseId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"provider">;
+		resourceId: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		mode: z.ZodLiteral<"manual">;
+	}, z.core.$strip>
+], "mode">;
+export type DeviceConnection = z.output<typeof DeviceConnectionSchema>;
+declare const DeviceIdentitySchema: z.ZodObject<{
+	arch: z.ZodOptional<z.ZodString>;
+	hardwareId: z.ZodOptional<z.ZodString>;
+	hostname: z.ZodOptional<z.ZodString>;
+	model: z.ZodOptional<z.ZodString>;
+	os: z.ZodOptional<z.ZodString>;
+	osVersion: z.ZodOptional<z.ZodString>;
+	vendor: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceIdentity = z.output<typeof DeviceIdentitySchema>;
+declare const DeviceLocationSchema: z.ZodObject<{
+	network: z.ZodOptional<z.ZodString>;
+	provider: z.ZodOptional<z.ZodString>;
+	region: z.ZodOptional<z.ZodString>;
+	site: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceLocation = z.output<typeof DeviceLocationSchema>;
+declare const DeviceHealthSchema: z.ZodObject<{
+	checkedAt: z.ZodOptional<z.ZodString>;
+	detail: z.ZodOptional<z.ZodString>;
+	state: z.ZodEnum<{
+		degraded: "degraded";
+		failing: "failing";
+		ok: "ok";
+	}>;
+}, z.core.$strip>;
+export type DeviceHealth = z.output<typeof DeviceHealthSchema>;
+declare const DeviceManifestSchema: z.ZodObject<{
+	capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	health: z.ZodOptional<z.ZodObject<{
+		checkedAt: z.ZodOptional<z.ZodString>;
+		detail: z.ZodOptional<z.ZodString>;
+		state: z.ZodEnum<{
+			degraded: "degraded";
+			failing: "failing";
+			ok: "ok";
+		}>;
+	}, z.core.$strip>>;
+	identity: z.ZodOptional<z.ZodObject<{
+		arch: z.ZodOptional<z.ZodString>;
+		hardwareId: z.ZodOptional<z.ZodString>;
+		hostname: z.ZodOptional<z.ZodString>;
+		model: z.ZodOptional<z.ZodString>;
+		os: z.ZodOptional<z.ZodString>;
+		osVersion: z.ZodOptional<z.ZodString>;
+		vendor: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	location: z.ZodOptional<z.ZodObject<{
+		network: z.ZodOptional<z.ZodString>;
+		provider: z.ZodOptional<z.ZodString>;
+		region: z.ZodOptional<z.ZodString>;
+		site: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	manifestVersion: z.ZodLiteral<1>;
+	parameters: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+	resources: z.ZodOptional<z.ZodObject<{
+		cpu: z.ZodOptional<z.ZodObject<{
+			cores: z.ZodOptional<z.ZodNumber>;
+			model: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>;
+		disks: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			freeMb: z.ZodNumber;
+			fs: z.ZodOptional<z.ZodString>;
+			mount: z.ZodString;
+			sizeMb: z.ZodNumber;
+			tier: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>>;
+		gpus: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			model: z.ZodString;
+			vramMb: z.ZodOptional<z.ZodNumber>;
+		}, z.core.$strip>>>;
+		memoryMb: z.ZodOptional<z.ZodNumber>;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type DeviceManifest = z.output<typeof DeviceManifestSchema>;
+declare const DEVICE_STATUSES: readonly [
+	"online",
+	"offline",
+	"degraded",
+	"unknown",
+	"retired"
+];
+export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
+/** What a list row shows of a device's resources. Absent = not reported. */
+export interface DeviceResourcesSummary {
+	cpuModel: string | null;
+	cpuCores: number | null;
+	memoryMb: number | null;
+	gpus: Array<{
+		model: string;
+		vramMb: number | null;
+	}>;
+	/** Summed over the reported disks; null when none was reported. */
+	diskSizeMb: number | null;
+	diskFreeMb: number | null;
+	/** Whole percent used over the reported disks; null when none. */
+	diskUsedPct: number | null;
+}
+declare const DEVICE_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type DeviceBelongsTo = (typeof DEVICE_BELONGS_TO)[number];
+/** One device as `fleet.list` / `fleet.get` answer it. */
+export interface FleetDevice {
+	id: string;
+	kind: string;
+	name: string;
+	parentDeviceId: string | null;
+	/** The machine user when it runs the Synap runner (`computers[].agentUserId`). */
+	principalUserId: string | null;
+	ownerUserId: string;
+	workspaceId: string | null;
+	belongsTo: DeviceBelongsTo;
+	connection: DeviceConnection;
+	labels: string[];
+	status: DeviceStatus;
+	lastReportAt: string | null;
+	createdAt: string;
+	retiredAt: string | null;
+	identity: DeviceIdentity;
+	resources: DeviceResourcesSummary;
+	capabilities: string[];
+	location: DeviceLocation | null;
+	health: DeviceHealth | null;
+}
+/** A device in the tree: its children are the devices it hosts. */
+export type FleetDeviceNode = DeviceTreeNode<FleetDevice>;
+/** `fleet.get`: the device with its whole manifest, as last reported. */
+export interface FleetDeviceDetail extends FleetDevice {
+	manifest: DeviceManifest | null;
+}
+/** A device in a tree built by {@link buildDeviceTree}. */
+export type DeviceTreeNode<T> = T & {
+	children: DeviceTreeNode<T>[];
+};
 declare const CONFIG_SCOPE_KINDS: [
 	"default",
 	"bridge",
@@ -10836,7 +10994,10 @@ export type RecordSessionSpawnResult = {
 export interface ProposalPartReach {
 	/**
 	 * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
-	 * webhook step's URL host, a provider verb's fixed base URL.
+	 * webhook step's URL host, a provider verb's fixed base URL, an
+	 * `http.get_json` step's URL host. {@link ANY_PUBLIC_HOST} (`*`, the host
+	 * lists' "any host" spelling, as in a computer manifest's `network`) when it
+	 * may read any public page (`web.read`).
 	 */
 	hosts: string[];
 	/**
@@ -12416,6 +12577,11 @@ export interface ProposalMaterializedRecord {
 		winnerId: string;
 	};
 }
+declare const FLOOR_CLASS_PATTERNS: readonly [
+	"@agent-defines-kinds",
+	"@agent-builds-structure"
+];
+export type FloorClassPattern = (typeof FLOOR_CLASS_PATTERNS)[number];
 export interface ReversibleDefaultState {
 	enabled: boolean;
 	/** The active row, so a surface can open it; null when off. */
@@ -12426,6 +12592,7 @@ declare const POD_NUMBER_SETTINGS: {
 		readonly default: 24;
 		readonly max: 168;
 		readonly min: 1;
+		readonly parameterOf: "@own-organise";
 	};
 	readonly "governance.project_evidence_min": {
 		readonly default: 5;
@@ -24702,6 +24869,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "cal_com";
 	};
 	readonly fireflies: {
@@ -24709,6 +24877,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "optional";
 		readonly toolName: "fireflies";
 	};
 	readonly mailgun: {
@@ -24717,6 +24886,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "mailgun";
 	};
 	readonly postiz: {
@@ -24724,6 +24894,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: "In Postiz, open Settings \u2192 Webhooks \u2192 Add a webhook, paste this URL, choose All integrations, and save.";
+		readonly signingSecret: "none";
 		readonly toolName: "postiz";
 	};
 };
@@ -24737,6 +24908,8 @@ export interface ProvisionedInboundWebhook {
 	rotated: boolean;
 	/** Keys the route still needs before it accepts a delivery. */
 	missingConfig: string[];
+	/** True when this call stored a signing secret (never the secret itself). */
+	signingSecretSet?: true;
 	/** The manual step on the provider's side, or null when unchecked. */
 	setupStep: string | null;
 }
@@ -26724,6 +26897,20 @@ export interface WriteActionModeResult {
 	ruleId: string | null;
 	/** False when it was already set that way (nothing written). */
 	changed: boolean;
+}
+/**
+ * One platform floor as Settings and the desktop list it. `switchedBy`: the
+ * pod switch that lets the other approval rules decide it (`floorClassOf`);
+ * absent, no switch lifts it.
+ */
+export interface PlatformFloor {
+	key: "admin" | "agent-builds-structure" | "agent-schema" | "agent-structure" | "destructive" | "force-propose";
+	label: string;
+	rung: string;
+	editable: false;
+	actions: readonly string[];
+	note?: string;
+	switchedBy?: FloorClassPattern;
 }
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
@@ -35827,6 +36014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						id: string;
 						match?: TermMatch;
 						name: string;
+						reach?: ProposalPartReach;
 						workspaceId?: string | null;
 					}>;
 				};
@@ -37525,6 +37713,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				html: string;
 				name?: string | undefined;
+				reads?: unknown;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -42232,6 +42421,53 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	fleet: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: FleetDeviceDetail;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeRetired?: boolean | undefined;
+			} | undefined;
+			meta: object;
+			output: {
+				devices: FleetDeviceNode[];
+			};
+		}>;
+	}>>;
 	flow: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -45730,6 +45966,71 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		allowHost: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				host: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				reason?: string | undefined;
+			};
+			meta: object;
+			output: {
+				alreadyAllowed: boolean;
+				host: string;
+				status: "allowed";
+			};
+		}>;
+		allowedHosts: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				canManage: boolean;
+				hosts: {
+					addedAt: Date;
+					addedBy: {
+						id: string;
+						name: string;
+					} | null;
+					host: string;
+					id: string;
+					proposalId: string | null;
+					reason: string | null;
+					usedBy: {
+						id: string;
+						name: string;
+					}[];
+				}[];
+				unreadAutomations: number;
+			};
+		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				store: "config_settings" | "governance_ceilings" | "governance_rules";
@@ -46182,42 +46483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
-				alwaysPropose: ({
-					actions: readonly string[];
-					editable: false;
-					key: "admin";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-schema";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-structure";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "destructive";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "force-propose";
-					label: string;
-					note: string;
-					rung: string;
-				})[];
+				alwaysPropose: PlatformFloor[];
 				autoApproveFor: {
 					actions: readonly string[];
 					editable: false;
@@ -46238,7 +46504,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
 					ruleId: string | null;
 				}[];
-				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
+				settings: {
+					key: string;
+					max: number;
+					min: number;
+					parameterOf: string | null;
+					value: number;
+				}[];
 			};
 		}>;
 		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{
@@ -55115,7 +55387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.allowHost" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -63012,6 +63284,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				rotate?: boolean | undefined;
+				signingSecret?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -63023,6 +63296,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				provider: InboundWebhookProvider;
 				rotated: boolean;
 				setupStep: string | null;
+				signingSecretSet?: true;
 				status: "provisioned";
 				url: string;
 			};

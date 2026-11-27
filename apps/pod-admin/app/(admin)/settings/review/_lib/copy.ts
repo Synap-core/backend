@@ -12,7 +12,8 @@ export const en = {
   description:
     "Your language, how requests from your AIs are laid out, how your AIs act, and what you always or never allow.",
   "language.title": "Language",
-  "language.hint": "The language this site speaks to you, on every device.",
+  "language.hint":
+    "The language this site speaks to you, wherever you sign in.",
   "language.en": "English",
   "language.fr": "Français",
   "language.failed": "Couldn’t change the language",
@@ -33,12 +34,6 @@ export const en = {
   "podDefaults.title": "How your AIs act",
   "podDefaults.hint":
     "The pod’s default for every AI. An AI’s own page can make it ask more, never less.",
-  "podDefaults.reversible.label": "Act directly on what can be undone",
-  "podDefaults.reversible.line":
-    "They create, edit and link without asking, each change with Undo.",
-  "podDefaults.ownOrganise.label": "Tidy their own new work",
-  "podDefaults.ownOrganise.line":
-    "They file what they made in the last day into the project you named and close their own tasks, each with Undo. Anything you changed since still asks.",
   "podDefaults.failed": "Couldn’t read this setting.",
   "podDefaults.notChanged": "Couldn’t change this setting",
   "podDefaults.notChangedHint": "Nothing changed. Try again.",
@@ -47,8 +42,15 @@ export const en = {
   "podDefaults.turnedOn": "On: {name}",
   "podDefaults.turnedOff": "Off: {name}",
   "podDefaults.adminOnly": "Only a pod admin can change these.",
-  "podDefaults.floors": "These always ask, whatever you choose",
+  "podDefaults.floors": "These always ask",
+  "podDefaults.rulesDoor": "Your approval rules",
+  "podDefaults.switchesFailed": "Couldn’t read the other switches.",
   "podDefaults.floorsFailed": "Couldn’t read what always asks.",
+  "podDefaults.change": "Change",
+  "podDefaults.changeNamed": "Change: {name}",
+  "podDefaults.save": "Save",
+  "podDefaults.range": "From {min} to {max}",
+  "podDefaults.saved": "Saved: {name}",
   retry: "Retry",
   "handOffs.title": "Hand-offs you always allow",
   "handOffs.hint":
@@ -83,7 +85,7 @@ export const fr: Catalog<typeof en> = {
   description:
     "Votre langue, la présentation des demandes de vos IA, la façon dont vos IA agissent, et ce que vous autorisez toujours ou jamais.",
   "language.title": "Langue",
-  "language.hint": "La langue de ce site, sur tous vos appareils.",
+  "language.hint": "La langue de ce site, partout où vous vous connectez.",
   "language.en": "English",
   "language.fr": "Français",
   "language.failed": "Impossible de changer la langue",
@@ -105,13 +107,6 @@ export const fr: Catalog<typeof en> = {
   "podDefaults.title": "Comment vos IA agissent",
   "podDefaults.hint":
     "Le réglage par défaut du pod pour toutes les IA. La page d’une IA peut la faire demander davantage, jamais moins.",
-  "podDefaults.reversible.label":
-    "Agir directement sur ce qui peut être annulé",
-  "podDefaults.reversible.line":
-    "Elles créent, modifient et relient sans demander, chaque modification avec Annuler.",
-  "podDefaults.ownOrganise.label": "Ranger leur propre travail récent",
-  "podDefaults.ownOrganise.line":
-    "Elles classent ce qu’elles ont créé depuis un jour dans le projet que vous avez indiqué et ferment leurs propres tâches, chaque fois avec Annuler. Ce que vous avez modifié depuis demande toujours.",
   "podDefaults.failed": "Impossible de lire ce réglage.",
   "podDefaults.notChanged": "Impossible de modifier ce réglage",
   "podDefaults.notChangedHint": "Rien n’a changé. Réessayez.",
@@ -120,8 +115,15 @@ export const fr: Catalog<typeof en> = {
   "podDefaults.turnedOn": "Activé\u00a0: {name}",
   "podDefaults.turnedOff": "Désactivé\u00a0: {name}",
   "podDefaults.adminOnly": "Seul un administrateur du pod peut les modifier.",
-  "podDefaults.floors": "Ceci demande toujours, quel que soit votre choix",
+  "podDefaults.floors": "Ceci demande toujours",
+  "podDefaults.rulesDoor": "Vos règles d’approbation",
+  "podDefaults.switchesFailed": "Impossible de lire les autres réglages.",
   "podDefaults.floorsFailed": "Impossible de lire ce qui demande toujours.",
+  "podDefaults.change": "Modifier",
+  "podDefaults.changeNamed": "Modifier\u00a0: {name}",
+  "podDefaults.save": "Enregistrer",
+  "podDefaults.range": "De {min} à {max}",
+  "podDefaults.saved": "Enregistré\u00a0: {name}",
   retry: "Réessayer",
   "handOffs.title": "Passations toujours autorisées",
   "handOffs.hint":

@@ -3,10 +3,10 @@
 /**
  * `/open/view/:id` — a saved view. When a renderer cell draws its type (the
  * view's own bound cell, else the installed bundle's default for its type,
- * picked by the one resolution in `RenderedObject`), the view itself runs
- * under the header in the module frame, filling the height left (View
- * template: fill), the card widening to a document's width
- * (`READS_WIDE_ATTR`), and "Open in app" sits in the header. Otherwise this
+ * picked by the one resolution in `RenderedObject`), the view itself runs in
+ * the full-window reader (`OpenReader`, View template: fill): a slim bar with
+ * its title, Share, "Open in app" and ⋯ (its facts and Advanced), and the
+ * module frame filling the rest of the window. Otherwise this
  * page says which view it is and hands it to the app in ONE card; a pod
  * admin also reads there, in one line, that the renderers are not on this
  * pod. `views.get` re-checks access server-side; the frame reads through
@@ -32,6 +32,7 @@ import {
 import { frameT } from "../../_lib/object/content/frame-copy";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
+import { readerLayout } from "../reader-model";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -113,6 +114,9 @@ export function ViewView({ id }: { id: string }) {
   return (
     <OpenObject
       width="auto"
+      // Drawn by a renderer: the view reads in the whole window, full width
+      // (`readerLayout`); handed to the app, it keeps its card.
+      reader={readerLayout("view", { drawn })}
       header={{
         kind: "view",
         title,

@@ -1041,13 +1041,21 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       description:
         "Ask to add a host to the pod's allow-list for http.get_json (e.g. recherche-entreprises.api.gouv.fr). " +
         "For an agent this ALWAYS files a proposal the person approves; it never adds the host itself. A pod admin's own run adds it at once. " +
-        "Returns { status: allowed, host, alreadyAllowed } once applied. Args: host (required: the name only, no scheme, port or path); reason (optional: why it is needed, shown on the proposal).",
+        "Returns { status: allowed, host, alreadyAllowed } once applied. Args: host (required: the name only, no scheme, port or path); reason (optional: why it is needed, shown on the proposal and kept with the host).",
       parameters: {
         type: "object",
         required: ["host"],
         properties: {
-          host: { type: "string" },
-          reason: { type: "string" },
+          host: {
+            type: "string",
+            description:
+              "The host name to allow, the name only (no https://, port or path), e.g. recherche-entreprises.api.gouv.fr.",
+          },
+          reason: {
+            type: "string",
+            description:
+              "Why it is needed: shown to the person who approves, and kept with the host on the pod's list.",
+          },
         },
       },
     },

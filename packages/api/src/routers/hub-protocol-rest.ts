@@ -135,6 +135,7 @@ import {
   registerRunsRoutes,
   registerBoxRunsRoutes,
   registerComputerWakesRoutes,
+  registerComputerReportRoutes,
   registerHostJobsRoutes,
   registerInstallationsRoutes,
   registerDiagnoseRoutes,
@@ -436,6 +437,7 @@ registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 registerBoxRunsRoutes(app); // /box-runs/lease (static first), /box-runs/:id/{heartbeat,uploads,finish} — computer + box.runner
 registerComputerWakesRoutes(app); // /computers/me/wakes — a computer's waker: its lease + which agents to wake
+registerComputerReportRoutes(app); // /computers/me/report — a computer describes itself (its device manifest)
 registerInstallationsRoutes(app); // /installations/request (static first), GET /installations — person/agent; governed installation/request
 registerHostJobsRoutes(app); // /host-jobs/lease (static first), /host-jobs/:id/{heartbeat,report,finish} — computer + host.runner; GET /:id/logs — the owner
 registerDiagnoseRoutes(app); // /diagnose — the THIRD door (mode from payload shape)

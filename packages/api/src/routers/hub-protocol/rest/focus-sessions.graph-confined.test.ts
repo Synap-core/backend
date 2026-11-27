@@ -97,14 +97,14 @@ describe("Hub REST GET /focus-sessions/graph — the default window", () => {
     h.inputs = [];
   });
 
-  it("no `kind` named ⇒ no kind passed: the service's default window (closed automation runs left out)", async () => {
+  it("no `kind` named ⇒ no kind passed: the service's default window (automation sessions left out)", async () => {
     const res = await buildTestApp(null).request(`/focus-sessions/graph`);
     expect(res.status).toBe(200);
     expect(h.inputs).toHaveLength(1);
     expect(h.inputs[0]).toHaveProperty("kind", undefined);
   });
 
-  it("`kind=all` named ⇒ `all` passed, so the closed runs stay; any kind is forwarded as named", async () => {
+  it("`kind=all` named ⇒ `all` passed, so the automation sessions stay; any kind is forwarded as named", async () => {
     for (const k of ["all", "run", "work"]) {
       const res = await buildTestApp(null).request(
         `/focus-sessions/graph?kind=${k}`

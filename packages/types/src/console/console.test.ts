@@ -87,7 +87,7 @@ describe("consoleHref", () => {
 
   it("builds object pages with encoded segments", () => {
     expect(consoleHref(ORIGIN, { page: "computer", id: "m/1" })).toBe(
-      `${ORIGIN}/computers/m%2F1`
+      `${ORIGIN}/devices/m%2F1`
     );
     expect(consoleHref(ORIGIN, { page: "agent", id: "a/1" })).toBe(
       `${ORIGIN}/agents/a%2F1`
@@ -265,19 +265,19 @@ describe("consoleLink", () => {
   });
 
   // L8 (focus wave, 5 Nov): a member's desktop computer row had no door,
-  // though /my-computers/<id> is where a member manages their own computer.
+  // though /my-devices/<id> is where a member manages their own computer.
   it("sends a member's computer to its member page, an admin's to the admin one", () => {
     for (const role of ["member", null, undefined] as const) {
       expect(
         consoleLink(ORIGIN, role, { page: "computer", id: "m/1" })
       ).toEqual({
-        href: `${ORIGIN}/my-computers/m%2F1`,
+        href: `${ORIGIN}/my-devices/m%2F1`,
         label: "Manage in console",
       });
     }
     expect(
       consoleLink(ORIGIN, "admin", { page: "computer", id: "m/1" })?.href
-    ).toBe(`${ORIGIN}/computers/m%2F1`);
+    ).toBe(`${ORIGIN}/devices/m%2F1`);
     expect(
       consoleLink(ORIGIN, "member", { page: "computer", id: " " })
     ).toBeNull();

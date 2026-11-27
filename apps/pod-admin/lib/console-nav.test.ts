@@ -47,7 +47,7 @@ describe("navHref", () => {
   });
 
   it("opens a computer on its own page, from every surface alike", () => {
-    expect(computerHref("c 1")).toBe("/computers/c%201");
+    expect(computerHref("c 1")).toBe("/devices/c%201");
     expect(SEARCH_DESTINATION.computer.href("c 1")).toBe(computerHref("c 1"));
   });
 
@@ -207,6 +207,10 @@ describe("consoleRedirects", () => {
       ["/rules/:id", null, "/automations/:id", false],
       ["/governance/agents", null, "/approvals?view=work", false],
       ["/governance", null, "/approvals", false],
+      ["/computers", null, "/devices", false],
+      ["/computers/:id", null, "/devices/:id", false],
+      ["/my-computers", null, "/my-devices", false],
+      ["/my-computers/:id", null, "/my-devices/:id", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],

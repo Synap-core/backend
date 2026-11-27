@@ -8,7 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import type { SurfaceAnchor } from "@synap-core/types/surfaces";
+import type { SurfaceAnchor, SurfaceSpec } from "@synap-core/types/surfaces";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
@@ -627,6 +627,11 @@ export const entityHandlers: McpHandlerMap = {
               ? { content: args.content }
               : {}),
             ...(typeof args.url === "string" ? { url: args.url } : {}),
+            // An html page's declared reads: the surface door checks them
+            // with the HTML page door's checks (they were dropped here).
+            ...(args.reads !== undefined
+              ? { reads: args.reads as SurfaceSpec["reads"] }
+              : {}),
             ...(requestedWorkspaceId
               ? { workspaceId: requestedWorkspaceId }
               : {}),

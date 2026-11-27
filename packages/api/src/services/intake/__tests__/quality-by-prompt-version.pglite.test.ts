@@ -85,9 +85,11 @@ import * as schema from "@synap/database/schema";
 import { diagnoseRouter } from "../../diagnose/index.js";
 import {
   detectPromptVersionRegressions,
+  gatherQualityByPromptVersion,
   MIN_DECIDED_PER_VERSION,
   type PromptVersionQuality,
 } from "../quality-by-prompt-version.js";
+import { reviewQueueApproval } from "../../diagnose/review-queue.js";
 import { notifyPromptVersionRegressions } from "../prompt-version-regression.js";
 
 const USER = "user-1";
@@ -289,6 +291,53 @@ describe("diagnose: quality_by_prompt_version", () => {
       },
     });
     expect(section!.detail.regressions).toEqual([]);
+  });
+
+  it("diagnose's two disposition reads carry only `dispositions`, never the whole payload", async () => {
+    // Both reads run on every Home open (diagnose.global) and feed ONE rule,
+    // `countRejectedDispositions`; on a live pod the rest of `data` was ~55 MB
+    // per call. The marker sits in the payload the rule never reads: it must
+    // not come back from the database, while the rule's answer stays the same.
+    const MARKER = "PAYLOAD-THE-RULE-NEVER-READS";
+    const v = await run({
+      owner: USER,
+      promptVersion: "structure:v1",
+      daysAgo: 1,
+    });
+    await proposal(v, "approved", {
+      data: {
+        dispositions: { a: { status: "approve" }, b: { status: "reject" } },
+        graph: { note: MARKER },
+      },
+    });
+    await proposal(v, "rejected", { data: { graph: { note: MARKER } } });
+
+    const returned: string[] = [];
+    const client = h.client!;
+    const original = client.query;
+    client.query = (async (...args: Parameters<typeof original>) => {
+      const result = await original.apply(client, args);
+      returned.push(JSON.stringify(result.rows));
+      return result;
+    }) as typeof original;
+    try {
+      const quality = await gatherQualityByPromptVersion({ userId: USER });
+      const queue = await reviewQueueApproval({ userId: USER });
+
+      expect(quality.groups[0]).toMatchObject({
+        itemsDenied: 1,
+        proposals: { partiallyApproved: 1, rejected: 1 },
+      });
+      expect(queue).toMatchObject({
+        reviewed: 2,
+        approvedWithItemsDenied: 1,
+        rejected: 1,
+      });
+    } finally {
+      client.query = original;
+    }
+    expect(returned.length).toBeGreaterThan(0);
+    expect(returned.filter((rows) => rows.includes(MARKER))).toEqual([]);
   });
 
   it("an unreadable signal is marked unavailable, never reported as no runs", async () => {

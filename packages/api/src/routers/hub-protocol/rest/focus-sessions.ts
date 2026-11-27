@@ -966,7 +966,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "lists pod-wide, except for a workspace-bound key, which reads its own " +
       "workspace when it names none (another `workspaceId` is a 403). Rows " +
       "are always floored at the sessions the caller can read. `offset` pages " +
-      "past `limit` (newest first, `id` breaks ties).",
+      "past `limit` (newest first, `id` breaks ties). With no `kind` (and no " +
+      "`automationId` or subject) it leaves out the sessions an automation " +
+      "opened; `kind=all` includes them.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -977,10 +979,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // human, `triage` returns only those. Rows carry `triage.pending`.
         lens: z.enum(["default", "triage", "all"]).optional(),
         // Population lens (`services/focus-sessions/session-kind.ts`).
-        // Default here is `all`, NOT the tRPC door's `work`: this is the
+        // Absent here = every kind EXCEPT the sessions an automation opened
+        // (decision 90897bca), NOT the tRPC door's `work`: this is the
         // agent-facing door, and an agent listing sessions wants its own
-        // write receipts and the runs it opened — exactly the rows a person's
-        // work surface hides. Rows carry `kind` under every value.
+        // write receipts and the playbook runs it opened — exactly the rows a
+        // person's work surface hides. `all` (or an `automationId`) brings the
+        // automation sessions back. Rows carry `kind` under every value.
         kind: z.enum([...SESSION_KINDS, "all"]).optional(),
         // FLOW-DEFINITION filters — the same two the tRPC door carries, so a
         // detail surface narrows in SQL rather than paging and filtering.
@@ -1051,8 +1055,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           .min(1)
           .max(WORK_GRAPH_MAX_WINDOW_HOURS)
           .optional(),
-        // Same vocabularies as the list. Absent = every kind but CLOSED
-        // automation runs; `all` keeps them.
+        // Same vocabularies as the list. Absent = every kind but the sessions
+        // an automation opened; `all` keeps them.
         kind: z.enum([...SESSION_KINDS, "all"]).optional(),
         lens: z.enum(["default", "triage", "all"]).optional(),
         trackId: uuidQueryParam.optional(),
@@ -1663,8 +1667,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       lensRaw === "default" || lensRaw === "triage" ? lensRaw : "all";
 
     // Population lens, same vocabulary as tRPC `focusSessions.list`, DIFFERENT
-    // default — see the OpenAPI note above.
-    const kindRaw = c.req.query("kind") ?? "all";
+    // default — see the OpenAPI note above. No kind named (and no automation
+    // or subject asked for) = no automation sessions (decision 90897bca).
+    const kindParam = c.req.query("kind");
+    const kindRaw = kindParam ?? "all";
     const kind = (SESSION_KINDS as readonly string[]).includes(kindRaw)
       ? (kindRaw as (typeof SESSION_KINDS)[number])
       : "all";
@@ -1700,6 +1706,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         kind,
         flow: { playbookId, automationId },
         subject,
+        // Asking for automations: a kind, an automation, or a subject (its
+        // workers' runs are automation-opened), as `synap_list_sessions`.
+        withoutAutomationSessions:
+          kindParam === undefined && !automationId && !subject,
       });
 
       const rows = await db
@@ -1782,7 +1792,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
     }
     // No `kind` named = the default window (`buildWorkGraph`): every kind
-    // but closed automation runs. `kind=all` keeps them.
+    // but the sessions an automation opened. `kind=all` keeps them.
     const kindParam = c.req.query("kind") || undefined;
     const kindRaw = kindParam ?? "all";
     if (

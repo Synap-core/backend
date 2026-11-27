@@ -181,6 +181,12 @@ export interface BuiltinVerbContext {
   governanceReason?: string | null;
   /** What a pod app asked (an intent action), for the approval screen. */
   intentRequest?: Record<string, unknown> | null;
+  /**
+   * The APPROVED proposal this run applies, when it is one (the executor's
+   * `provenance.proposalId`, `execute-capability.ts`). Read by a handler that
+   * keeps which approval made its write (`http.allow_host`); never a gate input.
+   */
+  proposalId?: string | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -2535,6 +2541,52 @@ const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * A builtin verb's parameter ALIASES, resolved at the capability door
+ * (`executeCapability`) before the gate, the parameter check and the
+ * handler: a call naming a value by another word is rewritten to the word
+ * the verb declares. The seeded declaration, a filed proposal and the
+ * handler then read one word, and a strict handler schema never meets the
+ * alias.
+ * - `computer.run_recipe` `device`: one of the person's computers named by
+ *   its device id (`computerFromDeviceArgs`), rewritten to `computer`.
+ */
+export async function resolveBuiltinParamAliases(
+  verb: string,
+  parameters: Record<string, unknown> | undefined,
+  ctx: { userId: string; agentUserId?: string | null }
+): Promise<
+  | { ok: true; parameters: Record<string, unknown> | undefined }
+  | { ok: false; error: string }
+> {
+  if (
+    verb !== "computer.run_recipe" ||
+    !parameters ||
+    !Object.hasOwn(parameters, "device")
+  )
+    return { ok: true, parameters };
+  const { device, ...rest } = parameters;
+  const [{ computerFromDeviceArgs }, { AccessContext }] = await Promise.all([
+    import("../fleet/devices.js"),
+    import("../../access/index.js"),
+  ]);
+  const named = await computerFromDeviceArgs(
+    AccessContext.agent({
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? null,
+    }),
+    { computer: rest.computer, device }
+  );
+  if (!named.ok) return named;
+  return {
+    ok: true,
+    parameters:
+      named.computer === undefined
+        ? rest
+        : { ...rest, computer: named.computer },
+  };
+}
+
+/**
  * Each refusal's failure class (the approval's recovery affordance): what is
  * missing on the person's computers, what is in a state that stops it now,
  * and what was asked wrong.
@@ -4690,7 +4742,14 @@ const httpAllowHostHandler: BuiltinVerbHandler = async (params, ctx) => {
       "validation"
     );
   }
-  return { status: "allowed", ...(await allowHost(host, ctx.userId)) };
+  // Kept with the host: why it was asked, and the approval that added it.
+  return {
+    status: "allowed",
+    ...(await allowHost(host, ctx.userId, {
+      reason: input.reason ?? null,
+      proposalId: ctx.proposalId ?? null,
+    })),
+  };
 };
 
 // ── Search the web ("web.search") ─────────────────────────────────────────────

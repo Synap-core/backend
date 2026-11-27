@@ -189,9 +189,14 @@ export async function reviewQueueApproval(params: {
     // `data` is fetched ONLY for human-decided rows — it exists solely to feed
     // `isPartiallyApprovedData`, and re-deriving that JSONB shape in SQL to
     // avoid the fetch would be the second copy of the rule this codebase keeps
-    // paying for.
+    // paying for. So the rule stays in JS, and the read carries ONLY the key
+    // it reads, in the stored shape (the whole `data` was ~15 MB for 2,000
+    // rows on a live pod, read on every Home open).
     db
-      .select({ status: proposals.status, data: proposals.data })
+      .select({
+        status: proposals.status,
+        data: drizzleSql<unknown>`jsonb_build_object('dispositions', ${proposals.data} -> 'dispositions')`,
+      })
       .from(proposals)
       .where(
         and(

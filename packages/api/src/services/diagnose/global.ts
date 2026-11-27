@@ -31,7 +31,7 @@ import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
-import { listRuns, listRunGroups } from "../runs/index.js";
+import { listRuns, listRecentlyFailingFlows } from "../runs/index.js";
 import {
   DEFAULT_STUCK_THRESHOLD_HOURS,
   RECENT_FAILURE_WINDOW_DAYS,
@@ -630,6 +630,34 @@ async function readCapabilityVerbPosture(
 }
 
 /**
+ * Each agent's pending count with its REAL cap, not the base constant.
+ *
+ * `agentProposalCap` applies the trust multiplier (a proven agent — >=100
+ * recent proposals at >=95% approve rate — earns 3x). Hardcoding
+ * `AGENT_PENDING_PROPOSAL_CAP` here made this door announce "1 agent(s) hit the
+ * daily proposal cap" for an agent sitting at 13/30, while `diagnose(agentId)`
+ * correctly reported `cap: 30, atOrOverCap: false` from the same numbers. A
+ * health door raising a FALSE alarm is worse than the silent drop this section
+ * previously had: it sends the user to investigate a block that is not
+ * happening. One resolver, both surfaces.
+ */
+function withAgentCaps(
+  rows: ReadonlyArray<{ agentId: string | null; pendingCount: number }>
+): Promise<GlobalSignals["agentActivity"]> {
+  return Promise.all(
+    rows
+      .filter((a): a is { agentId: string; pendingCount: number } =>
+        Boolean(a.agentId)
+      )
+      .map(async (a) => ({
+        agentId: a.agentId,
+        pendingCount: a.pendingCount,
+        cap: await agentProposalCap(a.agentId),
+      }))
+  );
+}
+
+/**
  * Run the whole-pod health checklist for `userId`. `workspaceId` narrows the
  * floor to one lens; `stuckThresholdHours` overrides the "stuck" boundary.
  */
@@ -645,19 +673,28 @@ export async function diagnoseGlobal(params: {
   const now = Date.now();
   const scope = workspaceId ? { workspaceId } : undefined;
 
-  // Fire the independent reads together.
+  // Fire the independent reads together: ONE wave. The agent caps depend only
+  // on the agent-count read, so they chain off it (`.then`) instead of holding
+  // every other signal behind a second await. Every read here is a plain query
+  // on the shared pool (no transaction, no session state), so running them
+  // side by side changes no result, only when each one starts.
   // Chat is included in listRuns only for status=running|failed (or
   // flowType=chat) so successful Discord pings never flood stuck/failed.
   const [
     runningRuns,
-    groups,
+    failingFlows,
     failedChatRuns,
     backlogRow,
     // Author-floored twin of `backlogRow` — see the comment on its query.
     mineBacklogRow,
     pendingRows,
     capabilitiesSignal,
-    agentRows,
+    agentActivity,
+    reviewQueue,
+    schemaContract,
+    qualityByPromptVersion,
+    schemaHygiene,
+    resources,
   ] = await Promise.all([
     // Stuck: running runs across flows (per-flow cap 100), aged client-side.
     // Includes chat turns still `running` past the threshold.
@@ -667,8 +704,10 @@ export async function diagnoseGlobal(params: {
       scope,
       limit: RUNNING_RUNS_LIMIT,
     }),
-    // Failed: per-flow failure counts (automation/playbook — already in-DB).
-    listRunGroups({ userId, scope, limit: 100 }),
+    // Failed: the flows (automation/playbook) that failed inside the window,
+    // counted in-DB. Only those: aggregating every run of every flow
+    // (`listRunGroups`) cost ~220 ms on 64k runs to keep a handful of rows.
+    listRecentlyFailingFlows({ userId, scope, limit: 100 }),
     // Failed chat turns (no flowId group) — B4: only failures, not successes.
     listRuns({ userId, flowType: "chat", status: "failed", scope, limit: 100 }),
     // Backlog: exact count + oldest age of pending proposals (user-floored).
@@ -767,7 +806,18 @@ export async function diagnoseGlobal(params: {
           eq(proposals.status, ProposalStatus.PENDING)
         )
       )
-      .groupBy(proposals.agentUserId),
+      .groupBy(proposals.agentUserId)
+      .then(withAgentCaps),
+    // The queue's own effectiveness, floored by `proposalUserFloor` (the
+    // queue's OWN builder), not by the bare workspace lens the backlog counts
+    // use: mixing the two floors into one query is how this file's counts
+    // disagreed with `orient` before.
+    reviewQueueApproval({ userId, workspaceId }),
+    gatherSchemaContractSignal({ userId, workspaceId }),
+    readQualityByPromptVersionSignal({ userId, workspaceId }),
+    gatherSchemaHygieneSignal({ userId, workspaceId }),
+    // Pod-wide by nature: the lens never narrows the host's resources.
+    gatherResourcesSignal({ userId }),
   ]);
 
   // ONE pass over the running set produces BOTH halves of the signal — the aged
@@ -792,9 +842,8 @@ export async function diagnoseGlobal(params: {
 
   // Windowed at the source (W2 calm): a flow is failing iff it failed in the
   // last RECENT_FAILURE_WINDOW_DAYS; `failedCount` here is that window's count.
-  const failedFlows: GlobalSignals["failedFlows"] = groups
-    .filter((g) => g.recentFailedCount > 0)
-    .map(failingFlowOfGroup);
+  const failedFlows: GlobalSignals["failedFlows"] =
+    failingFlows.map(failingFlowOfGroup);
   // Chat has no flowId group — surface failed chat as one synthetic "Chat" row,
   // windowed the same way.
   // The SAME cutoff rule the flow groupers apply in SQL (`isRecentFailure`).
@@ -847,51 +896,6 @@ export async function diagnoseGlobal(params: {
     .filter((c) => c.count > 1)
     .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))
     .sort((a, b) => b.count - a.count);
-
-  const agentActivityCounts = agentRows
-    .filter((a): a is { agentId: string; pendingCount: number } =>
-      Boolean(a.agentId)
-    )
-    .map((a) => ({ agentId: a.agentId, pendingCount: a.pendingCount }));
-
-  // Resolve the REAL cap per agent, not the base constant.
-  //
-  // `agentProposalCap` applies the trust multiplier (a proven agent —
-  // >=100 recent proposals at >=95% approve rate — earns 3x). Hardcoding
-  // `AGENT_PENDING_PROPOSAL_CAP` here made this door announce
-  // "1 agent(s) hit the daily proposal cap" for an agent sitting at 13/30,
-  // while `diagnose(agentId)` correctly reported `cap: 30, atOrOverCap: false`
-  // from the same numbers. A health door raising a FALSE alarm is worse than
-  // the silent drop this section previously had: it sends the user to
-  // investigate a block that is not happening. One resolver, both surfaces.
-  // The queue's own effectiveness. Its own read (two small aggregates) rather
-  // than a term in the big Promise.all above: it is floored by
-  // `proposalUserFloor`, the queue's OWN builder, not by the bare workspace
-  // lens the backlog counts use — mixing the two floors into one query is how
-  // this file's counts disagreed with `orient` before. Still independent of
-  // `agentActivity` (which depends on `agentRows` from the big Promise.all),
-  // so the two awaits run concurrently rather than round-tripping serially.
-  const [
-    agentActivity,
-    reviewQueue,
-    schemaContract,
-    qualityByPromptVersion,
-    schemaHygiene,
-    resources,
-  ] = await Promise.all([
-    Promise.all(
-      agentActivityCounts.map(async (a) => ({
-        ...a,
-        cap: await agentProposalCap(a.agentId),
-      }))
-    ),
-    reviewQueueApproval({ userId, workspaceId }),
-    gatherSchemaContractSignal({ userId, workspaceId }),
-    readQualityByPromptVersionSignal({ userId, workspaceId }),
-    gatherSchemaHygieneSignal({ userId, workspaceId }),
-    // Pod-wide by nature: the lens never narrows the host's resources.
-    gatherResourcesSignal({ userId }),
-  ]);
 
   return summarizeGlobalHealth(
     {

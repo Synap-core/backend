@@ -386,6 +386,16 @@ export const focusSessions = pgTable(
       .where(
         sql`one_live_per_subject AND status IN ('active', 'paused', 'forming', 'stale')`
       ),
+    // A person's sessions newest first without the automation rows (0462):
+    // the agent doors' default population (`notAutomationSessionWhere` in
+    // services/focus-sessions/session-kind.ts renders this exact predicate).
+    userStartedNotAutomationIdx: index(
+      "idx_focus_sessions_user_started_not_automation"
+    )
+      .on(table.userId, table.startedAt.desc(), table.id.desc())
+      .where(
+        sql`NOT coalesce((("origin" = 'automation' OR ("metadata" #>> '{automationRunId}' IS NOT NULL or "metadata" #>> '{automationId}' IS NOT NULL)) AND "metadata" #>> '{triage,acceptedAt}' IS NULL AND "status" <> 'scheduled' AND "metadata" #>> '{kind}' IS DISTINCT FROM 'agent-proposal-package'), false)`
+      ),
   })
 );
 

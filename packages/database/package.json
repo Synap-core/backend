@@ -76,6 +76,11 @@
       "types": "./dist/utils/property-key.d.ts",
       "import": "./dist/utils/property-key.js",
       "default": "./dist/utils/property-key.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/database-mock.d.ts",
+      "import": "./dist/testing/database-mock.js",
+      "default": "./dist/testing/database-mock.js"
     }
   },
   "files": [

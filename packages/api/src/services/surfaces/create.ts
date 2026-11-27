@@ -35,7 +35,7 @@ import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertCellBindable } from "../renderers/renderer-target-checks.js";
 import { materializeApprovedDocument } from "../proposals/materialize-approved-document.js";
-import { readDeclaredFrameIo } from "../cells/declared-frame-io.js";
+import { HTML_PAGE_MAX_BYTES, checkHtmlPage } from "@synap/database";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import {
   anchorWorkspaceId,
@@ -52,8 +52,8 @@ import {
 export type CreateOutcome =
   CreateSurfaceResult | SurfaceRefusal | SurfaceDenied;
 
-/** An HTML artifact's page: the same 2 MB cap `synap_create_document` holds. */
-export const HTML_SURFACE_MAX_BYTES = 2 * 1024 * 1024;
+/** An HTML artifact's page: the HTML page door's cap (`HTML_PAGE_MAX_BYTES`). */
+export const HTML_SURFACE_MAX_BYTES = HTML_PAGE_MAX_BYTES;
 const TITLE_MAX = 200;
 
 const refuse = (
@@ -69,14 +69,14 @@ export function surfaceTypeOf(body: CreatableSurfaceBody): SurfaceRef["type"] {
 }
 
 /**
- * An html page's declared reads, through the one parser of a framed
- * surface's declaration (`readDeclaredFrameIo`, the document and cell doors'
- * too). Absent or null: the page declares nothing.
+ * An html page through the HTML page door's checks (`checkHtmlPage`: the size
+ * cap and the declared reads), the same checks every html create door runs.
  */
-function declaredPageReads(spec: SurfaceSpec) {
-  return spec.reads === undefined || spec.reads === null
-    ? ({ ok: true } as const)
-    : readDeclaredFrameIo({ reads: spec.reads });
+function htmlPageCheck(spec: SurfaceSpec) {
+  return checkHtmlPage({
+    content: typeof spec.content === "string" ? spec.content : "",
+    reads: spec.reads,
+  });
 }
 
 /** One sentence naming what the spec lacks for its body, or null. */
@@ -103,12 +103,9 @@ export function surfaceSpecProblem(
       if (typeof spec.content !== "string" || !spec.content.trim()) {
         return "An HTML artifact needs spec.content (the page).";
       }
-      if (Buffer.byteLength(spec.content, "utf8") > HTML_SURFACE_MAX_BYTES) {
-        return "An HTML artifact is at most 2 MB.";
-      }
       {
-        const reads = declaredPageReads(spec);
-        return reads.ok ? null : `spec.reads: ${reads.error}`;
+        const page = htmlPageCheck(spec);
+        return page.ok ? null : `spec.${page.field}: ${page.error}`;
       }
     case "cell":
       return typeof spec.cellKey === "string" && spec.cellKey.trim()
@@ -401,11 +398,12 @@ async function makeBody(input: {
       }
       case "document":
       case "html": {
-        // Checked again at approval: the stored spec is what lands.
-        const reads =
-          body === "html" ? declaredPageReads(spec) : ({ ok: true } as const);
-        if (!reads.ok) {
-          return { ok: false, why: `spec.reads: ${reads.error}` };
+        // Checked again at approval: the stored spec is what lands (and the
+        // page door, `createHtmlPage`, checks once more as it writes).
+        const page =
+          body === "html" ? htmlPageCheck(spec) : ({ ok: true } as const);
+        if (!page.ok) {
+          return { ok: false, why: `spec.${page.field}: ${page.error}` };
         }
         await materializeApprovedDocument({
           documentId: id,
@@ -416,8 +414,8 @@ async function makeBody(input: {
           userId: owner,
           workspaceId,
           sourceProposalId: input.proposalId,
-          ...("reads" in reads && reads.reads
-            ? { metadata: { reads: reads.reads } }
+          ...("reads" in page && page.reads
+            ? { metadata: { reads: page.reads } }
             : {}),
         });
         return { ok: true };

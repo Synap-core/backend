@@ -28,7 +28,10 @@
  * (`GATED_ELSEWHERE`, whose own source must name a gate), a write only a
  * computer's own runner may make (`COMPUTER_RUNNER_WRITES`: a privileged
  * scope no grant carries, and a refusal of every principal that is not the
- * computer), a write that only FILES an ask its person decides
+ * computer), a write a computer's own key makes about itself only
+ * (`COMPUTER_SELF_WRITES`: a refusal of every principal that is not a
+ * computer, and a write naming only the resolved computer), a write that
+ * only FILES an ask its person decides
  * (`ASK_ONLY_WRITES`: its helper files a pending proposal and applies none of
  * what approving does), a write whose GRANT check sits deeper than one call
  * (`GRANT_CHECKED_DEEPER`: a call chain read from the code, ending in a check
@@ -222,9 +225,10 @@ const GATED_WRITE_ROUTES: Readonly<Record<string, Gate>> = {
   "POST /capture/draft-process": "assertWorkspaceWrite",
   // rest/commands.ts — running a command is a governed write.
   "POST /commands/execute": "checkPermissionOrPropose",
-  // rest/cell-instances.ts — create, create from HTML, reconfigure: governed.
+  // rest/cell-instances.ts — create, reconfigure: governed. (Create from HTML
+  // writes its page through the Hub document door, `documents.createDocument`,
+  // a gated tRPC mutation: classified `gated-trpc`.)
   "POST /cell-instances": "checkPermissionOrPropose",
-  "POST /cell-instances/html": "checkPermissionOrPropose",
   "PATCH /cell-instances/:id/config": "checkPermissionOrPropose",
 };
 
@@ -602,6 +606,34 @@ const COMPUTER_RUNNER_WRITES: Readonly<
 );
 
 /**
+ * Writes a computer's own key makes about ITSELF only: a computer reporting
+ * what it is, on its device row. No privileged scope (every computer key
+ * reports, "Installs from the pod" or not), so the bound is the caller and
+ * the target: the handler resolves its caller through `via`, whose source
+ * refuses every principal that is not a computer of its own person
+ * (`NOT_A_COMPUTER`: a person's, an agent's, an app's key, an agent hosted on
+ * the computer included) and reads `MACHINE_AGENT_TYPE`; the write then names
+ * only that computer (`write`, called with the resolved `machineUserId`, never
+ * a body field). Each row is checked below.
+ */
+const COMPUTER_SELF_WRITES: Readonly<
+  Record<
+    string,
+    {
+      via: string;
+      write: string;
+      load: () => Promise<Record<string, unknown>>;
+    }
+  >
+> = {
+  "POST /computers/me/report": {
+    via: "resolveComputerSelf",
+    write: "recordDeviceReport",
+    load: () => import("../routers/hub-protocol/rest/computer-report.js"),
+  },
+};
+
+/**
  * Writes that only FILE an ask its person decides (plan 647ebfd4 option C,
  * 16 Nov 2026). The handler calls `via`; `via` files a PENDING proposal
  * (`createPendingProposal`, never the gate ladder, which could answer
@@ -862,6 +894,7 @@ type NonGetClass =
   | "gated-trpc"
   | "gated-elsewhere"
   | "computer-runner"
+  | "computer-self"
   | "ask-only"
   | "grant-checked-deeper"
   | "person-session"
@@ -883,6 +916,8 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
     return "gated-elsewhere";
   const runner = COMPUTER_RUNNER_WRITES[`${r.method} ${r.path}`];
   if (runner && callOf(runner.via).test(r.source)) return "computer-runner";
+  const self = COMPUTER_SELF_WRITES[`${r.method} ${r.path}`];
+  if (self && callOf(self.via).test(r.source)) return "computer-self";
   const ask = ASK_ONLY_WRITES[`${r.method} ${r.path}`];
   if (ask && callOf(ask.via).test(r.source)) return "ask-only";
   const deeper = GRANT_CHECKED_DEEPER[`${r.method} ${r.path}`];
@@ -915,6 +950,9 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(count("computer-runner")).toBe(
       Object.keys(COMPUTER_RUNNER_WRITES).length
     );
+    expect(count("computer-self")).toBe(
+      Object.keys(COMPUTER_SELF_WRITES).length
+    );
     expect(count("ask-only")).toBe(Object.keys(ASK_ONLY_WRITES).length);
     expect(count("grant-checked-deeper")).toBe(
       Object.keys(GRANT_CHECKED_DEEPER).length
@@ -931,7 +969,8 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       "Name the write gate in the handler (checkPermissionOrPropose, canWrite, …), " +
         "call a `gated` hub tRPC mutation, add a GATED_ELSEWHERE row (its helper " +
         "must name a gate), a COMPUTER_RUNNER_WRITES row (a computer's own " +
-        "runner only), or declare the route a read in GRANT_REST_POST_READS " +
+        "runner only), a COMPUTER_SELF_WRITES row (a computer about " +
+        "itself), or declare the route a read in GRANT_REST_POST_READS " +
         "(access/grant-door-fence.ts). Never add it to the baseline."
     ).toEqual([]);
   });
@@ -963,6 +1002,34 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       const helper = (await row.load())[row.via];
       if (typeof helper !== "function" || !WRITE_GATE.test(String(helper)))
         broken.push(`${key}: ${row.via} names no write gate`);
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it("every COMPUTER_SELF_WRITES row is served, resolves the computer, and writes only it", async () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const [key, row] of Object.entries(COMPUTER_SELF_WRITES)) {
+      const r = byKey.get(key);
+      if (!r || !callOf(row.via).test(r.source)) {
+        broken.push(`${key}: handler does not call ${row.via}`);
+        continue;
+      }
+      // The write names the RESOLVED computer, never a body field.
+      if (
+        !new RegExp(
+          `\\b${row.write}\\)?\\s*\\(\\s*\\{\\s*machineUserId:\\s*who\\.machineUserId\\b`
+        ).test(r.source)
+      )
+        broken.push(
+          `${key}: ${row.write} is not called with the resolved computer`
+        );
+      const helper = (await row.load())[row.via];
+      const src = typeof helper === "function" ? String(helper) : "";
+      if (!src.includes('"NOT_A_COMPUTER"'))
+        broken.push(`${key}: ${row.via} refuses no principal (NOT_A_COMPUTER)`);
+      if (!/\bMACHINE_AGENT_TYPE\b/.test(src))
+        broken.push(`${key}: ${row.via} does not read the computer principal`);
     }
     expect(broken).toEqual([]);
   });

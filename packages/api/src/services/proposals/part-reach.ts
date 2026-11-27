@@ -14,7 +14,9 @@
  *     its code names in `callProvider(...)` (the runtime lets it call any of
  *     the person's connections, each call governed), a declarative verb's
  *     provider connection and fixed `baseUrlOverride` host, nothing for a
- *     builtin (it runs in the pod);
+ *     builtin (it runs in the pod) EXCEPT the built-ins that read outside
+ *     (`builtinStepReach`): `http.get_json` the host of the URL its step
+ *     writes out, `web.read` any public page (`ANY_PUBLIC_HOST`);
  *   - a `fetch` step / `webhook` output → its URL's host, when the URL is
  *     written out (not built from run data).
  * Anything it cannot read — a verb no skill answers for this viewer, a URL
@@ -39,6 +41,7 @@ import {
 } from "@synap/database";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
+  ANY_PUBLIC_HOST,
   isLikelyUUID,
   isCompositeProposalData,
   type ProposalPartReach,
@@ -51,6 +54,8 @@ import {
 
 /** The columns of a skill row that say where it reaches. */
 export interface SkillReachRow {
+  /** The verb it answers (a built-in's reach depends on which one). */
+  name?: unknown;
   kind?: unknown;
   metadata?: unknown;
   providerSpec?: unknown;
@@ -190,6 +195,63 @@ export function skillReach(row: SkillReachRow): ProposalPartReach | null {
   }
 }
 
+/**
+ * Where ONE step of a built-in verb reaches, read from the arguments it is
+ * given (`data.inputMapping`, what the automation step hands the verb). A
+ * built-in runs in the pod, so most reach nothing; two read outside it:
+ *   - `http.get_json`: the host of its `url` when written out (the run then
+ *     refuses it unless the host is on the pod's allow-list); a URL built
+ *     while it runs is counted as unread, never "nothing";
+ *   - `web.read`: any public page (`ANY_PUBLIC_HOST`), whatever its `url`.
+ * Shared by the review's reach and the allow-list's "what uses it"
+ * (`routers/gov-config.ts`), so the two never read a step differently.
+ */
+export function builtinStepReach(
+  verbId: string,
+  args: unknown
+): ProposalPartReach {
+  switch (verbId) {
+    case "http.get_json": {
+      const host = literalHost(bag(args)?.url);
+      return host
+        ? { hosts: [host], connections: [], unreadSteps: 0 }
+        : { hosts: [], connections: [], unreadSteps: 1 };
+    }
+    case "web.read":
+      return { hosts: [ANY_PUBLIC_HOST], connections: [], unreadSteps: 0 };
+    default:
+      return { hosts: [], connections: [], unreadSteps: 0 };
+  }
+}
+
+/** The verbs whose reach is read live, from pod state, for a catalog row. */
+export const LIVE_REACH_VERBS = ["http.get_json"] as const;
+
+/**
+ * Where each named verb can reach TODAY, read from the pod, for the
+ * catalog's row (`synap_list_capabilities`): `http.get_json` reaches the hosts
+ * on the pod's allow-list (`listAllowedHosts`), and only those. Verbs not in
+ * {@link LIVE_REACH_VERBS} are absent: not measured, never "nothing". Reads
+ * nothing when no such verb is named.
+ */
+export async function readLiveVerbReach(
+  names: Iterable<string>
+): Promise<Map<string, ProposalPartReach>> {
+  const out = new Map<string, ProposalPartReach>();
+  const wanted = new Set(names);
+  if (wanted.has("http.get_json")) {
+    // Lazy: the allow-list module pulls in the guarded fetch.
+    const { listAllowedHosts } =
+      await import("../capabilities/http-get-json.js");
+    out.set("http.get_json", {
+      hosts: await listAllowedHosts(),
+      connections: [],
+      unreadSteps: 0,
+    });
+  }
+  return out;
+}
+
 /** The action nodes of a stored flow. */
 function flowNodes(flow: unknown): Bag[] {
   const nodes = bag(flow)?.nodes;
@@ -201,6 +263,29 @@ function flowNodes(flow: unknown): Bag[] {
     : [];
 }
 
+/**
+ * The hosts an automation's `http.get_json` steps read (written-out URLs,
+ * `builtinStepReach`), and how many such steps build their URL while they
+ * run. The allow-list's "what uses it" (`govConfig.allowedHosts`).
+ */
+export function httpGetJsonFlowHosts(flow: unknown): {
+  hosts: string[];
+  unreadSteps: number;
+} {
+  const hosts = new Set<string>();
+  let unreadSteps = 0;
+  for (const node of flowNodes(flow)) {
+    const data = bag(node.data) ?? {};
+    if (node.type !== "capability" || str(data.verbId) !== "http.get_json") {
+      continue;
+    }
+    const reach = builtinStepReach("http.get_json", data.inputMapping);
+    reach.hosts.forEach((h) => hosts.add(h));
+    unreadSteps += reach.unreadSteps;
+  }
+  return { hosts: [...hosts].sort(), unreadSteps };
+}
+
 /** What an automation's flow can reach, step by step. */
 export function flowReach(
   flow: unknown,
@@ -209,12 +294,16 @@ export function flowReach(
   const hosts = new Set<string>();
   const connections = new Set<string>();
   let unreadSteps = 0;
-  const addSkill = (row: SkillReachRow | undefined) => {
+  const addSkill = (row: SkillReachRow | undefined, args: unknown) => {
     if (!row) {
       unreadSteps++;
       return;
     }
-    const reach = skillReach(row);
+    const name = str(row.name);
+    const reach =
+      row.kind === "builtin" && name
+        ? builtinStepReach(name, args)
+        : skillReach(row);
     reach?.hosts.forEach((h) => hosts.add(h));
     reach?.connections.forEach((c) => connections.add(c));
     unreadSteps += reach?.unreadSteps ?? 0;
@@ -229,12 +318,12 @@ export function flowReach(
     switch (node.type) {
       case "capability": {
         const verbId = str(data.verbId);
-        addSkill(verbId ? lookup.byVerb(verbId) : undefined);
+        addSkill(verbId ? lookup.byVerb(verbId) : undefined, data.inputMapping);
         break;
       }
       case "skill": {
         const skillId = str(data.skillId);
-        addSkill(skillId ? lookup.byId(skillId) : undefined);
+        addSkill(skillId ? lookup.byId(skillId) : undefined, data.inputMapping);
         break;
       }
       case "fetch":
