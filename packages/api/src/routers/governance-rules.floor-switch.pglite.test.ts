@@ -227,6 +227,28 @@ describe("the governance numbers, through their door", () => {
 });
 
 describe("the platform floors name the switch that lifts them", () => {
+  it("the structure floor is split: the switch lifts exactly its writes, the rest names no switch", async () => {
+    const { alwaysPropose } = await caller(ALICE).platformDefaults();
+    const builds = alwaysPropose.find((e) => e.key === "agent-builds-structure");
+    expect(builds?.switchedBy).toBe("@agent-builds-structure");
+    expect([...(builds?.actions ?? [])].sort()).toEqual(
+      [...AGENT_BUILDS_STRUCTURE_EVENT_KEYS].sort()
+    );
+    const rest = alwaysPropose.find((e) => e.key === "agent-structure");
+    expect(rest?.switchedBy).toBeUndefined();
+    expect(rest?.actions).toEqual(
+      expect.arrayContaining([
+        "playbook.update",
+        "automation.update",
+        "cell.create",
+        "profile.renderer.set",
+      ])
+    );
+    for (const action of rest?.actions ?? []) {
+      expect(AGENT_BUILDS_STRUCTURE_EVENT_KEYS, action).not.toContain(action);
+    }
+  });
+
   it("every switchable write sits in an entry its switch lifts; the rest name none", async () => {
     const { alwaysPropose } = await caller(ALICE).platformDefaults();
     for (const entry of alwaysPropose) {
