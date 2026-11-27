@@ -94,7 +94,7 @@ describe("tool profiles", () => {
         (t) => t.name
       )
     ).toEqual(["synap_ask"]);
-    expect(filterToolsForAccess(defs, { profile: null, groups: [] })).toBe(
+    expect(filterToolsForAccess(defs, { profile: null, groups: [] })).toEqual(
       defs
     );
   });

@@ -1412,8 +1412,6 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_entity",
       group: "data",
-      hidden:
-        "A data door of synap_capture (entities[]); kept callable for the frozen connector name pod__create_entity.",
       teaches: ["entity.create", "create_entity"],
       annotations: {
         title: "Create entity",
@@ -1667,8 +1665,6 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_document",
       group: "data",
-      hidden:
-        "A data door of synap_capture (documents[]); kept callable for the frozen connector name pod__create_document.",
       teaches: ["document.create", "create_document"],
       annotations: {
         title: "Create document",

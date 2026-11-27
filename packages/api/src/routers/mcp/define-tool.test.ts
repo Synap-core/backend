@@ -122,17 +122,20 @@ describe("what is derived from the definitions", () => {
     ).toBe(true);
   });
 
-  it("the frozen connector names still answer, unlisted (run_playbook, start_stage_session, create_entity, create_document, list_widgets)", () => {
+  it("the frozen connector names still answer, unlisted (run_playbook, start_stage_session, list_widgets); the data create doors stay listed in their group", () => {
     const unlisted = unlistedToolNames();
     for (const name of [
       "synap_run_playbook",
       "synap_start_stage_session",
-      "synap_create_entity",
-      "synap_create_document",
       "synap_list_widgets",
     ]) {
       expect(unlisted.has(name), name).toBe(true);
       expect(toolDefinition(name), name).toBeDefined();
+    }
+    for (const name of ["synap_create_entity", "synap_create_document"]) {
+      expect(unlisted.has(name), name).toBe(false);
+      expect(toolGroupMembers().data, name).toContain(name);
+      expect(entryToolNames(), name).not.toContain(name);
     }
   });
 
