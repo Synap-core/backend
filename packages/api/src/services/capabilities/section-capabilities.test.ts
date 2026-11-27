@@ -364,3 +364,35 @@ describe("sectionCapabilities", () => {
     expect(shown + out.excluded.teachingDocs).toBe(caps.length);
   });
 });
+
+describe("a skill row's live reach (`liveReach`)", () => {
+  it("is stamped on the row it names, after the dedupe, and nowhere else", () => {
+    const reach = {
+      hosts: ["geo.api.gouv.fr"],
+      connections: [],
+      unreadSteps: 0,
+    };
+    const out = sectionCapabilities(
+      [
+        // Two copies of one verb fold into one row: the stamp lands once.
+        cap({ kind: "skill", name: "http.get_json", id: "s1", enabled: true }),
+        cap({ kind: "skill", name: "http.get_json", id: "s2", enabled: true }),
+        cap({ kind: "skill", name: "web.search", id: "s3", enabled: true }),
+      ],
+      { liveReach: new Map([["http.get_json", reach]]) }
+    );
+    expect(out.skills.find((s) => s.name === "http.get_json")?.reach).toEqual(
+      reach
+    );
+    expect(out.skills.find((s) => s.name === "web.search")).not.toHaveProperty(
+      "reach"
+    );
+  });
+
+  it("is absent when no live reach is handed in (an unmeasured row draws nothing)", () => {
+    const out = sectionCapabilities([
+      cap({ kind: "skill", name: "http.get_json", id: "s1", enabled: true }),
+    ]);
+    expect(out.skills[0]).not.toHaveProperty("reach");
+  });
+});

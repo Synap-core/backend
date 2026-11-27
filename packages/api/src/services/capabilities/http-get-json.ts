@@ -27,11 +27,24 @@
  * Synap Core's and pod-wide). It is written ONLY by `allowHost`, which the
  * `http.allow_host` verb calls; that verb declares `proposeOnly`, so an
  * agent's run is always a proposal the person approves, and its handler asks
- * for a pod admin. A pod admin removes a host with `govConfig.revoke`
- * (`store: "config_settings"`, the row id).
+ * for a pod admin. Each row keeps WHY (`reason`) and, when an approval added
+ * it, WHICH (`proposalId`, and `source: proposal:<id>` like every other
+ * config write an approval makes). Pod members read the list with
+ * `govConfig.allowedHosts`; a pod admin adds a host with `govConfig.allowHost`
+ * (which runs `http.allow_host`) and removes one with `govConfig.revoke`
+ * (`store: "config_settings"`, the row id), all on pod admin's
+ * Security › Network page (`HTTP_ALLOWED_HOSTS_ADMIN_PATH`).
  */
 
-import { db, and, eq, isNull, configSettings } from "@synap/database";
+import {
+  db,
+  and,
+  asc,
+  eq,
+  isNull,
+  configSettings,
+  users,
+} from "@synap/database";
 import {
   safePublicFetch,
   validateExternalUrl,
@@ -45,6 +58,9 @@ import {
 
 /** The `config_settings.key` of one allowed host (value `{ host }`). */
 export const HTTP_ALLOWED_HOST_KEY = "http.get_json.allowed_host";
+
+/** Where a person manages the list: pod admin's Security › Network tab. */
+export const HTTP_ALLOWED_HOSTS_ADMIN_PATH = "/security?section=network";
 
 /** A body past this is refused, never read whole. */
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -98,29 +114,125 @@ export async function listAllowedHosts(): Promise<string[]> {
   return [...hosts].sort();
 }
 
+/** One allowed host, as the list's page shows it. */
+export interface AllowedHostRow {
+  /** The `config_settings` row id: what `govConfig.revoke` takes. */
+  id: string;
+  host: string;
+  /** Who added it (the person who approved, for an agent's ask). */
+  addedBy: { id: string; name: string } | null;
+  addedAt: Date;
+  /** Why it is needed, as asked; null when nobody said. */
+  reason: string | null;
+  /** The approval that added it; null for a pod admin's own add. */
+  proposalId: string | null;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The live allow-list rows with who added each, when, why and through which
+ * approval, sorted by host. The first row of a host is the one shown (an
+ * older pod may hold a duplicate).
+ */
+export async function listAllowedHostRows(): Promise<AllowedHostRow[]> {
+  const rows = await db
+    .select({
+      id: configSettings.id,
+      value: configSettings.value,
+      createdAt: configSettings.createdAt,
+      createdBy: configSettings.createdBy,
+      userName: users.name,
+      userEmail: users.email,
+    })
+    .from(configSettings)
+    .leftJoin(users, eq(users.id, configSettings.createdBy))
+    .where(
+      and(
+        eq(configSettings.key, HTTP_ALLOWED_HOST_KEY),
+        isNull(configSettings.revokedAt),
+        isNull(configSettings.workspaceId)
+      )
+    )
+    .orderBy(asc(configSettings.createdAt));
+  const byHost = new Map<string, AllowedHostRow>();
+  for (const r of rows) {
+    const value = (r.value ?? {}) as Record<string, unknown>;
+    const host = text(value.host);
+    if (!host || byHost.has(host)) continue;
+    const name = text(r.userName) ?? text(r.userEmail);
+    byHost.set(host, {
+      id: r.id,
+      host,
+      addedBy: r.createdBy && name ? { id: r.createdBy, name } : null,
+      addedAt: r.createdAt,
+      reason: text(value.reason),
+      proposalId: text(value.proposalId),
+    });
+  }
+  return [...byHost.values()].sort((a, b) => a.host.localeCompare(b.host));
+}
+
 /**
  * Add a host to the pod's allow-list. The caller decided who may: the
  * `http.allow_host` handler (a pod admin's own run, or a person's approval of
- * an agent's proposal). Idempotent.
+ * an agent's proposal). `reason` is kept with the host; `proposalId`, when an
+ * approval added it, too, and stamps `source: proposal:<id>` (the stamp every
+ * config write an approval makes, `services/proposals/gov-config.ts`).
+ * Idempotent.
  */
 export async function allowHost(
   host: string,
-  createdBy: string
+  createdBy: string,
+  opts: { reason?: string | null; proposalId?: string | null } = {}
 ): Promise<{ host: string; alreadyAllowed: boolean }> {
   if ((await listAllowedHosts()).includes(host)) {
     return { host, alreadyAllowed: true };
   }
+  const reason = text(opts.reason);
+  const proposalId = text(opts.proposalId);
   await db.insert(configSettings).values({
     key: HTTP_ALLOWED_HOST_KEY,
-    value: { host },
+    value: {
+      host,
+      ...(reason ? { reason } : {}),
+      ...(proposalId ? { proposalId } : {}),
+    },
     scopeKind: "default",
     scopeRef: null,
     capabilityId: null,
     workspaceId: null,
-    source: "user",
+    source: proposalId ? `proposal:${proposalId}` : "user",
     createdBy,
   });
   return { host, alreadyAllowed: false };
+}
+
+/**
+ * A PERSON adds a host (pod admin's Security › Network, `govConfig.allowHost`):
+ * RUNS the verb `http.allow_host` as them through the run door
+ * (`executeCapability`), so the verb's own checks hold (a pod admin, a public
+ * host name, normalised) and the add is governed like any other run. One
+ * fixed verb with two arguments: the caller is not a door of the generic run
+ * contract, it maps the outcome to its own answer.
+ */
+export async function runAllowHostAsPerson(input: {
+  host: string;
+  reason?: string;
+  userId: string;
+}) {
+  const { executeCapability } = await import("./execute-capability.js");
+  return executeCapability({
+    verbId: "http.allow_host",
+    parameters: {
+      host: input.host,
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+    workspaceId: null,
+    userId: input.userId,
+  });
 }
 
 /** The sentence an agent reads when a host is not on the list. */
@@ -128,7 +240,8 @@ export function hostNotAllowedMessage(host: string): string {
   return (
     `${host} is not on this pod's list of hosts http.get_json may read. ` +
     `To ask for it, run http.allow_host with { host: "${host}" }: that files a proposal the person approves. ` +
-    "An agent never adds a host itself."
+    "An agent never adds a host itself. " +
+    `A pod admin manages the list in pod admin, Security › Network (${HTTP_ALLOWED_HOSTS_ADMIN_PATH}).`
   );
 }
 
