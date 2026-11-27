@@ -681,7 +681,7 @@ export function registerEntityExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(entities.id, entityId));
-      // The look is the entity's `detail` attachment (Surfaces P3), written
+      // The look is the entity's `detail` attachment, written
       // as the proposal's owner; the field above is its mirror.
       const { replaceDetailCellLook } =
         await import("../../../services/surfaces/attach.js");

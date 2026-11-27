@@ -203,7 +203,7 @@ const SURFACES_FIND = READS(
   "share"
 );
 /**
- * The surface inspect (`inspectSurface`, Surfaces P7): Hub
+ * The surface inspect (`inspectSurface`): Hub
  * `GET /surfaces/inspect` and MCP `synap_inspect_surface` share it. The view,
  * the page and the cell instance are read through `scopedDb`; the cell type
  * (`widget_definitions`) and the frame read log are read outside the seams
@@ -1695,7 +1695,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
-    // Surfaces P3: the governed create / attach / detach (`surface/*` gate).
+    // The governed surface create / attach / detach (`surface/*` gate).
     synap_create_surface: WRITE,
     synap_attach_surface: WRITE,
     // Files ONE composite proposal through the governed pending lane; it never

@@ -118,7 +118,7 @@ Stop at the first rung that serves the intent. A funnel, a stat, a list, a chart
 
 An HTML artifact is a designed page or deck to present, explain, pitch or share outside the pod.
 
-- **Create**: `synap_create_document` with `type: "html"`, a `title` and `content`, a whole self-contained page (inline every script, style, font and image; no CDN; at most 2 MB, a bigger page shows as source only). Pass `attachTo: {kind, id}` to make it for one object (the deal, the project), or `synap_create_surface` with `body: "html"`. The receipt's `warnings` name what will not run.
+- **Create**: `synap_create_document` with `type: "html"`, a `title` and `content`, a whole self-contained page (inline every script, style, font and image; no CDN; at most 2 MB: a bigger page is refused and nothing is written). Pass `attachTo: {kind, id}` to make it for one object (the deal, the project), or `synap_create_surface` with `body: "html"`. The receipt's `warnings` name what will not run.
 - **Never an entity's body**: a body is read as markdown, so `entityId` is refused for html. Attach it instead.
 - **Edit**: replace the page with `synap_update_document` (read it first for its `revision`). An edit is a proposal; readers see the new page once it is approved.
 - **Data**: read-only, through `window.synap.query(op, params)` on the ops you declared in `reads` (`[{op, params?}]`, `"*"` = any value of that param); every other read is refused. The page's context (anchor, space, project, goal, filters, brand, locale, theme) comes from `window.synap.context()`. Open an object with `window.synap.open(kind, id)` from a click. Never fetch the pod yourself, never write.
@@ -482,13 +482,17 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
     <p id="root"></p>
     <script>
       SynapWidget.onInit(async ({ context }) => {
-        const items = await SynapWidget.query("entities.list", {
-          profileSlug: "deal",
-          limit: 200,
-        }).catch(() => []);
-
-        document.getElementById("root").textContent =
-          `Loaded ${(items ?? []).length} deals`;
+        const root = document.getElementById("root");
+        try {
+          const items = await SynapWidget.query("entities.list", {
+            profileSlug: "deal",
+            limit: 200,
+          });
+          root.textContent = `Loaded ${items.length} deals`;
+        } catch (err) {
+          // A failed read is not an empty one: say so, never "0 deals".
+          root.textContent = `Could not load deals: ${err.message}`;
+        }
 
         SynapWidget.resize(document.body.scrollHeight);
       });
@@ -501,7 +505,7 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
 
 - **Always call `SynapWidget.onInit()`** — the host will not send data until you register this handler.
 - **Call `SynapWidget.resize()`** after rendering to prevent clipping.
-- **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
+- **Show a failed read as a failure** — `query()` and `mutate()` can fail: catch the error and render it. Never turn a failure into an empty list (`.catch(() => [])`): "0 deals" would be a lie.
 - **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
 - **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.

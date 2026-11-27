@@ -18,7 +18,7 @@ import {
 import { readPatchDocumentContent } from "./apply-document-patch.js";
 
 /** A page larger than this is not parsed for its manifest (the frame cap is 2 MB). */
-export const HTML_BLOCK_MANIFEST_MAX_CHARS = 2_000_000;
+const HTML_BLOCK_MANIFEST_MAX_CHARS = 2_000_000;
 
 /** `documents.metadata.blocks`. */
 export interface StoredHtmlBlockManifest {
@@ -28,7 +28,7 @@ export interface StoredHtmlBlockManifest {
 }
 
 /** The stamped manifest when it describes `revision` under the current extractor; else null. */
-export function readStoredHtmlBlocks(
+function readStoredHtmlBlocks(
   metadata: unknown,
   revision: number
 ): HtmlBlock[] | null {

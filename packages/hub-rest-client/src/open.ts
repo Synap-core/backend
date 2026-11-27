@@ -3,7 +3,7 @@
  *
  * HTTPS (canonical, type-probed by GET /open/:id):
  *   `{pod}/open/<id>`
- * HTTPS, one surface ATTACHED to an object (Surfaces P3): the object's page,
+ * HTTPS, one surface ATTACHED to an object: the object's page,
  * opened on that surface:
  *   `{pod}/open/<kind>/<id>?surface=<surfaceId>`
  *

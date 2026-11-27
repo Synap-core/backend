@@ -1,5 +1,5 @@
 /**
- * THE HTML PAGE DOOR (founder decision, 27 Nov 2026, session 53d7cbed): every
+ * THE HTML PAGE DOOR: every
  * HTML page Synap stores is written here, whoever asks for it — a document
  * (`synap_create_document {type: "html"}`, Hub `POST /documents`, the app's
  * `documents.create` / `upload`), an HTML surface (`synap_create_surface`

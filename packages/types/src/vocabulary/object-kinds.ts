@@ -884,7 +884,7 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   step: "stage",
   track_stage: "stage",
   // A placed cell's row (`cell_instances`), the surface end of an `attaches`
-  // link (Surfaces P3): the same kind as a cell.
+  // link: the same kind as a cell.
   cell_instance: "cell",
   cell_instances: "cell",
   // A device of kind `computer` (`DEVICE_KINDS`) is what the registry calls a

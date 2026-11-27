@@ -145,7 +145,7 @@ export const cellInstancesRouter = router({
   /**
    * Create an HTML cell: a person's page, placed as a cell.
    *
-   * ONE HTML write door (founder decision, 27 Nov 2026): the page is written
+   * ONE HTML write door: the page is written
    * by the HTML page door (`createHtmlPage`: the same checks and stored shape
    * as every html document, `type: "html"`, its reads on `metadata.reads`),
    * and the html-embed cell is only a placement pointing at it. A person's
@@ -451,10 +451,9 @@ export const cellInstancesRouter = router({
         userId
       );
       // The cell is ATTACHED to the entity (links `attaches`, the one store
-      // of an object's surfaces since the founder decision of 23 Nov 2026):
-      // the same edge the `cell-relation` conversion folds the old relations
-      // into, written here so this door keeps both stores in step. Same gate
-      // as the relation above (the person's own write).
+      // of an object's surfaces): the relation above is the typed graph edge
+      // the person drew, never read as a surface. Same gate as the relation
+      // above (the person's own write).
       const { insertAttachment } =
         await import("../services/surfaces/attach.js");
       await insertAttachment({

@@ -99,7 +99,7 @@ async function assertViewConfigPlaceable(
 
 export const hubViewsRouter = router({
   /**
-   * List the views the caller can SEE (Surfaces P1): the same floor as the
+   * List the views the caller can SEE: the same floor as the
    * operator `views.list` (`viewReadableWhere`: a workspace view by
    * membership, a pod-personal view by its owner, a view exposed to one of
    * the caller's projects), not only the views they created — an owner-only
@@ -189,7 +189,7 @@ export const hubViewsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       // An agent door never stamps the metadata that anchors a view (a home,
-      // a scoped board, a session's board, an entity's bento): Surfaces P3.
+      // a scoped board, a session's board, an entity's bento).
       const anchorProblem = viewAnchorMetadataProblem(input.metadata);
       if (anchorProblem) {
         throw new TRPCError({ code: "BAD_REQUEST", message: anchorProblem });

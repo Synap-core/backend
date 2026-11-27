@@ -2,7 +2,7 @@
 
 An HTML artifact is a designed page or deck to present, explain, pitch or share outside the pod.
 
-- **Create**: `synap_create_document` with `type: "html"`, a `title` and `content`, a whole self-contained page (inline every script, style, font and image; no CDN; at most 2 MB, a bigger page shows as source only). Pass `attachTo: {kind, id}` to make it for one object (the deal, the project), or `synap_create_surface` with `body: "html"`. The receipt's `warnings` name what will not run.
+- **Create**: `synap_create_document` with `type: "html"`, a `title` and `content`, a whole self-contained page (inline every script, style, font and image; no CDN; at most 2 MB: a bigger page is refused and nothing is written). Pass `attachTo: {kind, id}` to make it for one object (the deal, the project), or `synap_create_surface` with `body: "html"`. The receipt's `warnings` name what will not run.
 - **Never an entity's body**: a body is read as markdown, so `entityId` is refused for html. Attach it instead.
 - **Edit**: replace the page with `synap_update_document` (read it first for its `revision`). An edit is a proposal; readers see the new page once it is approved.
 - **Data**: read-only, through `window.synap.query(op, params)` on the ops you declared in `reads` (`[{op, params?}]`, `"*"` = any value of that param); every other read is refused. The page's context (anchor, space, project, goal, filters, brand, locale, theme) comes from `window.synap.context()`. Open an object with `window.synap.open(kind, id)` from a click. Never fetch the pod yourself, never write.

@@ -29,6 +29,7 @@
  * to a shared deal does not see that row.
  */
 
+import { randomUUID } from "node:crypto";
 import { db, and, eq, inArray } from "@synap/database";
 import {
   cellInstances,
@@ -70,7 +71,7 @@ import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 
 const logger = createLogger({ module: "surfaces-attach" });
 
-export const ATTACHES_LINK_TYPE = "attaches" as const;
+const ATTACHES_LINK_TYPE = "attaches" as const;
 
 /** Who acts, and how the write is attributed. */
 export interface SurfaceActor {
@@ -107,7 +108,7 @@ const refuse = (
 
 // ── Shape checks ───────────────────────────────────────────────────────────
 
-export function isAnchorKind(kind: unknown): kind is AnchorKind {
+function isAnchorKind(kind: unknown): kind is AnchorKind {
   return (
     typeof kind === "string" &&
     (ANCHOR_KINDS as readonly string[]).includes(kind)
@@ -288,52 +289,71 @@ export function attachedSurfaceOpenUrl(
 
 // ── The store write ────────────────────────────────────────────────────────
 
-const edgeWhere = (anchor: SurfaceAnchor, surface: SurfaceRef) =>
+type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** A link event, emitted once the write that made it has committed. */
+type LinkEvent = Parameters<typeof recordLinkMutation>;
+
+function emit(events: LinkEvent[]): void {
+  for (const e of events) recordLinkMutation(...e);
+}
+
+const anchorEdges = (anchor: SurfaceAnchor) =>
   and(
     eq(links.fromType, anchor.kind),
     eq(links.fromId, anchor.id),
-    eq(links.toType, surface.type),
-    eq(links.toId, surface.id),
     eq(links.linkType, ATTACHES_LINK_TYPE)
   );
 
-/** After the object's last attached surface. */
-async function nextPosition(anchor: SurfaceAnchor): Promise<number> {
-  const [row] = await db
-    .select({
-      n: drizzleSql<number>`count(*)::int`,
-    })
+const edgeWhere = (anchor: SurfaceAnchor, surface: SurfaceRef) =>
+  and(
+    anchorEdges(anchor),
+    eq(links.toType, surface.type),
+    eq(links.toId, surface.id)
+  );
+
+/** An edge's position as a number; a value that is not one sorts last. */
+const POSITION = drizzleSql<number>`case when ${links.metadata}->>'position' ~ '^[0-9]+$' then (${links.metadata}->>'position')::int end`;
+
+/**
+ * After the object's last attached surface: one past the highest position.
+ * Read under a lock on the anchor, held until the caller's transaction ends,
+ * so two attaches to one object never take the same position.
+ */
+async function nextPosition(
+  tx: DbOrTx,
+  anchor: SurfaceAnchor
+): Promise<number> {
+  await tx.execute(
+    drizzleSql`select pg_advisory_xact_lock(hashtext(${`attaches|${anchor.kind}|${anchor.id}`}))`
+  );
+  const [row] = await tx
+    .select({ n: drizzleSql<number>`coalesce(max(${POSITION}) + 1, 0)` })
     .from(links)
-    .where(
-      and(
-        eq(links.fromType, anchor.kind),
-        eq(links.fromId, anchor.id),
-        eq(links.linkType, ATTACHES_LINK_TYPE)
-      )
-    );
+    .where(anchorEdges(anchor));
   return Number(row?.n ?? 0);
 }
 
-/**
- * THE store write of an attachment. Callers have ALREADY floored both ends and
- * passed the gate (this does no authorization). Idempotent on the unique
- * edge: an existing attachment is reported, never duplicated, its metadata
- * left as it is.
- */
-export async function insertAttachment(input: {
+interface AttachmentWrite {
   anchor: SurfaceAnchor;
   surface: SurfaceRef;
   workspaceId: string | null;
   createdBy: string;
   meta: { slot?: string | null; label?: string | null; position?: number };
   attribution?: { agentUserId?: string | null; proposalId?: string | null };
-}): Promise<{ linkId: string; inserted: boolean }> {
+}
+
+/** The edge write on `tx`; its event is returned, not emitted. */
+async function writeAttachment(
+  tx: DbOrTx,
+  input: AttachmentWrite
+): Promise<{ linkId: string; inserted: boolean; events: LinkEvent[] }> {
   const metadata: AttachmentMeta = {
-    position: input.meta.position ?? (await nextPosition(input.anchor)),
+    position: input.meta.position ?? (await nextPosition(tx, input.anchor)),
     ...(input.meta.slot ? { slot: input.meta.slot } : {}),
     ...(input.meta.label?.trim() ? { label: input.meta.label.trim() } : {}),
   };
-  const [created] = await db
+  const [created] = await tx
     .insert(links)
     .values({
       workspaceId: input.workspaceId,
@@ -357,42 +377,84 @@ export async function insertAttachment(input: {
     })
     .returning({ id: links.id });
   if (created) {
-    recordLinkMutation(
-      "create",
-      {
-        id: created.id,
-        workspaceId: input.workspaceId,
-        fromType: input.anchor.kind,
-        fromId: input.anchor.id,
-        toType: input.surface.type,
-        toId: input.surface.id,
-        linkType: ATTACHES_LINK_TYPE,
-      },
-      input.createdBy,
-      input.attribution ?? {}
-    );
-    return { linkId: created.id, inserted: true };
+    return {
+      linkId: created.id,
+      inserted: true,
+      events: [
+        [
+          "create",
+          {
+            id: created.id,
+            workspaceId: input.workspaceId,
+            fromType: input.anchor.kind,
+            fromId: input.anchor.id,
+            toType: input.surface.type,
+            toId: input.surface.id,
+            linkType: ATTACHES_LINK_TYPE,
+          },
+          input.createdBy,
+          input.attribution ?? {},
+        ],
+      ],
+    };
   }
-  const [existing] = await db
+  const [existing] = await tx
     .select({ id: links.id })
     .from(links)
     .where(edgeWhere(input.anchor, input.surface))
     .limit(1);
-  return { linkId: existing!.id, inserted: false };
+  return { linkId: existing!.id, inserted: false, events: [] };
 }
 
-async function deleteAttachment(input: {
-  anchor: SurfaceAnchor;
-  surface: SurfaceRef;
-  userId: string;
-  attribution?: { agentUserId?: string | null; proposalId?: string | null };
-}): Promise<number> {
-  const removed = await db
+/**
+ * THE store write of an attachment. Callers have ALREADY floored both ends and
+ * passed the gate (this does no authorization). Idempotent on the unique
+ * edge: an existing attachment is reported, never duplicated, its metadata
+ * left as it is.
+ */
+export async function insertAttachment(
+  input: AttachmentWrite
+): Promise<{ linkId: string; inserted: boolean }> {
+  const written = await db.transaction((tx) => writeAttachment(tx, input));
+  emit(written.events);
+  return { linkId: written.linkId, inserted: written.inserted };
+}
+
+/**
+ * Take one edge off, on `tx`. An entity's bento is also mirrored in
+ * `entities.system_data.bentoViewId` (the renderer ladder of hosts that do not
+ * read attachments yet): the mirror naming this view goes with it, so a
+ * detached bento is drawn and listed nowhere.
+ */
+async function removeAttachment(
+  tx: DbOrTx,
+  input: {
+    anchor: SurfaceAnchor;
+    surface: SurfaceRef;
+    userId: string;
+    attribution?: { agentUserId?: string | null; proposalId?: string | null };
+  }
+): Promise<{ removed: number; events: LinkEvent[] }> {
+  const removed = await tx
     .delete(links)
     .where(edgeWhere(input.anchor, input.surface))
     .returning({ id: links.id, workspaceId: links.workspaceId });
-  for (const row of removed) {
-    recordLinkMutation(
+  if (input.anchor.kind === "entity" && input.surface.type === "view") {
+    await tx
+      .update(entities)
+      .set({
+        systemData: drizzleSql`(coalesce(${entities.systemData}, '{}'::jsonb) - 'bentoViewId') || case when ${entities.systemData}->>'viewMode' = 'bento' then '{"viewMode":"document"}'::jsonb else '{}'::jsonb end`,
+      })
+      .where(
+        and(
+          eq(entities.id, input.anchor.id),
+          drizzleSql`${entities.systemData}->>'bentoViewId' = ${input.surface.id}`
+        )
+      );
+  }
+  return {
+    removed: removed.length,
+    events: removed.map((row): LinkEvent => [
       "delete",
       {
         id: row.id,
@@ -404,10 +466,17 @@ async function deleteAttachment(input: {
         linkType: ATTACHES_LINK_TYPE,
       },
       input.userId,
-      input.attribution ?? {}
-    );
-  }
-  return removed.length;
+      input.attribution ?? {},
+    ]),
+  };
+}
+
+async function deleteAttachment(
+  input: Parameters<typeof removeAttachment>[1]
+): Promise<number> {
+  const out = await db.transaction((tx) => removeAttachment(tx, input));
+  emit(out.events);
+  return out.removed;
 }
 
 // ── The governed doors ────────────────────────────────────────────────────
@@ -662,6 +731,9 @@ export async function applyApprovedSurfaceLink(input: {
 
 // ── The reader ─────────────────────────────────────────────────────────────
 
+/** The most rows one store answers for one object (the find door's bound). */
+export const SURFACE_SOURCE_LIMIT = 200;
+
 /**
  * The surfaces attached to ONE object, in their order, each read under the
  * READER's floor for its own table (a view, a document, a cell instance):
@@ -670,7 +742,9 @@ export async function applyApprovedSurfaceLink(input: {
  */
 export async function readAttachedSurfaces(
   access: AccessContext,
-  anchor: SurfaceAnchor
+  anchor: SurfaceAnchor,
+  limit: number = SURFACE_SOURCE_LIMIT,
+  onTruncated?: (limit: number) => void
 ): Promise<SurfaceRow[]> {
   const edges = await db
     .select({
@@ -679,17 +753,13 @@ export async function readAttachedSurfaces(
       metadata: links.metadata,
     })
     .from(links)
-    .where(
-      and(
-        eq(links.fromType, anchor.kind),
-        eq(links.fromId, anchor.id),
-        eq(links.linkType, ATTACHES_LINK_TYPE)
-      )
-    )
-    .orderBy(
-      drizzleSql`coalesce((${links.metadata}->>'position')::int, 2147483647)`,
-      links.createdAt
-    );
+    .where(anchorEdges(anchor))
+    .orderBy(drizzleSql`${POSITION} nulls last`, links.createdAt)
+    .limit(limit + 1);
+  if (edges.length > limit) {
+    edges.length = limit;
+    onTruncated?.(limit);
+  }
   if (edges.length === 0) return [];
   const idsOf = (type: SurfaceRef["type"]) =>
     edges.filter((e) => e.toType === type).map((e) => e.toId);
@@ -797,12 +867,7 @@ export async function attachmentsInSlot(
     .select({ toType: links.toType, toId: links.toId })
     .from(links)
     .where(
-      and(
-        eq(links.fromType, anchor.kind),
-        eq(links.fromId, anchor.id),
-        eq(links.linkType, ATTACHES_LINK_TYPE),
-        drizzleSql`${links.metadata}->>'slot' = ${slot}`
-      )
+      and(anchorEdges(anchor), drizzleSql`${links.metadata}->>'slot' = ${slot}`)
     );
   return rows.map((r) => ({
     type: r.toType as SurfaceRef["type"],
@@ -811,45 +876,96 @@ export async function attachmentsInSlot(
 }
 
 /**
- * Take off every attachment the object carries in `slot` (a slot holds one
- * look). The store write only: callers floored the object and passed a gate.
+ * Put `surface` in the object's `slot`, in ONE transaction: its edge is
+ * written first, then every other attachment in that slot (of `toType`, when
+ * named) is taken off, and a replaced cell instance nothing else attaches or
+ * relates to is deleted (it was only this object's look). A failure leaves the
+ * object with its earlier look. With no `surface`, the slot is cleared. The
+ * store write only: callers floored the object and passed a gate.
  */
-export async function detachSlot(
-  anchor: SurfaceAnchor,
-  slot: string,
-  userId: string,
-  attribution: { agentUserId?: string | null; proposalId?: string | null } = {},
-  toType?: SurfaceRef["type"]
-): Promise<number> {
-  const previous = await db
-    .select({ toType: links.toType, toId: links.toId })
-    .from(links)
-    .where(
-      and(
-        eq(links.fromType, anchor.kind),
-        eq(links.fromId, anchor.id),
-        eq(links.linkType, ATTACHES_LINK_TYPE),
-        drizzleSql`${links.metadata}->>'slot' = ${slot}`,
-        ...(toType ? [eq(links.toType, toType)] : [])
-      )
+export async function replaceSlot(input: {
+  anchor: SurfaceAnchor;
+  slot: string;
+  surface: SurfaceRef | null;
+  /** Before the edge is written, on the same transaction (the new body). */
+  makeSurface?: (tx: DbOrTx) => Promise<void>;
+  workspaceId: string | null;
+  userId: string;
+  label?: string | null;
+  toType?: SurfaceRef["type"];
+  attribution?: { agentUserId?: string | null; proposalId?: string | null };
+}): Promise<{ linkId: string | null; removed: number }> {
+  const attribution = input.attribution ?? {};
+  const out = await db.transaction(async (tx) => {
+    const events: LinkEvent[] = [];
+    let linkId: string | null = null;
+    if (input.surface) {
+      await input.makeSurface?.(tx);
+      const written = await writeAttachment(tx, {
+        anchor: input.anchor,
+        surface: input.surface,
+        workspaceId: input.workspaceId,
+        createdBy: input.userId,
+        meta: { slot: input.slot, label: input.label },
+        attribution,
+      });
+      events.push(...written.events);
+      linkId = written.linkId;
+    }
+    const previous = (
+      await tx
+        .select({ toType: links.toType, toId: links.toId })
+        .from(links)
+        .where(
+          and(
+            anchorEdges(input.anchor),
+            drizzleSql`${links.metadata}->>'slot' = ${input.slot}`,
+            ...(input.toType ? [eq(links.toType, input.toType)] : [])
+          )
+        )
+    ).filter(
+      (p) =>
+        !input.surface ||
+        p.toType !== input.surface.type ||
+        p.toId !== input.surface.id
     );
-  let removed = 0;
-  for (const p of previous) {
-    removed += await deleteAttachment({
-      anchor,
-      surface: { type: p.toType as SurfaceRef["type"], id: p.toId },
-      userId,
-      attribution,
-    });
-  }
-  return removed;
+    let removed = 0;
+    for (const p of previous) {
+      const r = await removeAttachment(tx, {
+        anchor: input.anchor,
+        surface: { type: p.toType as SurfaceRef["type"], id: p.toId },
+        userId: input.userId,
+        attribution,
+      });
+      removed += r.removed;
+      events.push(...r.events);
+    }
+    const replacedCells = previous
+      .filter((p) => p.toType === "cell_instance")
+      .map((p) => p.toId);
+    if (replacedCells.length > 0) {
+      await tx.execute(drizzleSql`
+        delete from cell_instances c
+        where c.id::text in (${drizzleSql.join(
+          replacedCells.map((id) => drizzleSql`${id}`),
+          drizzleSql`, `
+        )})
+          and not exists (select 1 from links l
+            where l.to_type = 'cell_instance' and l.to_id = c.id::text)
+          and not exists (select 1 from relations r
+            where r.source_cell_id = c.id or r.target_cell_id = c.id)`);
+    }
+    return { linkId, removed, events };
+  });
+  emit(out.events);
+  return { linkId: out.linkId, removed: out.removed };
 }
 
 /**
- * Make `cellKey` THE look of one object's `detail` slot: the object's
- * `detail` attachments to a cell instance are taken off and, unless
- * `cellKey` is null (clear), a new instance of that cell is made in
- * `workspaceId` and attached in slot `detail`.
+ * Make `cellKey` THE look of one object's `detail` slot: a new instance of
+ * that cell is made in `workspaceId` and attached in slot `detail`, replacing
+ * the object's earlier cell look (`replaceSlot`, one transaction). A null
+ * `cellKey` clears the slot.
  *
  * The write half of the doors that used to store a per-object look elsewhere
  * (`entities.setEntityRenderer` → `entities.system_data.renderer`; the
@@ -867,39 +983,35 @@ export async function replaceDetailCellLook(input: {
   agentUserId?: string | null;
   proposalId?: string | null;
 }): Promise<{ attached: boolean; surface?: SurfaceRef; removed: number }> {
-  const attribution = {
-    agentUserId: input.agentUserId ?? null,
-    proposalId: input.proposalId ?? null,
-  };
-  const removed = await detachSlot(
-    input.anchor,
-    "detail",
-    input.ownerUserId,
-    attribution,
-    "cell_instance"
-  );
-  if (!input.cellKey || !input.workspaceId) return { attached: false, removed };
-  const [cell] = await db
-    .insert(cellInstances)
-    .values({
-      workspaceId: input.workspaceId,
-      userId: input.ownerUserId,
-      cellType: input.cellKey,
-      config: input.props ?? {},
-      createdByKind: input.agentUserId ? "agent" : "user",
-      trustLevel: input.agentUserId ? "generated" : "trusted",
-    })
-    .returning({ id: cellInstances.id });
-  const surface: SurfaceRef = { type: "cell_instance", id: cell!.id };
-  await insertAttachment({
+  const { cellKey, workspaceId } = input;
+  const surface: SurfaceRef | null =
+    cellKey && workspaceId ? { type: "cell_instance", id: randomUUID() } : null;
+  const { removed } = await replaceSlot({
     anchor: input.anchor,
+    slot: "detail",
     surface,
-    workspaceId: input.workspaceId,
-    createdBy: input.ownerUserId,
-    meta: { slot: "detail" },
-    attribution,
+    toType: "cell_instance",
+    makeSurface: async (tx) => {
+      await tx.insert(cellInstances).values({
+        id: surface!.id,
+        workspaceId: workspaceId!,
+        userId: input.ownerUserId,
+        cellType: cellKey!,
+        config: input.props ?? {},
+        createdByKind: input.agentUserId ? "agent" : "user",
+        trustLevel: input.agentUserId ? "generated" : "trusted",
+      });
+    },
+    workspaceId,
+    userId: input.ownerUserId,
+    attribution: {
+      agentUserId: input.agentUserId ?? null,
+      proposalId: input.proposalId ?? null,
+    },
   });
-  return { attached: true, surface, removed };
+  return surface
+    ? { attached: true, surface, removed }
+    : { attached: false, removed };
 }
 
 // ── View metadata that anchors (closed to the agent doors) ─────────────────
@@ -913,7 +1025,7 @@ export async function replaceDetailCellLook(input: {
  * An agent door that passed raw metadata through let a key stamp any of them:
  * a view for an object is made with the surface door instead.
  */
-export const VIEW_ANCHOR_METADATA_KEYS = [
+const VIEW_ANCHOR_METADATA_KEYS = [
   "homeScope",
   "scopedSurface",
   "sessionId",

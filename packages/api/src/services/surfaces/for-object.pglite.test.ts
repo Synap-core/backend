@@ -9,11 +9,13 @@
  *
  * One test per source (a project-pinned view, a co-worker's view in a shared
  * space, an exposed view, a session output, an entity body, a renderer
- * binding for a kind, a start page, a cell linked to an entity), the visible
+ * binding for a kind, a start page, a cell attached to an entity; a relation
+ * cell → entity alone is a graph edge, not a surface), the visible
  * floor (Bob's view in W2 never shows to Alice; the same floor on hub
  * `listViews`, which `synap_list_views` and `GET /views` call), a missing anchor (NOT_FOUND,
  * never an empty list) and a store that fails (named in `unavailable` while
- * the others still answer).
+ * the others still answer, and a store with more rows than it answers says so
+ * there too).
  *
  * Stubbed: `db`/`getDb` → a PGlite drizzle over every schema table; the event
  * repository (no-op). Not seen: production Postgres constraints, Typesense.
@@ -61,7 +63,9 @@ const S = randomUUID(); // Alice's session
 const D_OUT = randomUUID(); // the session's output document (html)
 const E = randomUUID(); // Alice's task
 const D_BODY = randomUUID(); // E's body
-const CELL = randomUUID(); // a cell instance linked to E
+const CELL = randomUUID(); // a cell instance attached to E
+const CELL_RELATED = randomUUID(); // a cell only RELATED to E (a graph edge)
+const P_MANY = randomUUID(); // a project with more pinned views than a store answers
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -171,9 +175,29 @@ beforeAll(async () => {
     [CELL, W, ALICE]
   );
   await q(
+    `insert into cell_instances (id, workspace_id, user_id, cell_type, name, config) values ($1,$2,$3,'note','Related','{}'::jsonb)`,
+    [CELL_RELATED, W, ALICE]
+  );
+  // What the conversion and `cellInstances.link` leave for an attached cell:
+  // the relation AND the `attaches` edge. A relation alone is a graph edge.
+  await q(
     `insert into relations (id, user_id, workspace_id, source_kind, target_kind, source_cell_id, target_entity_id, type)
-     values ($1,$2,$3,'cell','entity',$4,$5,'references')`,
-    [randomUUID(), ALICE, W, CELL, E]
+     values ($1,$2,$3,'cell','entity',$4,$5,'references'), ($6,$2,$3,'cell','entity',$7,$5,'references')`,
+    [randomUUID(), ALICE, W, CELL, E, randomUUID(), CELL_RELATED]
+  );
+  await q(
+    `insert into links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+     values ($1,'entity',$2,'cell_instance',$3,'attaches','{"position":0}'::jsonb,$4)`,
+    [W, E, CELL, ALICE]
+  );
+  await q(
+    `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'Many')`,
+    [P_MANY, ALICE, W]
+  );
+  await q(
+    `insert into views (workspace_id, user_id, project_id, name, type, category)
+     select $1, $2, $3, 'pinned ' || n, 'table', 'structured' from generate_series(1, 201) n`,
+    [W, ALICE, P_MANY]
   );
 });
 
@@ -208,7 +232,7 @@ describe("surfaces.forObject", () => {
     ]);
   });
 
-  it("entity: its body, its kind's renderer binding, a linked cell", async () => {
+  it("entity: its body, its kind's renderer binding, an attached cell; never a cell only related to it", async () => {
     const { rows, unavailable } = await forObject({ kind: "entity", id: E });
     expect(unavailable).toEqual([]);
     expect(rows).toEqual(
@@ -230,9 +254,23 @@ describe("surfaces.forObject", () => {
           body: "cell",
           relation: "attached",
           cellKey: "note",
+          source: "attaches",
         }),
       ])
     );
+    expect(rows.filter((r) => r.id === CELL)).toHaveLength(1);
+    expect(rows.map((r) => r.id)).not.toContain(CELL_RELATED);
+  });
+
+  it("a store answers at most 200 rows, and says when it had more", async () => {
+    const { rows, unavailable } = await forObject({
+      kind: "project",
+      id: P_MANY,
+    });
+    expect(rows.filter((r) => r.source === "views")).toHaveLength(200);
+    expect(unavailable).toEqual([
+      { source: "views", error: expect.stringContaining("200") },
+    ]);
   });
 
   it("workspace: its home bento and its start page", async () => {

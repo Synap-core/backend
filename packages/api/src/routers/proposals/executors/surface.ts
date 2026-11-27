@@ -7,7 +7,7 @@ import { applyApprovedSurfaceLink } from "../../../services/surfaces/attach.js";
 import { applyCreateSurface } from "../../../services/surfaces/create.js";
 
 /**
- * Approve-executors for an ATTACHED surface (Surfaces wave P3):
+ * Approve-executors for an ATTACHED surface:
  * `surface/create` (a body made for an object, and its `attaches` edge),
  * `surface/attach` and `surface/detach` (the edge alone).
  *

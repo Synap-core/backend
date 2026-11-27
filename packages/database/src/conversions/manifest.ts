@@ -743,9 +743,8 @@ export interface RetireProjectTwinsOp extends BaseOp {
 }
 
 /**
- * The stores that anchored UI to ONE object before the `attaches` link
- * (Surfaces wave P3, founder decision 23 Nov 2026: "a per-entity look becomes
- * an attached surface"). Each is copied onto `links <anchor> --attaches-->
+ * The stores that anchored UI to ONE object before the `attaches` link.
+ * Each is copied onto `links <anchor> --attaches-->
  * <surface>`, the one store of the `attached` relation:
  *   - `entity-renderer`  `entities.system_data.renderer` (a `{kind:'cell'}`
  *                        override, `entities.setEntityRenderer`) → a new
@@ -2463,7 +2462,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "retireProjectTwins",
       opKey: "pt1.projects.retire-project-twins",
     },
-    // ─── Attached surfaces (Surfaces P3, founder decision 23 Nov 2026) ───────
+    // ─── Attached surfaces ──────────────────────────────────────────────────
     // Every legacy per-object UI anchor becomes an `attaches` link; the legacy
     // value stays readable (see FoldAnchorsIntoAttachmentsOp).
     {

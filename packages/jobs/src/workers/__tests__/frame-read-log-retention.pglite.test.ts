@@ -1,5 +1,5 @@
 /**
- * The frame read log retention (Surfaces P7): `frame_read_log` grows with
+ * The frame read log retention: `frame_read_log` grows with
  * every read a framed surface asks for. The daily job deletes rows older than
  * FRAME_READ_LOG_RETENTION_DAYS (the inspect door's longest window) and keeps
  * everything younger, refused reads included.

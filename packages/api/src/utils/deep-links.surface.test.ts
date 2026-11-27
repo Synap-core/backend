@@ -1,5 +1,5 @@
 /**
- * `/open/<kind>/<id>?surface=<surfaceId>` (Surfaces P3): the pod's link
+ * `/open/<kind>/<id>?surface=<surfaceId>`: the pod's link
  * builder and the client one (`@synap-core/hub-rest-client` `openPath`) are
  * ONE grammar, kept byte-identical by hand (the api package does not depend on
  * the client). This reads the client's source and compares the two blocks

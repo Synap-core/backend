@@ -339,13 +339,17 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
     <p id="root"></p>
     <script>
       SynapWidget.onInit(async ({ context }) => {
-        const items = await SynapWidget.query("entities.list", {
-          profileSlug: "deal",
-          limit: 200,
-        }).catch(() => []);
-
-        document.getElementById("root").textContent =
-          `Loaded ${(items ?? []).length} deals`;
+        const root = document.getElementById("root");
+        try {
+          const items = await SynapWidget.query("entities.list", {
+            profileSlug: "deal",
+            limit: 200,
+          });
+          root.textContent = `Loaded ${items.length} deals`;
+        } catch (err) {
+          // A failed read is not an empty one: say so, never "0 deals".
+          root.textContent = `Could not load deals: ${err.message}`;
+        }
 
         SynapWidget.resize(document.body.scrollHeight);
       });
@@ -358,7 +362,7 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
 
 - **Always call `SynapWidget.onInit()`** — the host will not send data until you register this handler.
 - **Call `SynapWidget.resize()`** after rendering to prevent clipping.
-- **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
+- **Show a failed read as a failure** — `query()` and `mutate()` can fail: catch the error and render it. Never turn a failure into an empty list (`.catch(() => [])`): "0 deals" would be a lie.
 - **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
 - **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.

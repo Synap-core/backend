@@ -789,6 +789,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "declared",
     addedBy: "0456_frame_declared_reads.sql",
   },
+  // The frame read door claims a draft id here before it answers a draft's
+  // read; a missing table fails every draft read.
+  {
+    table: "frame_drafts",
+    column: "user_id",
+    addedBy: "0463_frame_drafts.sql",
+  },
 
   // knowledge_facts — Ebbinghaus decay columns (0113)
   {

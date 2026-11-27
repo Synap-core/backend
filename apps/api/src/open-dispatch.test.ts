@@ -716,7 +716,7 @@ describe("packageUpdateOpenTarget — template updates' links", () => {
   });
 });
 
-describe("dispatchOpen — ?surface= (an object opened on one attached surface, Surfaces P3)", () => {
+describe("dispatchOpen — ?surface= (an object opened on one attached surface)", () => {
   const SURFACE = "11111111-2222-4333-8444-555555555555";
 
   it("keeps the surface on the 302 to pod-admin", () => {

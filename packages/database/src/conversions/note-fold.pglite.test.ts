@@ -230,7 +230,7 @@ const q = async (text: string, params: unknown[] = []) =>
 
 beforeAll(async () => {
   db = new PGlite();
-  // The Surfaces P3 conversions (`p3.surfaces.*`) read and write these.
+  // The attached-surface conversions (`p3.surfaces.*`) read and write these.
   await db.exec(SCHEMA + ATTACHMENT_FOLD_TEST_SCHEMA);
   sql = makePgliteSql(db);
 }, 120_000);
