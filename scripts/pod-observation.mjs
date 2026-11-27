@@ -416,11 +416,29 @@ function tailWithin(lines, maxBytes) {
 }
 
 /**
+ * The lines up to the next step: the first `##[group]Run ` line after the
+ * first `##[error]` line (each step's log opens with `##[group]Run <what>`).
+ */
+function untilNextStep(lines) {
+  const error = lines.findIndex((l) => l.startsWith("##[error]"));
+  if (error < 0) return lines;
+  const next = lines.findIndex(
+    (l, i) => i > error && l.startsWith("##[group]Run ")
+  );
+  return next < 0 ? lines : lines.slice(0, next);
+}
+
+/**
  * The tail of ONE step's lines in a job log: the lines timed between the
  * step's start and end (GitHub gives those to the second), without their time
  * prefix, ANSI stripped and token-like strings redacted, at most TAIL_LINES
  * lines and `maxBytes` bytes. When no line falls in the step's window (an
  * unknown log shape), the job log's own tail stands in. Pure.
+ *
+ * The window is cut where the NEXT step starts: steps that run on failure
+ * (`if: failure()`) start within the same second, and their lines would
+ * otherwise push the error out of the tail (seen on run 45910754595: the
+ * tail ended in the next step's upload-artifact lines).
  */
 export function stepLogTail(log, step, maxBytes = FAILURE_TAIL_BYTES) {
   const lines = String(log ?? "")
@@ -441,7 +459,7 @@ export function stepLogTail(log, step, maxBytes = FAILURE_TAIL_BYTES) {
       if (t >= from && t < to) inStep.push(line);
     }
   }
-  const chosen = (inStep.length ? inStep : all).slice(-TAIL_LINES);
+  const chosen = untilNextStep(inStep.length ? inStep : all).slice(-TAIL_LINES);
   return tailWithin(chosen, maxBytes);
 }
 

@@ -698,6 +698,10 @@ describe("ci.finished says where a failed run broke", () => {
     `${t("05.0000000")} ${ESC}[31mError: generated.d.ts is out of date${ESC}[0m`,
     `${t("05.5000000")} using ${GH_TOKEN} and ${KEY_VALUE}`,
     `${t("09.9000000")} ##[error]Process completed with exit code 1.`,
+    // The next step (`if: failure()`) starts within the same second: its
+    // lines are in the window but not the failing step's (run 45910754595).
+    `${t("09.9500000")} ##[group]Run actions/upload-artifact@v4`,
+    `${t("09.9600000")} With the provided path, there will be 1 file uploaded`,
     `${t("10.0000000")} Post job cleanup.`,
   ].join("\n");
   const failingStep = {
@@ -758,6 +762,8 @@ describe("ci.finished says where a failed run broke", () => {
     expect(tail).toContain("[redacted]");
     // Not another step's lines, and no time prefix.
     expect(tail).not.toContain("Post job cleanup");
+    expect(tail).not.toContain("upload-artifact");
+    expect(tail).not.toContain("1 file uploaded");
     expect(tail).not.toContain("Run pnpm install");
     expect(tail).not.toMatch(/^\d{4}-\d\d-\d\dT/m);
     // The byte cap binds: 40 lines of ~200 bytes would not fit.
