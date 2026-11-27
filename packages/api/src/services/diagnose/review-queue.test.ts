@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeReviewQueueApproval,
   reviewQueueVerdict,
+  summarizeProposalClass,
   MIN_CONFIDENT_REVIEW_SAMPLE,
   type ReviewQueueDecisionRow,
 } from "./review-queue.js";
@@ -123,5 +124,38 @@ describe("computeReviewQueueApproval", () => {
     );
     expect(a.approveRateOfReviewed).toBe(0.6);
     expect(reviewQueueVerdict(a)).toBe("discriminating");
+  });
+});
+
+describe("summarizeProposalClass: exact counts, a capped scan is labelled", () => {
+  const dup = [{ targetLabel: "x", count: 3 }];
+
+  it("reports the exact pending count, not the scan length", () => {
+    const r = summarizeProposalClass({
+      pending: 2500,
+      mine: 2503,
+      oldestCreatedAt: null,
+      scanned: 1000,
+      scanLimit: 1000,
+      duplicateClusters: dup,
+    });
+    expect(r.detail.pending).toBe(2500);
+    expect(r.detail.mineOutsideLens).toBe(3);
+    expect(r.detail.capped).toBe(true);
+    expect(r.summary).toContain("2500 pending proposal(s), 1+ duplicate");
+    expect(r.summary).toContain("newest 1000");
+  });
+
+  it("is not flagged capped when the scan saw every pending row", () => {
+    const r = summarizeProposalClass({
+      pending: 1000,
+      mine: 1000,
+      oldestCreatedAt: null,
+      scanned: 1000,
+      scanLimit: 1000,
+      duplicateClusters: [],
+    });
+    expect(r.detail.capped).toBe(false);
+    expect(r.summary).not.toContain("+");
   });
 });

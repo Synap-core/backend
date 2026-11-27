@@ -551,13 +551,13 @@ describe("capabilities section — counts verbs awaiting enable", () => {
     expect(s.headline).toBe(
       "4 verb(s) in 2 capability(ies) not turned on — they refuse to run until turned on"
     );
-    // `unapproved` survives only as the desktop reader's alias of the verb-based
-    // container count — never the container flag.
+    // The old `unapproved` alias is gone: no reader of it is left (the desktop
+    // reads `verbsAwaitingEnable`).
     expect(s.detail).toMatchObject({
       verbsAwaitingEnable: 4,
       capabilitiesAwaitingEnable: 2,
-      unapproved: 2,
     });
+    expect(s.detail).not.toHaveProperty("unapproved");
     expect(s.detail).not.toHaveProperty("notes");
   });
 

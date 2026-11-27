@@ -13,8 +13,9 @@
  * MCP tool call inside a batch.
  */
 
-import { and, gte, lt, sql, type SQL } from "drizzle-orm";
+import { and, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import { apiKeys } from "../schema/api-keys.js";
 import { apiUsageBuckets } from "../schema/api-usage-buckets.js";
 
 /** Any drizzle Postgres handle (the pod's `db`, a transaction, PGlite in tests). */
@@ -204,6 +205,13 @@ export interface ApiUsageGroup {
   hour?: string;
   day?: string;
   apiKeyId?: string | null;
+  /**
+   * With `apiKeyId` grouped: the key's human name (`api_keys.key_name`, never
+   * its prefix or secret). `null` when the group has no key, or the key row is
+   * gone (then `apiKeyDeleted: true`).
+   */
+  apiKeyName?: string | null;
+  apiKeyDeleted?: boolean;
   limiterKey?: string;
   client?: string;
   conversationId?: string | null;
@@ -307,6 +315,32 @@ export async function readApiUsage(
     }
     return g;
   });
+
+  // Name each key: a failed lookup throws (it must fail the read, never read
+  // as "no name"); a missing row is a deleted key, said so.
+  if (groupBy.includes("apiKeyId")) {
+    const ids = [
+      ...new Set(groups.map((g) => g.apiKeyId).filter((v): v is string => !!v)),
+    ];
+    const names = new Map<string, string>();
+    if (ids.length > 0) {
+      const keyRows = await executor
+        .select({ id: apiKeys.id, keyName: apiKeys.keyName })
+        .from(apiKeys)
+        .where(inArray(apiKeys.id, ids));
+      for (const k of keyRows) names.set(k.id, k.keyName);
+    }
+    for (const g of groups) {
+      if (!g.apiKeyId) {
+        g.apiKeyName = null;
+      } else if (names.has(g.apiKeyId)) {
+        g.apiKeyName = names.get(g.apiKeyId)!;
+      } else {
+        g.apiKeyName = null;
+        g.apiKeyDeleted = true;
+      }
+    }
+  }
   return {
     since: since.toISOString(),
     until: until.toISOString(),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyRunStall, classifyStalls } from "./stall.js";
+import { classifyRunStall, classifyStalls, cappedCount } from "./stall.js";
 import { summarizeGlobalHealth } from "./global.js";
 
 /**
@@ -193,5 +193,50 @@ describe("summarizeGlobalHealth — stuck_runs section", () => {
     expect(report.sections.find((s) => s.key === "stuck_runs")?.headline).toBe(
       "No stuck runs"
     );
+  });
+});
+
+describe("stuck_runs — a capped read is labelled", () => {
+  const base = {
+    stuckHours: 24,
+    stuck: [{ id: "r1", flowType: "session", flowName: "S", ageHours: 30 }],
+    failedFlows: [],
+    backlog: {
+      pending: 0,
+      oldestAgeHours: null,
+      mineOutsideLens: 0,
+      oldestAgeHoursIncludingOutsideLens: null,
+    },
+    duplicateClusters: [],
+    capabilities: {
+      installed: 1,
+      verbs: 1,
+      verbsAwaitingEnable: 0,
+      capabilitiesAwaitingEnable: 0,
+    },
+    agentActivity: [],
+  };
+  const stuck = (signals: object) =>
+    summarizeGlobalHealth(
+      { ...base, ...signals },
+      { workspaceId: null }
+    ).sections.find((s) => s.key === "stuck_runs")!;
+
+  it("says 1+ and flags capped when the running-runs read hit its limit", () => {
+    const s = stuck({ stuckCapped: true });
+    expect(s.headline).toContain("1+ run(s) still running");
+    expect(s.detail).toMatchObject({ capped: true });
+  });
+
+  it("stays exact when the read did not hit its limit", () => {
+    const s = stuck({ stuckCapped: false });
+    expect(s.headline).toContain("1 run(s) still running");
+    expect(s.headline).not.toContain("1+");
+    expect(s.detail).toMatchObject({ capped: false });
+  });
+
+  it("cappedCount adds the plus only when capped", () => {
+    expect(cappedCount(100, true)).toBe("100+");
+    expect(cappedCount(7, false)).toBe("7");
   });
 });

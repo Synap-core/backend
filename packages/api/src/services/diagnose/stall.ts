@@ -159,3 +159,15 @@ export function classifyStalls(
   idle.sort((a, b) => (b.idleMinutes ?? 0) - (a.idleMinutes ?? 0));
   return { aged, idle, unobservable };
 }
+
+/** The most running runs one class/global read lists (a `listRuns` limit). */
+export const RUNNING_RUNS_LIMIT = 100;
+
+/**
+ * The headline count for a list that a read capped: "100+" once the cap is
+ * hit, because the true total is then unknown (same convention as
+ * `schema-hygiene.ts`'s `scanCapped`).
+ */
+export function cappedCount(n: number, capped: boolean): string {
+  return `${n}${capped ? "+" : ""}`;
+}
