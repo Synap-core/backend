@@ -294,7 +294,9 @@ export function useSetPodFloorDefault(
 
 /** One of the pod's governance number settings. */
 export function useSetPodSetting(
-  defaults?: ActionHandlers<typeof trpc.governanceRules.setPodSetting.useMutation>
+  defaults?: ActionHandlers<
+    typeof trpc.governanceRules.setPodSetting.useMutation
+  >
 ) {
   return useSensitiveAction(
     "governanceRules.setPodSetting",

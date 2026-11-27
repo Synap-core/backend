@@ -121,9 +121,9 @@ describe("a governance number", () => {
     expect(settingState(floorsRead, "governance.other")).toEqual({
       kind: "failed",
     });
-    expect(
-      settingState({ isLoading: true, isError: false }, HOURS)
-    ).toEqual({ kind: "loading" });
+    expect(settingState({ isLoading: true, isError: false }, HOURS)).toEqual({
+      kind: "loading",
+    });
   });
 
   it("takes only a whole number in its range; an empty field is no value, not 0", () => {

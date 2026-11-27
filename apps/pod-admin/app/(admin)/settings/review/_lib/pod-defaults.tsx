@@ -70,10 +70,9 @@ export function PodDefaults() {
     undefined,
     { staleTime: 30_000 }
   );
-  const switchable = trpc.governanceRules.podFloorDefaults.useQuery(
-    undefined,
-    { staleTime: 30_000 }
-  );
+  const switchable = trpc.governanceRules.podFloorDefaults.useQuery(undefined, {
+    staleTime: 30_000,
+  });
   const floors = trpc.governanceRules.platformDefaults.useQuery(undefined, {
     staleTime: 300_000,
   });
@@ -367,7 +366,9 @@ function SettingModal({
     onError: (err) => {
       if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
         return;
-      setError(err instanceof Error ? err.message : t("podDefaults.notChanged"));
+      setError(
+        err instanceof Error ? err.message : t("podDefaults.notChanged")
+      );
     },
   });
   const n = parseSetting(draft, state);

@@ -53,9 +53,9 @@ export const en = {
   "podDefaults.ownWorkHours.label": "How long new work stays theirs to tidy",
   "podDefaults.ownWorkHours.line":
     "For this long after an agent made something, it may file or close it without asking.",
-  "podDefaults.ownWorkHours.value":
-    "{n, plural, one {# hour} other {# hours}}",
-  "podDefaults.evidenceMin.label": "Records an agent needs to propose a project",
+  "podDefaults.ownWorkHours.value": "{n, plural, one {# hour} other {# hours}}",
+  "podDefaults.evidenceMin.label":
+    "Records an agent needs to propose a project",
   "podDefaults.evidenceMin.line":
     "A project an agent proposes with fewer records than this is marked for you and never applies on its own.",
   "podDefaults.evidenceMin.value":
