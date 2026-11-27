@@ -10,7 +10,6 @@
 
 import { withProposalTargetPlace } from "../../../access/proposal-target-place.js";
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
-import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
@@ -254,8 +253,8 @@ export async function launchInputs(): Promise<{
       import("../define-tool.js"),
       import("../tool-input.js"),
     ]);
-  const shape: Record<string, object> =
-    toolDefinition("synap_start_session")!.input.shape;
+  const shape: Record<string, object> = toolDefinition("synap_start_session")!
+    .input.shape;
   const marked = Object.keys(shape).filter((k) => launchRole(shape[k]!));
   const derived = declaredArgNames("synap_start_session")!.filter(
     (k) => !(k in shape)
@@ -419,9 +418,7 @@ export const buildHandlers = {
         // Same reason as `viewTypes`: without it an APPROVED cell materializes
         // into the default `widget` slot — the reviewer approves an
         // entity-detail renderer and the pod writes a bento widget.
-        ...(args.contentKind
-          ? { contentKind: args.contentKind }
-          : {}),
+        ...(args.contentKind ? { contentKind: args.contentKind } : {}),
         // Where approving places the cell: the executor defines it AND adds
         // its tile to this view, in one act.
         ...(placeOn ? { placeOn } : {}),
@@ -1393,8 +1390,7 @@ export const buildHandlers = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { discoverRenderables, discoverFences } =
       await import("../../../services/cells/renderables.js");
-    const workspaceId =
-      confinedWorkspaceId ?? args.workspaceId ?? null;
+    const workspaceId = confinedWorkspaceId ?? args.workspaceId ?? null;
     // `placement` is the parameter; `surface` its old name, still accepted.
     const placement =
       (args.placement ?? args.surface) === "document" ? "document" : "bento";
@@ -1449,9 +1445,7 @@ export const buildHandlers = {
         ...(comment.anchor !== undefined
           ? { anchor: comment.anchor as never }
           : {}),
-        ...(comment.replyTo !== undefined
-          ? { parentId: comment.replyTo }
-          : {}),
+        ...(comment.replyTo !== undefined ? { parentId: comment.replyTo } : {}),
         content: args.content,
         idempotencyKey: args.idempotencyKey,
       });

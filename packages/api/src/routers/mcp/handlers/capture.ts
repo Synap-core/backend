@@ -274,13 +274,13 @@ const captureHandler = async (
   const captureProjectId = args.projectId
     ? args.projectId
     : captureProjectName
-        ? (
-            await resolveCaptureProjectRef(db, {
-              userId,
-              projectName: captureProjectName,
-            })
-          ).projectId
-        : null;
+      ? (
+          await resolveCaptureProjectRef(db, {
+            userId,
+            projectName: captureProjectName,
+          })
+        ).projectId
+      : null;
 
   /**
    * THE SCOPE THE RECEIPT REPORTS on the project axis.
@@ -738,9 +738,7 @@ const captureHandler = async (
         relationCount: checked.relationCount,
         ...tableReply,
         // What the review card will be titled when the caller sent no summary.
-        ...(tableSummary && !args.summary
-          ? { summary: tableSummary }
-          : {}),
+        ...(tableSummary && !args.summary ? { summary: tableSummary } : {}),
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
         // Advisory: a title the rubric flags still writes, so it never makes
@@ -794,9 +792,7 @@ const captureHandler = async (
           ...singleRoute.args,
           // The typed door files into a project only for a truthy id.
           projectId: captureProjectId ?? undefined,
-          ...(args.summary
-            ? { reasoning: args.summary }
-            : {}),
+          ...(args.summary ? { reasoning: args.summary } : {}),
         },
       });
       const createReceipt = (created.writeReceipt ?? {}) as {

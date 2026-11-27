@@ -262,9 +262,9 @@ describe("synap_start_session — subjectRef", () => {
       expect(parsed.ok).toBe(false);
       if (parsed.ok) continue;
       expect(parsed.result.isError).toBe(true);
-      expect(
-        (parsed.result.content[0] as { text: string }).text
-      ).toMatch(/subjectRef/);
+      expect((parsed.result.content[0] as { text: string }).text).toMatch(
+        /subjectRef/
+      );
     }
   });
 });

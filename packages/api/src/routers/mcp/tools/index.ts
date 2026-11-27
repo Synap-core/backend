@@ -2625,10 +2625,13 @@ export function toolDefinitions() {
       description:
         'Start a focus session: goal-bound work. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, its space comes from its playbook, subject, parent session, project or your focus. Decompose with parentSessionId (children) and blockedBy*Ids (ordering), never a chain in the goal; a blocking prerequisite is a child with suspendedIntent. An open session with the same goal here comes back \'deduped\': continue it. DEFAULTS: your writes are grouped into this conversation\'s session (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`); another conversation\'s session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject\'s kind; else the parent\'s; else the main-red playbook for a `main red:` title (`binding` says which). Without templateId, `playbooks` ranks candidates (suggestions); follow or release one later with synap_update_session followPlaybookId; templateId: null skips the ranking. `offers` (suggestions) lists open goals, close sessions to continue, or homes. With a subject, the session\'s step IS the subject\'s status: move the thing (synap_update_entity + expectedStatus). DECLARE at least one criterion, or an outcome with `verify`, else the start is refused (NO_CRITERIA, nothing created): 2-5 binary, observable statements; `outcomes` for what it will produce. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to; only the playbook inputs count, its goal and criteria are the playbook\'s. Outcomes, none to retry: "draft" (the person\'s draft until they accept; tell them), "proposed" (SUCCESS, pass on reviewUrl), "blocked" (nothing ran: `unenabledSkills`; again once `enableProposals` are approved), "running", "already_running" (`session` is the live run; startAnother only if asked), "generated" (pass on generated.reviewUrl), "skipped" (read `message`).',
       input: z.object({
-        launch: launchInput("launch", z
-          .boolean()
-          .optional()
-          .describe("true: RUN the playbook (see the description).")),
+        launch: launchInput(
+          "launch",
+          z
+            .boolean()
+            .optional()
+            .describe("true: RUN the playbook (see the description).")
+        ),
         forceCreate: z
           .boolean()
           .optional()
@@ -2648,36 +2651,51 @@ export function toolDefinitions() {
           .describe(
             "Required, except with launch. The OUTCOME, one sentence (e.g. 'Research web-scraping approaches'), not a paragraph: the name goes in title, deliverables in outcomes, dependencies in blockedBySessionIds."
           ),
-        workspaceId: launchInput("launch", z
-          .string()
-          .optional()
-          .describe(
-            "Pin the session to a space. Usually omit it (see the description)."
-          )),
-        projectId: launchInput("launch", z
-          .string()
-          .optional()
-          .describe(
-            "Project ID the session belongs to; needs no workspace membership."
-          )),
-        trackId: launchInput("launch", z
-          .string()
-          .optional()
-          .describe(
-            "Optional track UUID (synap_list_tracks) — the lasting goal, inside a project, this session works toward. Implies its project; a different projectId is refused."
-          )),
-        trackStage: launchInput("launch", z
-          .string()
-          .optional()
-          .describe(
-            "Legacy — only for a track with stages: the stage KEY the session is filed at. Omit it (a track with no stages has none; a staged track files at its current stage). A key the track does not declare is refused. Needs trackId."
-          )),
-        subjectEntityId: launchInput("launch", z
-          .string()
-          .optional()
-          .describe(
-            "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here."
-          )),
+        workspaceId: launchInput(
+          "launch",
+          z
+            .string()
+            .optional()
+            .describe(
+              "Pin the session to a space. Usually omit it (see the description)."
+            )
+        ),
+        projectId: launchInput(
+          "launch",
+          z
+            .string()
+            .optional()
+            .describe(
+              "Project ID the session belongs to; needs no workspace membership."
+            )
+        ),
+        trackId: launchInput(
+          "launch",
+          z
+            .string()
+            .optional()
+            .describe(
+              "Optional track UUID (synap_list_tracks) — the lasting goal, inside a project, this session works toward. Implies its project; a different projectId is refused."
+            )
+        ),
+        trackStage: launchInput(
+          "launch",
+          z
+            .string()
+            .optional()
+            .describe(
+              "Legacy — only for a track with stages: the stage KEY the session is filed at. Omit it (a track with no stages has none; a staged track files at its current stage). A key the track does not declare is refused. Needs trackId."
+            )
+        ),
+        subjectEntityId: launchInput(
+          "launch",
+          z
+            .string()
+            .optional()
+            .describe(
+              "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here."
+            )
+        ),
         subjectRef: z
           .strictObject({
             url: z.string().optional(),
@@ -2697,52 +2715,79 @@ export function toolDefinitions() {
           .describe(
             "Optional channel UUID to BORROW as its room. Omit it and the session mints its own (`channelId`): ask the person there."
           ),
-        agentIds: launchInput("launch", z
-          .array(z.string())
-          .optional()
-          .describe(
-            "Optional agent ids to hand this session to (find them, and the computer each runs on, with synap_list_agents). Naming another agent is a hand-off: it is refused when that agent cannot take the person's work (paused, not theirs), and may wait on the person's approval."
-          )),
-        templateId: launchInput("launch", z
-          .string()
-          .nullable()
-          .optional()
-          .describe(
-            "Optional playbook UUID it follows from the start (omitted: bound on facts, see the description; null skips the suggestions). With launch: the playbook to run."
-          )),
-        playbookName: launchInput("launch-only", z
-          .string()
-          .optional()
-          .describe(
-            "With launch, instead of templateId: the playbook's unique name."
-          )),
-        handToAgentId: launchInput("launch-only", z
-          .string()
-          .optional()
-          .describe(
-            "With launch: the agent (synap_list_agents) that runs it; an agent may name only itself."
-          )),
-        runner: launchInput("launch-only", z
-          .unknown()
-          .optional()
-          .describe("With launch: who runs it (system/synap/processes).")),
-        stageRunners: launchInput("launch-only", z
-          .unknown()
-          .optional()
-          .describe("With launch: who works each stage, by key.")),
-        startAnother: launchInput("launch-only", z
-          .boolean()
-          .optional()
-          .describe("With launch: a second run beside a live one.")),
-        reasoning: launchInput("launch-only", z
-          .string()
-          .optional()
-          .describe("With launch: why, shown on the review.")),
-        params: launchInput("launch", jsonObjectInput("params")
-          .optional()
-          .describe(
-            "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused."
-          )),
+        agentIds: launchInput(
+          "launch",
+          z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Optional agent ids to hand this session to (find them, and the computer each runs on, with synap_list_agents). Naming another agent is a hand-off: it is refused when that agent cannot take the person's work (paused, not theirs), and may wait on the person's approval."
+            )
+        ),
+        templateId: launchInput(
+          "launch",
+          z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "Optional playbook UUID it follows from the start (omitted: bound on facts, see the description; null skips the suggestions). With launch: the playbook to run."
+            )
+        ),
+        playbookName: launchInput(
+          "launch-only",
+          z
+            .string()
+            .optional()
+            .describe(
+              "With launch, instead of templateId: the playbook's unique name."
+            )
+        ),
+        handToAgentId: launchInput(
+          "launch-only",
+          z
+            .string()
+            .optional()
+            .describe(
+              "With launch: the agent (synap_list_agents) that runs it; an agent may name only itself."
+            )
+        ),
+        runner: launchInput(
+          "launch-only",
+          z
+            .unknown()
+            .optional()
+            .describe("With launch: who runs it (system/synap/processes).")
+        ),
+        stageRunners: launchInput(
+          "launch-only",
+          z
+            .unknown()
+            .optional()
+            .describe("With launch: who works each stage, by key.")
+        ),
+        startAnother: launchInput(
+          "launch-only",
+          z
+            .boolean()
+            .optional()
+            .describe("With launch: a second run beside a live one.")
+        ),
+        reasoning: launchInput(
+          "launch-only",
+          z
+            .string()
+            .optional()
+            .describe("With launch: why, shown on the review.")
+        ),
+        params: launchInput(
+          "launch",
+          jsonObjectInput("params")
+            .optional()
+            .describe(
+              "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused."
+            )
+        ),
         outcomes: SESSION_OUTCOMES_INPUT.optional(),
         criteria: z
           .array(z.record(z.string(), z.unknown()))
@@ -2751,13 +2796,16 @@ export function toolDefinitions() {
           .describe(
             "DEPRECATED alias — prefer `outcomes` with kind 'fact'. Binary acceptance criteria, each observable; written to the same storage."
           ),
-        parentSessionId: launchInput("launch", z
-          .string()
-          .meta({ format: "uuid" })
-          .optional()
-          .describe(
-            "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited."
-          )),
+        parentSessionId: launchInput(
+          "launch",
+          z
+            .string()
+            .meta({ format: "uuid" })
+            .optional()
+            .describe(
+              "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited."
+            )
+        ),
         targets: z
           .array(z.string().meta({ format: "uuid" }))
           .max(100)
@@ -2780,13 +2828,16 @@ export function toolDefinitions() {
         blockedByTrackIds: z.array(z.string()).optional(),
         startNow: START_NOW_INPUT.optional(),
         ...STEP_TIME_INPUT,
-        suspendedIntent: launchInput("launch", z
-          .string()
-          .max(400)
-          .optional()
-          .describe(
-            "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
-          )),
+        suspendedIntent: launchInput(
+          "launch",
+          z
+            .string()
+            .max(400)
+            .optional()
+            .describe(
+              "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
+            )
+        ),
         forOutput: z
           .string()
           .max(120)

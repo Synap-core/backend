@@ -965,9 +965,7 @@ export const entityHandlers = {
       // user. The API key already identifies the caller.
       userId,
       fact: args.fact,
-      ...(args.confidence !== undefined
-        ? { confidence: args.confidence }
-        : {}),
+      ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
       ...(args.category ? { category: args.category } : {}),
       ...(args.userStated === true ? { userStated: true } : {}),
       ...(agentUserId ? { agentUserId } : {}),

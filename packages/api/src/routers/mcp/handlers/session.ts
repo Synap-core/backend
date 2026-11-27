@@ -1531,10 +1531,7 @@ export const sessionHandlers = {
         .select({ projectId: focusSessions.projectId })
         .from(focusSessions)
         .where(
-          and(
-            eq(focusSessions.id, sessionId),
-            eq(focusSessions.userId, userId)
-          )
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
         )
         .limit(1);
       if (!own) {
@@ -1656,7 +1653,7 @@ export const sessionHandlers = {
         : {}),
       ...(args.stageRunner !== undefined
         ? // Checked above against `stageRunnerSchema` (the input takes any).
-        { stageRunner: args.stageRunner as PlaybookRunner | null }
+          { stageRunner: args.stageRunner as PlaybookRunner | null }
         : {}),
       addOutput: slots.addOutput,
       completeOutput: args.completeOutput,

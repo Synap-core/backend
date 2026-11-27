@@ -491,7 +491,9 @@ export const readHandlers = {
     // Clamped, not refused: an over-large ask still gets the cap.
     // A cursor that is not a message id reads from the newest (uuid not enforced).
     const cursor =
-      args.cursor !== undefined && isUuid(args.cursor) ? args.cursor : undefined;
+      args.cursor !== undefined && isUuid(args.cursor)
+        ? args.cursor
+        : undefined;
     const result = await caller.context.getThreadContext({
       threadId: args.threadId,
       limit: pageLimit(args.limit, 50, 100),
@@ -1382,8 +1384,7 @@ export const readHandlers = {
     // The lens, in order: the caller's explicit workspaceId; else the
     // entity's OWN workspace (a "no relations" answer then reflects its real
     // home, not whichever member workspace sorted first).
-    const relWsId =
-      args.workspaceId ?? (await entityHomeWorkspaceId(entityId));
+    const relWsId = args.workspaceId ?? (await entityHomeWorkspaceId(entityId));
     // No lens at all: a POD-WIDE entity (NULL workspace), or one that is
     // deleted or missing. Its edges live in whatever workspaces they were
     // drawn in, so ONE picked member workspace (the old `ids[0]` fallback)
