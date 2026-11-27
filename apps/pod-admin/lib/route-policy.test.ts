@@ -69,8 +69,8 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/apps/app_123",
     "/my-vault",
     "/my-vault/6f1c2a3b-0000-4000-8000-000000000001",
-    "/my-computers",
-    "/my-computers/c1",
+    "/my-devices",
+    "/my-devices/c1",
     "/my-notifications",
     "/settings/security",
     "/settings/security/passkeys",
@@ -107,6 +107,8 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/open",
     "/workspaces",
     "/computers",
+    "/devices",
+    "/devices/c1",
   ])("%s is not self-service", (path) => {
     expect(isSelfService(path)).toBe(false);
   });

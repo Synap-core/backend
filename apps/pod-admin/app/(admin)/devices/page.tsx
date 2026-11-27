@@ -1,17 +1,17 @@
 "use client";
 
 /**
- * Access › Computers — every member's computers (`machines.adminList`, pod
+ * Access › Devices — every member's computers (`machines.adminList`, pod
  * admin), how long their keys last, and the agents each one runs. The pod
  * default key lifetime sits in the header. `?status=` filters by key state;
  * `?focus=<computerId>` is received by the rows. Members see their own on
- * `/my-computers`, drawn by the same list.
+ * `/my-devices`, drawn by the same list.
  */
 
 import { Suspense, useEffect } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { computerHref } from "../../../lib/console-nav";
+import { computerHref, navLabel } from "../../../lib/console-nav";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ComputerList } from "./_lib/computer-list";
 import {
@@ -19,7 +19,7 @@ import {
   usePodKeyDefaults,
 } from "./_lib/pod-key-lifetime";
 
-const TITLE = "Computers";
+const TITLE = navLabel("computers");
 const DESCRIPTION =
   "The machines that run your agents, and how long their keys last.";
 

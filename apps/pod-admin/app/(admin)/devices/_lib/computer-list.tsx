@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The computers list — ONE implementation for `/computers` (every member's,
- * pod admin, with an Owner column) and `/my-computers` (the person's own).
+ * The computers list — ONE implementation for `/devices` (every member's,
+ * pod admin, with an Owner column) and `/my-devices` (the person's own).
  * The page supplies the rows and what the viewer may see; this draws the
  * filter chips (`?status=`), the expired-key callout, and the rows (the
  * shared `ResponsiveTable`: a table from `md` up, stacked rows on a phone),
@@ -58,7 +58,7 @@ export interface ComputerListProps {
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
-  /** Where one computer opens (`/computers/<id>` or `/my-computers/<id>`). */
+  /** Where one computer opens (`/devices/<id>` or `/my-devices/<id>`). */
   hrefFor: (id: string) => string;
   /** Show whose computer each row is (the admin's view of every member's). */
   showOwner: boolean;

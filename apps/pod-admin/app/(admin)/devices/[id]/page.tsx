@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * `/computers/[id]` — one computer in the console (pod admin, any member's).
- * The row comes from `machines.adminList` (there is no single-computer read;
- * the list is the same cache the Computers page holds). The body is
- * `ComputerObject`, the same page `/my-computers/[id]` draws for the owner;
+ * `/devices/[id]` — one computer in the console (pod admin, any member's),
+ * keyed by its user id. The row comes from `machines.adminList` (there is no
+ * single-computer read; the list is the same cache the Devices page holds).
+ * The body is `ComputerObject`, the same page `/my-devices/[id]` draws for
+ * the owner;
  * this route adds the admin's links out (the agent, the key, the owner).
  */
 

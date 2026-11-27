@@ -1,5 +1,5 @@
 /**
- * `/computers/[id]` RENDERED (react-dom/server) over the REAL route and the
+ * `/devices/[id]` RENDERED (react-dom/server) over the REAL route and the
  * REAL `ComputerObject`, against a tRPC stub that answers the computers list.
  * Pinned (L8, focus wave 4 Nov): whose computer it is (0388) is a fact on the
  * page and changes here. `machines.setBelongsTo` had no door anywhere, and
@@ -50,7 +50,7 @@ vi.mock("../../../../lib/trpc", () => {
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: h.id }),
   useRouter: () => ({ replace() {}, push() {} }),
-  usePathname: () => `/computers/${h.id}`,
+  usePathname: () => `/devices/${h.id}`,
   useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("../../../_lib/object/use-reauth", () => ({
@@ -87,7 +87,7 @@ const text = (html: string) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
 
-describe("/computers/[id] — whose computer it is", () => {
+describe("/devices/[id] — whose computer it is", () => {
   it("names it as a fact and offers the three answers", () => {
     h.answers.set("machines.adminList", [computer({ belongsTo: "agent" })]);
     const page = text(renderToStaticMarkup(<ComputerPage />));
@@ -119,7 +119,7 @@ describe("/computers/[id] — whose computer it is", () => {
 // Rules out (backend#909 review): a command written as literal backticks in a
 // sentence, `waker install` handed to a computer it throws on (macOS only),
 // and "installed but not running" read as "never ran".
-describe("/computers/[id] — the Wakes agents card", () => {
+describe("/devices/[id] — the Wakes agents card", () => {
   const render = (over: Record<string, unknown>) => {
     h.answers.set("machines.adminList", [computer(over)]);
     const html = renderToStaticMarkup(<ComputerPage />);
@@ -168,7 +168,7 @@ describe("/computers/[id] — the Wakes agents card", () => {
 // Rules out (backend#779 follow-up): the CLI's refusal tells the person to
 // turn on "Installs from the pod" in pod admin › Computers, and no such
 // switch existed; `machines.setHostsServices` had no door anywhere.
-describe("/computers/[id] — the Installs from the pod card", () => {
+describe("/devices/[id] — the Installs from the pod card", () => {
   const render = (over: Record<string, unknown>) => {
     h.mutations.clear();
     h.answers.set("machines.adminList", [computer(over)]);

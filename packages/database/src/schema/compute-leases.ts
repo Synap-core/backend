@@ -62,6 +62,12 @@ export const computeLeases = pgTable(
     /** The provider's id of the machine, from the start's result. */
     resourceId: text("resource_id"),
     /**
+     * The device this lease started (0461): a
+     * provisioned cloud server is a device. Filled by the provision door (P4);
+     * null on every lease before it.
+     */
+    deviceId: uuid("device_id"),
+    /**
      * sha256 (hex) of the pod registration code the start carried, when it
      * started a person's new pod server (0432, plan a640c5bb B1). The sweeper
      * asks the Control Plane whether that code registered: registered = the

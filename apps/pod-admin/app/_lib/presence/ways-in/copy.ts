@@ -32,7 +32,7 @@ export const en = {
   "devices.remove": "Remove",
   "devices.remove.title": "Remove {label}?",
   "devices.remove.consequence":
-    "It stops confirming it’s you right away. Every device of yours is told.",
+    "It stops confirming it’s you right away. You’re told everywhere you’re signed in.",
   "devices.remove.confirm": "Remove",
   "devices.cancel": "Cancel",
   "devices.removed": "Removed",
@@ -85,7 +85,7 @@ export const fr: Catalog<typeof en> = {
   "devices.remove": "Retirer",
   "devices.remove.title": "Retirer {label} ?",
   "devices.remove.consequence":
-    "Il cesse aussitôt de confirmer que c’est vous. Chacun de vos appareils en est informé.",
+    "Il cesse aussitôt de confirmer que c’est vous. Vous en êtes informé partout où vous êtes connecté.",
   "devices.remove.confirm": "Retirer",
   "devices.cancel": "Annuler",
   "devices.removed": "Retiré",

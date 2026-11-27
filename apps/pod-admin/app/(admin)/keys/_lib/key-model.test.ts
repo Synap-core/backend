@@ -164,7 +164,7 @@ describe("holderHref", () => {
       holderHref(
         key({ userId: "c 1", holder: { kind: "computer", name: "devbox" } })
       )
-    ).toBe("/computers/c%201");
+    ).toBe("/devices/c%201");
   });
 
   it("opens an agent's key on its agent page (the key's holder id)", () => {
@@ -197,7 +197,7 @@ describe("keyHref", () => {
           holder: { kind: "computer", name: "devbox" },
         })
       )
-    ).toBe("/computers/c1");
+    ).toBe("/devices/c1");
   });
 
   it("opens a space key with no holder page on its space's keys tab", () => {

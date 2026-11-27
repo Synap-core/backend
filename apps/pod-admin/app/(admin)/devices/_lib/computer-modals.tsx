@@ -3,8 +3,8 @@
 /**
  * The two dialogs a computer's page opens: Rename, and Change key lifetime.
  * Both write through `machines.*`, which let the computer's owner or a pod
- * admin act (`loadManageableMachine`) — the same doors from `/computers` and
- * `/my-computers`, so one dialog serves both.
+ * admin act (`loadManageableMachine`) — the same doors from `/devices` and
+ * `/my-devices`, so one dialog serves both.
  */
 
 import { Input, Radio, RadioGroup, addToast } from "@heroui/react";
