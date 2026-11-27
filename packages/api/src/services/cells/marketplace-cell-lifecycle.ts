@@ -5,9 +5,8 @@
  * proposal's approval does exactly what the person's direct call does, and
  * checks the approver with the same floor the door checked the filer with.
  *
- * Both doors used to write with no governance gate (finding on the Hub REST
- * cell doors, Surfaces wave P0-fix): an agent key could retire a pod-wide cell
- * type (`workspace_id IS NULL`) with no access check at all.
+ * Both doors go through a governance gate: without one, an agent key could
+ * retire a pod-wide cell type (`workspace_id IS NULL`) with no access check.
  */
 
 import { getDb, and, eq, isNull } from "@synap/database";
@@ -186,9 +185,7 @@ export async function installMarketplaceCell(input: {
     };
   }
   const data = (await resp.json()) as { cells?: CellDef[] } | CellDef[];
-  const list = Array.isArray(data)
-    ? data
-    : ((data as { cells?: CellDef[] }).cells ?? []);
+  const list = Array.isArray(data) ? data : (data.cells ?? []);
   const cell = list.find(
     (cell) => cell?.key === cellKey || cell?.key === `${packageSlug}:${cellKey}`
   );

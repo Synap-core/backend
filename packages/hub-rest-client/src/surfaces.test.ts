@@ -1,5 +1,5 @@
 /**
- * The surface write methods (Surfaces P3) reach the three Hub routes with
+ * The surface write methods reach the three Hub routes with
  * the body the pod reads: POST /surfaces, POST /surfaces/attach, and DELETE
  * /surfaces/attach WITH its body (a DELETE whose body is dropped would detach
  * nothing and 400).

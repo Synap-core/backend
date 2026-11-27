@@ -1,5 +1,5 @@
 /**
- * Hub Protocol REST — GET /surfaces (Surfaces P1), the REST door onto
+ * Hub Protocol REST — GET /surfaces, the REST door onto
  * `surfacesForObject` (mocked here; the stores are covered on PGlite by
  * `services/surfaces/for-object.pglite.test.ts`).
  *

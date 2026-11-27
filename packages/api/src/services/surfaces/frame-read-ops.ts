@@ -1,11 +1,11 @@
 /**
  * Each read a frame may ask for (`CELL_BRIDGE_READ_OPS`,
  * `@synap-core/types/cell-bridge`) → the tRPC procedure its hosts map it to
- * today, called SERVER-SIDE with the VIEWER's own context. The same mapping
- * as pod admin's `readForPage` (`apps/pod-admin/app/_lib/object/content/
- * html-bridge-reads.ts`) and the desktop's Hub REST twins (each a thin caller
- * of these procedures): one read per op, never a second predicate. The pod
- * floors every answer to what this viewer may see; nothing here widens it.
+ * today, called SERVER-SIDE with the VIEWER's own context. Every host's frame
+ * reads come here (`surfaces.frameRead`, Hub `POST /frame/read`); the
+ * desktop's Hub REST twins are thin callers of the same procedures: one read
+ * per op, never a second predicate. The pod floors every answer to what this
+ * viewer may see; nothing here widens it.
  *
  * The LENS is the door's, never the frame's: `workspaceId` is stamped here
  * (the frame's params never carry it, `pickBridgeParams` dropped it). With no

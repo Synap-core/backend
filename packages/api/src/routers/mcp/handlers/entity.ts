@@ -600,7 +600,7 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
     // A document FOR one object (`attachTo`): the surface door makes it and
-    // attaches it in one governed act (Surfaces P3). Kept apart from
+    // attaches it in one governed act. Kept apart from
     // `entityId`, the entity's ONE body.
     if (args.attachTo !== undefined) {
       if (attachEntityId) {

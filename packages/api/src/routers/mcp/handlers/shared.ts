@@ -265,7 +265,7 @@ export function ok(data: unknown): CallToolResult {
   // automation, channel, project, …). Every
   // handler flows through this one shaper, so no per-handler edits are needed;
   // arrays, id-less objects, and non-openable ids simply get no link.
-  // A surface write (Surfaces P3) already carries its one link: the object's
+  // A surface write already carries its one link: the object's
   // page on that surface, `/open/<kind>/<id>?surface=<surfaceId>`
   // (`attachedSurfaceOpenUrl`). It is the link, never a second one.
   const surfaceLink = surfaceOpenUrl(data);

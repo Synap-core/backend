@@ -173,7 +173,7 @@ export const coreRouter = router({
   profiles: profilesRouter,
   // Surfaces plane — renderer usage-health (how each record type is displayed),
   // `surfaces.context`: what a frame is about and its brand (contract v3), and
-  // `surfaces.frameRead`: the one frame read door (declared reads, P6a).
+  // `surfaces.frameRead`: the one frame read door (declared reads).
   surfaces: mergeRouters(
     surfacesRouter,
     surfaceContextRouter,

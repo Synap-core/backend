@@ -1,6 +1,6 @@
 /**
  * `resolveViewTrust` on PGlite, with real `views` and `widget_definitions`
- * rows (Surfaces P0-fix, finding d3f3e0df).
+ * rows.
  *
  * The discriminating rows: a `generated` cell drawing a view the acting
  * person owns (the old rule, view ownership first, trusted it, so the cell's

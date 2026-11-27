@@ -266,7 +266,7 @@ function manifestSlugs(): string[] {
 
 async function setupDb(): Promise<{ db: PGlite; sql: Sql }> {
   const db = new PGlite();
-  // The Surfaces P3 conversions (`p3.surfaces.*`) read and write these.
+  // The attached-surface conversions (`p3.surfaces.*`) read and write these.
   await db.exec(SCHEMA + ATTACHMENT_FOLD_TEST_SCHEMA);
   for (const slug of manifestSlugs()) {
     await db.query(

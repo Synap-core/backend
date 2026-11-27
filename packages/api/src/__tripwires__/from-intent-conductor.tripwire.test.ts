@@ -125,8 +125,8 @@ describe("from-intent conductor firewalls", () => {
     const table = src.slice(start, src.indexOf("### 0."));
     const doors: Record<string, string> = {
       data: "synap_capture",
-      // To SEE or SHOW something is the "surface" layer (Surfaces wave, 23 Nov
-      // 2026: a list, a board, a dashboard, a page, a deck); its find-first door
+      // To SEE or SHOW something is the "surface" layer (a list, a board, a
+      // dashboard, a page, a deck); its find-first door
       // keeps the tool name.
       surface: "synap_list_views",
       capability: "synap_list_capabilities",

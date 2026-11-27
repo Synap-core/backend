@@ -1,5 +1,5 @@
 /**
- * REAL-POSTGRES (PGlite) test for the Surfaces P3 conversions
+ * REAL-POSTGRES (PGlite) test for the attached-surface conversions
  * (`p3.surfaces.*`, `foldAnchorsIntoAttachments`), driven through the REAL
  * manifest entries and `runConversions`. Every legacy per-object UI anchor
  * becomes ONE `attaches` link; what cannot move is left and counted.

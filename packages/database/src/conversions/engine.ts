@@ -3338,9 +3338,10 @@ async function applyRetireProjectTwins(
  * `Sql` here supports (postgres.js and the PGlite shims alike), as
  * `applyProjectLifecycleColumns` does: never `sql.unsafe`.
  */
-async function runStatement(tx: Sql, text: string): Promise<unknown> {
+async function runStatement<T>(tx: Sql, text: string): Promise<T[]> {
   const strings = Object.assign([text], { raw: [text] });
-  return tx(strings as unknown as TemplateStringsArray);
+  const rows = await tx(strings as unknown as TemplateStringsArray);
+  return rows as unknown as T[];
 }
 
 /**
@@ -3384,7 +3385,7 @@ async function applyFoldAnchorsIntoAttachments(
             SELECT 1 FROM links l
             WHERE l.from_type = 'entity' AND l.from_id = e.id::text
               AND l.link_type = 'attaches' AND l.metadata->>'migratedFrom' = '${op.source}')`;
-      const rows = (await runStatement(
+      const rows = await runStatement<{ cells: number; edges: number }>(
         tx,
         `
         WITH s AS MATERIALIZED (${src}),
@@ -3407,8 +3408,8 @@ async function applyFoldAnchorsIntoAttachments(
         SELECT (SELECT count(*)::int FROM cells) AS cells,
                (SELECT count(*)::int FROM edges) AS edges
       `
-      )) as unknown as Array<{ cells: number; edges: number }>;
-      const kept = (await runStatement(
+      );
+      const kept = await runStatement<{ n: number }>(
         tx,
         `
         SELECT count(*)::int AS n FROM entities e
@@ -3417,7 +3418,7 @@ async function applyFoldAnchorsIntoAttachments(
           AND coalesce(e.system_data->'renderer'->>'cellKey', '') <> ''
           AND e.workspace_id IS NULL
       `
-      )) as unknown as Array<{ n: number }>;
+      );
       tally(rows[0]?.edges ?? 0, rows[0]?.cells ?? 0, kept[0]?.n ?? 0);
       return counts;
     }
@@ -3440,7 +3441,7 @@ async function applyFoldAnchorsIntoAttachments(
             SELECT 1 FROM links l
             WHERE l.from_type = 'playbook' AND l.from_id = b.subject_id
               AND l.link_type = 'attaches' AND l.metadata->>'bindingId' = b.id::text)`;
-      const cellRows = (await runStatement(
+      const cellRows = await runStatement<{ cells: number; edges: number }>(
         tx,
         `
         WITH s AS MATERIALIZED (
@@ -3467,8 +3468,8 @@ async function applyFoldAnchorsIntoAttachments(
         SELECT (SELECT count(*)::int FROM cells) AS cells,
                (SELECT count(*)::int FROM edges) AS edges
       `
-      )) as unknown as Array<{ cells: number; edges: number }>;
-      const viewRows = (await runStatement(
+      );
+      const viewRows = await runStatement<{ edges: number }>(
         tx,
         `
         WITH s AS MATERIALIZED (
@@ -3486,10 +3487,10 @@ async function applyFoldAnchorsIntoAttachments(
         )
         SELECT count(*)::int AS edges FROM edges
       `
-      )) as unknown as Array<{ edges: number }>;
+      );
       // Left as they are, counted: a VIEW's own binding (a view is not an
       // anchor kind), a cell look with no space, any other ref kind.
-      const kept = (await runStatement(
+      const kept = await runStatement<{ n: number }>(
         tx,
         `
         SELECT count(*)::int AS n FROM renderer_bindings b
@@ -3505,7 +3506,7 @@ async function applyFoldAnchorsIntoAttachments(
             )
           )
       `
-      )) as unknown as Array<{ n: number }>;
+      );
       tally(
         (cellRows[0]?.edges ?? 0) + (viewRows[0]?.edges ?? 0),
         cellRows[0]?.cells ?? 0,
@@ -3514,7 +3515,7 @@ async function applyFoldAnchorsIntoAttachments(
       return counts;
     }
     case "entity-bento": {
-      const rows = (await runStatement(
+      const rows = await runStatement<{ edges: number }>(
         tx,
         `
         WITH s AS MATERIALIZED (
@@ -3534,8 +3535,8 @@ async function applyFoldAnchorsIntoAttachments(
         )
         SELECT count(*)::int AS edges FROM edges
       `
-      )) as unknown as Array<{ edges: number }>;
-      const kept = (await runStatement(
+      );
+      const kept = await runStatement<{ n: number }>(
         tx,
         `
         SELECT count(*)::int AS n FROM entities e
@@ -3543,12 +3544,12 @@ async function applyFoldAnchorsIntoAttachments(
           AND coalesce(e.system_data->>'bentoViewId', '') <> ''
           AND NOT EXISTS (SELECT 1 FROM views v WHERE v.id::text = e.system_data->>'bentoViewId')
       `
-      )) as unknown as Array<{ n: number }>;
+      );
       tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
       return counts;
     }
     case "cell-relation": {
-      const rows = (await runStatement(
+      const rows = await runStatement<{ edges: number }>(
         tx,
         `
         WITH s AS MATERIALIZED (
@@ -3573,8 +3574,8 @@ async function applyFoldAnchorsIntoAttachments(
         )
         SELECT count(*)::int AS edges FROM edges
       `
-      )) as unknown as Array<{ edges: number }>;
-      const kept = (await runStatement(
+      );
+      const kept = await runStatement<{ n: number }>(
         tx,
         `
         SELECT count(*)::int AS n FROM relations r
@@ -3584,7 +3585,7 @@ async function applyFoldAnchorsIntoAttachments(
             OR NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.target_entity_id AND e.deleted_at IS NULL)
           )
       `
-      )) as unknown as Array<{ n: number }>;
+      );
       tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
       return counts;
     }

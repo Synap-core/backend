@@ -35,14 +35,14 @@ import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertCellBindable } from "../renderers/renderer-target-checks.js";
 import { materializeApprovedDocument } from "../proposals/materialize-approved-document.js";
-import { HTML_PAGE_MAX_BYTES, checkHtmlPage } from "@synap/database";
+import { checkHtmlPage } from "@synap/database";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import {
   anchorWorkspaceId,
   attachedSurfaceOpenUrl,
-  detachSlot,
   attachmentMetaProblem,
   insertAttachment,
+  replaceSlot,
   surfaceShapeProblem,
   type SurfaceActor,
   type SurfaceDenied,
@@ -52,8 +52,6 @@ import {
 export type CreateOutcome =
   CreateSurfaceResult | SurfaceRefusal | SurfaceDenied;
 
-/** An HTML artifact's page: the HTML page door's cap (`HTML_PAGE_MAX_BYTES`). */
-export const HTML_SURFACE_MAX_BYTES = HTML_PAGE_MAX_BYTES;
 const TITLE_MAX = 200;
 
 const refuse = (
@@ -62,7 +60,7 @@ const refuse = (
 ): SurfaceRefusal => ({ status: "refused", httpStatus, error });
 
 /** The links endpoint type each body is stored as. */
-export function surfaceTypeOf(body: CreatableSurfaceBody): SurfaceRef["type"] {
+function surfaceTypeOf(body: CreatableSurfaceBody): SurfaceRef["type"] {
   if (body === "document" || body === "html") return "document";
   if (body === "cell") return "cell_instance";
   return "view";
@@ -80,7 +78,7 @@ function htmlPageCheck(spec: SurfaceSpec) {
 }
 
 /** One sentence naming what the spec lacks for its body, or null. */
-export function surfaceSpecProblem(
+function surfaceSpecProblem(
   body: CreatableSurfaceBody,
   spec: SurfaceSpec
 ): string | null {
@@ -327,25 +325,34 @@ export async function applyCreateSurface(input: {
     proposalId: input.proposalId,
   });
   if (!made.ok) return made;
-  if (d.replaceSlot === true && typeof d.slot === "string") {
-    await detachSlot(anchor, d.slot, owner, {
-      agentUserId: input.agentUserId,
-      proposalId: input.proposalId,
+  const workspaceId = await anchorWorkspaceId(anchor);
+  const slot = typeof d.slot === "string" ? d.slot : undefined;
+  const label = typeof d.label === "string" ? d.label : undefined;
+  const attribution = {
+    agentUserId: input.agentUserId,
+    proposalId: input.proposalId,
+  };
+  // The new surface is attached BEFORE the slot's earlier one comes off, in
+  // one transaction: a failure leaves the object its earlier look.
+  if (d.replaceSlot === true && slot) {
+    const replaced = await replaceSlot({
+      anchor,
+      slot,
+      surface,
+      workspaceId,
+      userId: owner,
+      label,
+      attribution,
     });
+    return { ok: true, surface, linkId: replaced.linkId! };
   }
   const written = await insertAttachment({
     anchor,
     surface,
-    workspaceId: await anchorWorkspaceId(anchor),
+    workspaceId,
     createdBy: owner,
-    meta: {
-      slot: typeof d.slot === "string" ? d.slot : undefined,
-      label: typeof d.label === "string" ? d.label : undefined,
-    },
-    attribution: {
-      agentUserId: input.agentUserId,
-      proposalId: input.proposalId,
-    },
+    meta: { slot, label },
+    attribution,
   });
   return { ok: true, surface, linkId: written.linkId };
 }

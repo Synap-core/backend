@@ -282,7 +282,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
   /**
    * POST /cell-instances/html — an html page placed as a cell.
    *
-   * ONE HTML write door (founder decision, 27 Nov 2026): the page is written
+   * ONE HTML write door: the page is written
    * by the Hub document door (`documents.createDocument {type: "html"}`, the
    * same code path as `synap_create_document`): its governance
    * (`document/create`), its checks (size cap, declared reads) and its

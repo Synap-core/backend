@@ -1,13 +1,7 @@
 /** @folder The one Block: what a composed body (bento, sheet canvas, markdown document, whiteboard) places. */
 /**
- * THE ONE BLOCK (Surfaces P5, audit appendix B §4 Q2). Five bodies place the
- * same three things, a saved VIEW, one ENTITY, or a CELL, and each had its own
- * type for it: the bento zod (`kind:"widget"`, `widgetType`, `config`), the
- * app's `BentoWidgetBlock` (`cellInstanceId`), the template `BentoBlockDef`,
- * the sheet canvas (`kind:"cell"`, `cellKey`, `props`), markdown embeds
- * (`synap-cell{cellKey|instanceId}` + a json props block) and whiteboard cell
- * shapes (`cellProps` as a JSON string). `Block` is the one shape; where a body
- * puts it is the body's own `place` (`PlacedBlock<P>`).
+ * THE ONE BLOCK: what a composed body (bento, sheet canvas, markdown
+ * document, whiteboard) places, a saved VIEW, one ENTITY, or a CELL.
  *
  * Every reader goes through {@link readLegacyBlock}, which accepts the old
  * spellings: `kind:"widget"` → `"cell"`, `widgetType` → `cellKey`, `config` →
@@ -77,20 +71,6 @@ export type CellBlock =
 
 export type Block = ViewBlock | EntityBlock | CellBlock;
 
-/**
- * A block where a body put it. `place` is the body's own coordinates:
- * {@link BentoPlace} for a bento, a range for a sheet, a box for a board; a
- * markdown document places by document order (no place).
- */
-export interface PlacedBlock<P> {
-  id: string;
-  block: Block;
-  place: P;
-  title?: string;
-  /** The body's shell treatment (bento `chrome`). */
-  chrome?: string;
-}
-
 /** A bento tile's grid position (12-column units). */
 export interface BentoPlace {
   x: number;
@@ -154,20 +134,6 @@ function hasProps(props: unknown): boolean {
     Object.keys(props as object).length > 0
   );
 }
-
-/** THE Block schema: a view, an entity, or a cell (key or instance). */
-export const BlockSchema = z
-  .discriminatedUnion("kind", [
-    ViewBlockSchema,
-    EntityBlockSchema,
-    CellBlockSchema,
-  ])
-  .superRefine((block, ctx) => {
-    if (block.kind !== "cell") return;
-    for (const message of cellBlockIssues(block)) {
-      ctx.addIssue({ code: "custom", message });
-    }
-  }) as unknown as z.ZodType<Block>;
 
 // ─── The read codec (every legacy spelling → Block) ──────────────────────────
 
@@ -275,23 +241,9 @@ export function blockCellKey(block: Block): string | undefined {
   return block.kind === "cell" ? block.cellKey : undefined;
 }
 
-// ─── Markdown embeds ↔ Block ─────────────────────────────────────────────────
-//
-// markdown-core parses (`readEmbed` → `Embed`) and writes (`serializeEmbed` ←
-// `EmbedInput`) the directives; it depends on no Synap package, so the codec
-// lives here and speaks those two shapes structurally (the same split as
-// `renderables/embed-model.ts`). The directive names and their reference
-// attributes are stored content: they do not change.
+// ─── Markdown embeds ─────────────────────────────────────────────────────────
 
-/** The parts of a markdown-core `Embed` the codec reads. */
-export interface EmbedParts {
-  /** `synap-cell` | `synap-view` | `synap-entity` (others are not blocks). */
-  directive: string;
-  ref: Record<string, string>;
-  props?: Record<string, unknown>;
-}
-
-/** The directive that writes each Block kind. */
+/** The markdown embed directive that writes each Block kind (stored content). */
 export const BLOCK_EMBED_DIRECTIVES = {
   view: "synap-view",
   entity: "synap-entity",
@@ -306,76 +258,4 @@ export function isBlockEmbedDirective(
   return (Object.values(BLOCK_EMBED_DIRECTIVES) as string[]).includes(
     directive
   );
-}
-
-/**
- * A markdown embed as a Block, or `null` (not a block directive, or no
- * reference). Reads the legacy `data-*` reference attributes too.
- */
-export function embedToBlock(embed: EmbedParts): Block | null {
-  const ref = embed.ref;
-  switch (embed.directive) {
-    case "synap-view": {
-      const viewId = str(ref.viewId) ?? str(ref["data-view-id"]);
-      if (!viewId) return null;
-      const overrides =
-        embed.props && hasProps(embed.props) ? embed.props : undefined;
-      return { kind: "view", viewId, ...(overrides ? { overrides } : {}) };
-    }
-    case "synap-entity": {
-      const entityId = str(ref.id);
-      if (!entityId) return null;
-      return readLegacyBlock({
-        kind: "entity",
-        entityId,
-        variant: ref.variant,
-      });
-    }
-    case "synap-cell": {
-      const instanceId = str(ref.instanceId) ?? str(ref["data-instance-id"]);
-      const cellKey = str(ref.cellKey) ?? str(ref["data-cell-key"]);
-      if (!cellKey) return instanceId ? { kind: "cell", instanceId } : null;
-      if (instanceId) return { kind: "cell", cellKey, instanceId };
-      return {
-        kind: "cell",
-        cellKey,
-        ...(embed.props && hasProps(embed.props) ? { props: embed.props } : {}),
-      };
-    }
-    default:
-      return null;
-  }
-}
-
-/** A Block as the parts markdown-core's `serializeEmbed` writes. */
-export function blockToEmbed(block: Block): EmbedParts {
-  switch (block.kind) {
-    case "view":
-      return {
-        directive: BLOCK_EMBED_DIRECTIVES.view,
-        ref: { viewId: block.viewId },
-        ...(block.overrides && hasProps(block.overrides)
-          ? { props: block.overrides }
-          : {}),
-      };
-    case "entity":
-      return {
-        directive: BLOCK_EMBED_DIRECTIVES.entity,
-        ref: {
-          id: block.entityId,
-          ...(block.variant ? { variant: block.variant } : {}),
-        },
-      };
-    case "cell":
-      return {
-        directive: BLOCK_EMBED_DIRECTIVES.cell,
-        ref: {
-          ...(block.cellKey ? { cellKey: block.cellKey } : {}),
-          ...(block.instanceId ? { instanceId: block.instanceId } : {}),
-        },
-        ...(!block.instanceId && block.props && hasProps(block.props)
-          ? { props: block.props }
-          : {}),
-      };
-  }
 }

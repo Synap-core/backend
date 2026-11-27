@@ -105,8 +105,8 @@ export interface SurfacesForObject {
 
 // ── The write contract: create, attach, detach ──────────────────────────────
 //
-// An ATTACHED surface is a `links` edge `<anchor> --attaches--> <surface>`
-// (founder decision 23 Nov 2026). ONE door writes it on every client: tRPC
+// An ATTACHED surface is a `links` edge `<anchor> --attaches--> <surface>`.
+// ONE door writes it on every client: tRPC
 // `surfaces.create | attach | detach`, MCP `synap_create_surface` /
 // `synap_attach_surface`, Hub REST `POST /surfaces`, `POST /surfaces/attach`,
 // `DELETE /surfaces/attach`, hub-rest-client `createSurface` /
@@ -188,20 +188,6 @@ export interface CreateSurfaceInput {
   spec?: SurfaceSpec;
   slot?: string;
   label?: string;
-}
-
-export interface AttachSurfaceInput {
-  anchor: SurfaceAnchor;
-  surface: SurfaceRef;
-  slot?: string;
-  label?: string;
-  /** Default: after the object's last attached surface. */
-  position?: number;
-}
-
-export interface DetachSurfaceInput {
-  anchor: SurfaceAnchor;
-  surface: SurfaceRef;
 }
 
 /** An agent's (or a ruled) write: filed for the person to approve. */

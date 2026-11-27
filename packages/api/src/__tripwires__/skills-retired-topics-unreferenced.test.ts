@@ -1,7 +1,7 @@
 /**
  * TRIPWIRE — a retired skill topic is a redirect, and nothing points at it.
  *
- * Surfaces P8b (26 Nov 2026): `synap-ui/four-builds` and `synap/viewframe-cells`
+ * `synap-ui/four-builds` and `synap/viewframe-cells`
  * moved into the `surfaces` skill. Their files stay as short redirect stubs, so
  * the `system/<pkg>/<stem>` rows already seeded on every pod heal to a pointer
  * (`ensureSystemSkills` re-projects a changed file and never deletes a row):

@@ -9,7 +9,7 @@
  * `trustLevel: "generated"` (conservative: it proposes its own writes); a
  * person's is `user` / `trusted`.
  *
- * An HTML cell is a PLACEMENT (founder decision, 27 Nov 2026): its page is an
+ * An HTML cell is a PLACEMENT: its page is an
  * html document written by the HTML page door (`createHtmlPage`, the same
  * checks and stored shape as `synap_create_document {type: "html"}`), and the
  * cell only points at it (`sourceDocumentId`, also in its props). The cell
@@ -26,6 +26,7 @@ import {
   documents,
 } from "@synap/database";
 import { HTML_CELL_KEY } from "@synap-core/types/whiteboard";
+import { sql as drizzleSql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export interface NewCellInstance {
@@ -44,25 +45,28 @@ export interface NewCellInstance {
 
 export type CellInstanceRow = typeof cellInstances.$inferSelect;
 
+type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function insertCellInstance(
   input: NewCellInstance
 ): Promise<CellInstanceRow> {
-  const [row] = await db
-    .insert(cellInstances)
-    .values({
-      ...(input.id ? { id: input.id } : {}),
-      workspaceId: input.workspaceId,
-      userId: input.userId,
-      cellType: input.cellType,
-      config: input.config ?? {},
-      name: input.name,
-      isTemplate: input.isTemplate ?? false,
-      sourceDocumentId: input.sourceDocumentId,
-      createdByKind: input.agentUserId ? "agent" : "user",
-      trustLevel: input.agentUserId ? "generated" : "trusted",
-    })
-    .returning();
+  const [row] = await cellInstanceInsert(db, input).returning();
   return row;
+}
+
+function cellInstanceInsert(tx: DbOrTx, input: NewCellInstance) {
+  return tx.insert(cellInstances).values({
+    ...(input.id ? { id: input.id } : {}),
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    cellType: input.cellType,
+    config: input.config ?? {},
+    name: input.name,
+    isTemplate: input.isTemplate ?? false,
+    sourceDocumentId: input.sourceDocumentId,
+    createdByKind: input.agentUserId ? "agent" : "user",
+    trustLevel: input.agentUserId ? "generated" : "trusted",
+  });
 }
 
 /**
@@ -155,39 +159,59 @@ export async function placeHtmlPage(input: {
     workspaceId: input.workspaceId,
     userId: input.userId,
   };
-  if (input.id) {
-    const [atId] = await db
+  // One placement at a time per (page, space, person): the lock is held until
+  // the transaction ends, so a concurrent retry waits, then finds this cell.
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      drizzleSql`select pg_advisory_xact_lock(hashtext(${`html-place|${key.documentId}|${key.workspaceId}|${key.userId}`}))`
+    );
+    if (input.id) {
+      const [atId] = await tx
+        .select()
+        .from(cellInstances)
+        .where(eq(cellInstances.id, input.id))
+        .limit(1);
+      if (atId) {
+        if (!isSamePlacement(atId, key)) throw placementRefused();
+        return atId;
+      }
+    }
+    const [placed] = await tx
       .select()
       .from(cellInstances)
-      .where(eq(cellInstances.id, input.id))
-      .limit(1);
-    if (atId) {
-      if (!isSamePlacement(atId, key)) throw placementRefused();
-      return atId;
-    }
-  }
-  const [placed] = await db
-    .select()
-    .from(cellInstances)
-    .where(
-      and(
-        eq(cellInstances.sourceDocumentId, input.documentId),
-        eq(cellInstances.cellType, HTML_CELL_KEY),
-        eq(cellInstances.workspaceId, input.workspaceId),
-        eq(cellInstances.userId, input.userId)
+      .where(
+        and(
+          eq(cellInstances.sourceDocumentId, key.documentId),
+          eq(cellInstances.cellType, HTML_CELL_KEY),
+          eq(cellInstances.workspaceId, key.workspaceId),
+          eq(cellInstances.userId, key.userId)
+        )
       )
-    )
-    .limit(1);
-  if (placed) return placed;
-  return insertCellInstance({
-    id: input.id,
-    workspaceId: input.workspaceId,
-    userId: input.userId,
-    cellType: HTML_CELL_KEY,
-    config: { sourceDocumentId: input.documentId },
-    name: input.name,
-    sourceDocumentId: input.documentId,
-    agentUserId: input.agentUserId,
+      .limit(1);
+    if (placed) return placed;
+    const [row] = await cellInstanceInsert(tx, {
+      id: input.id,
+      workspaceId: key.workspaceId,
+      userId: key.userId,
+      cellType: HTML_CELL_KEY,
+      config: { sourceDocumentId: key.documentId },
+      name: input.name,
+      sourceDocumentId: key.documentId,
+      agentUserId: input.agentUserId,
+    })
+      .onConflictDoNothing({ target: cellInstances.id })
+      .returning();
+    // The caller's id was taken meanwhile by another cell (not this
+    // placement: that would have been found above, under the lock).
+    if (!row) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "This cell id was just taken by another cell. Nothing was placed: place the page again with another id, or none.",
+        cause: { reasonCode: "CELL_ID_TAKEN" },
+      });
+    }
+    return row;
   });
 }
 

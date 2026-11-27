@@ -1,5 +1,5 @@
 /**
- * The static checks of `surfaces.inspect` (Surfaces P7), one row per case
+ * The static checks of `surfaces.inspect`, one row per case
  * each pattern must catch AND per look-alike it must leave alone (a token's
  * own fallback, an anchor link, a decorative image, a labelled field): a
  * lint that flags everything is as useless as one that flags nothing.

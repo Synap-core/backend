@@ -141,6 +141,7 @@ export * from "./widget-definitions.js";
 
 // Frame read log: every read a framed surface asked the frame read door for (0456)
 export * from "./frame-read-log.js";
+export * from "./frame-drafts.js";
 
 // NEW: Entity External Links (connector sync tracking)
 export * from "./entity-external-links.js";

@@ -137,7 +137,7 @@ export interface SurfaceInspection {
   render: { status: "unavailable"; reason: string };
 }
 
-export const RENDER_UNAVAILABLE_REASON =
+const RENDER_UNAVAILABLE_REASON =
   "no headless renderer on the pod: the screenshot and console errors come from the person's computer";
 
 const notFound = (what: string) =>
@@ -217,7 +217,7 @@ async function loadPage(
 }
 
 /** The cell types a view places (`config.blocks`: cell keys and legacy widget tiles). */
-export function viewCellKeys(config: unknown): string[] {
+function viewCellKeys(config: unknown): string[] {
   const blocks = (config as { blocks?: unknown } | null)?.blocks;
   if (!Array.isArray(blocks)) return [];
   const keys = new Set<string>();
@@ -417,7 +417,7 @@ async function readLog(
 }
 
 /** Compare what a surface declares with what its frame asked for. */
-export function compareReads(
+function compareReads(
   declared: CellBridgeDeclaredReads | null,
   rows: Array<{ op: string; allowed: boolean; n: number; lastAt: Date | null }>
 ): Omit<SurfaceReads, "surfaceKind" | "key" | "declared"> {
@@ -641,7 +641,7 @@ function lintSection<F>(
 
 // ── The door ───────────────────────────────────────────────────────────────
 
-export function clampInspectDays(days: number | undefined): number {
+function clampInspectDays(days: number | undefined): number {
   if (days === undefined || !Number.isFinite(days))
     return FRAME_READ_LOG_RETENTION_DAYS;
   return Math.min(FRAME_READ_LOG_RETENTION_DAYS, Math.max(1, Math.floor(days)));
