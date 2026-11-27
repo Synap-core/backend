@@ -227,3 +227,5 @@ export function filterToolsForAccess<T extends { name: string }>(
     (t) => !unlisted.has(t.name) && (!visible || visible.has(t.name))
   );
 }
+
+export const NEGCTL_ENTRY = new Set(["synap_ask", "synap_capture"]);

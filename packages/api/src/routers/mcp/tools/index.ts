@@ -2575,7 +2575,6 @@ export function toolDefinitions() {
       aliases: [
         {
           name: "synap_run_playbook",
-          group: "build",
           reason:
             "A launch is a start with launch: true (review B2 F5); the old name stays frozen on the connector as pod__run_playbook, with its argument names.",
           args: {
