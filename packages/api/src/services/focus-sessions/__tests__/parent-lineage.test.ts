@@ -5,6 +5,7 @@
  * (`routers/mcp/handlers/session.ts`).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const { getParentSessionIdMock, getParentSessionIdsMock } = vi.hoisted(() => ({
   getParentSessionIdMock: vi.fn(async (_id: string) => null as string | null),
@@ -13,10 +14,12 @@ const { getParentSessionIdMock, getParentSessionIdsMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@synap/database", () => ({
-  getParentSessionId: getParentSessionIdMock,
-  getParentSessionIds: getParentSessionIdsMock,
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    getParentSessionId: getParentSessionIdMock,
+    getParentSessionIds: getParentSessionIdsMock,
+  })
+);
 
 import {
   withParentSessionId,

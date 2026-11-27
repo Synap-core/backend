@@ -17,6 +17,7 @@
  * exactly as before.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const calls = vi.hoisted(() => ({
   resolveProfile: vi.fn(),
@@ -26,29 +27,31 @@ const calls = vi.hoisted(() => ({
   cellRows: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@synap/database", () => ({
-  getDb: async () => ({
-    query: { workspaces: { findFirst: async () => null } },
-    // widget_definitions lookup for the surface ↔ renderer-type check
-    select: () => ({ from: () => ({ where: async () => calls.cellRows }) }),
-  }),
-  ProfileRepository: class {
-    update = calls.profileUpdate;
-  },
-  ProfileResolutionService: class {
-    resolveProfile = calls.resolveProfile;
-  },
-  WorkspaceRepository: class {},
-  eventRepository: {},
-  setRendererBinding: calls.setRendererBinding,
-  revokeRendererBinding: calls.revokeRendererBinding,
-  workspaces: {},
-  widgetDefinitions: {},
-  and: () => undefined,
-  or: () => undefined,
-  isNull: () => undefined,
-  eq: () => undefined,
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    getDb: async () => ({
+      query: { workspaces: { findFirst: async () => null } },
+      // widget_definitions lookup for the surface ↔ renderer-type check
+      select: () => ({ from: () => ({ where: async () => calls.cellRows }) }),
+    }),
+    ProfileRepository: class {
+      update = calls.profileUpdate;
+    },
+    ProfileResolutionService: class {
+      resolveProfile = calls.resolveProfile;
+    },
+    WorkspaceRepository: class {},
+    eventRepository: {},
+    setRendererBinding: calls.setRendererBinding,
+    revokeRendererBinding: calls.revokeRendererBinding,
+    workspaces: {},
+    widgetDefinitions: {},
+    and: () => undefined,
+    or: () => undefined,
+    isNull: () => undefined,
+    eq: () => undefined,
+  })
+);
 vi.mock("./renderer-binding-authz.js", () => ({
   assertMayBindRenderer: async () => undefined,
 }));

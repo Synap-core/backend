@@ -7,6 +7,7 @@
  * version upload and the realtime broadcast.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const m = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -15,39 +16,41 @@ const m = vi.hoisted(() => ({
   insert: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => ({
-  db: {
-    query: {
-      views: { findFirst: async () => ({ id: "view-1" }) },
-      documents: {
-        findFirst: async () => ({
-          id: "doc-1",
-          type: "whiteboard",
-          mimeType: "application/json",
-          currentVersion: 3,
-        }),
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      query: {
+        views: { findFirst: async () => ({ id: "view-1" }) },
+        documents: {
+          findFirst: async () => ({
+            id: "doc-1",
+            type: "whiteboard",
+            mimeType: "application/json",
+            currentVersion: 3,
+          }),
+        },
       },
+      insert: () => ({
+        values: (v: unknown) => {
+          m.insert(v);
+          return { returning: async () => [{ id: "version-1" }] };
+        },
+      }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
     },
-    insert: () => ({
-      values: (v: unknown) => {
-        m.insert(v);
-        return { returning: async () => [{ id: "version-1" }] };
-      },
-    }),
-    update: () => ({ set: () => ({ where: async () => undefined }) }),
-  },
-  eq: (_c: unknown, v: unknown) => ({ v }),
-  claimDocumentRevision: vi.fn(),
-  INHERIT_LAST_AUTHOR: Symbol("inherit"),
-  AUTOSAVE_CHECKPOINT: Symbol("autosave"),
-  emitDocumentContentReplaced: vi.fn(),
-  readDocumentVersionBuffer: vi.fn(),
-  storedVersionValues: () => ({}),
-  uploadDocumentVersionSnapshot: async (args: unknown) => {
-    m.upload(args);
-    return {};
-  },
-}));
+    eq: (_c: unknown, v: unknown) => ({ v }),
+    claimDocumentRevision: vi.fn(),
+    INHERIT_LAST_AUTHOR: Symbol("inherit"),
+    AUTOSAVE_CHECKPOINT: Symbol("autosave"),
+    emitDocumentContentReplaced: vi.fn(),
+    readDocumentVersionBuffer: vi.fn(),
+    storedVersionValues: () => ({}),
+    uploadDocumentVersionSnapshot: async (args: unknown) => {
+      m.upload(args);
+      return {};
+    },
+  })
+);
 vi.mock("@synap/database/schema", () => ({
   documents: { id: "documents.id" },
   documentVersions: {},

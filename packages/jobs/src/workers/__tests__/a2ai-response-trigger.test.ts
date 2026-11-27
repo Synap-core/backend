@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const userMessageId = "11111111-1111-4111-8111-111111111111";
 const channelId = "22222222-2222-4222-8222-222222222222";
@@ -77,77 +78,81 @@ vi.mock("@synap/intelligence-client", async () => {
   };
 });
 
-vi.mock("@synap/database", () => ({
-  ChatTurnStatus: {
-    RUNNING: "running",
-    COMPLETED: "completed",
-    FAILED: "failed",
-    CANCELLED: "cancelled",
-  },
-  chatTurns: {
-    id: "id",
-    userId: "user_id",
-    requestId: "request_id",
-  },
-  messages: { id: "id" },
-  RoutedSource: {
-    ORCHESTRATOR: "orchestrator",
-    MENTION: "mention",
-    DIRECT: "direct",
-  },
-  eq: () => ({}),
-  and: () => ({}),
-  gte: () => ({}),
-  persistAssistantReply: (...args: unknown[]) =>
-    mocks.persistAssistantReply(...args),
-  claimRun: async (_db: unknown, input: Record<string, unknown>) => {
-    mocks.claims.push(input);
-    return { rows: [], transitions: [] };
-  },
-  drizzleSql: () => ({}),
-  playbookRuns: { sessionId: "session_id", holder: "holder" },
-  agentOverridesForTurn: (...args: unknown[]) =>
-    mocks.agentOverridesForTurn(...args),
-  stampMessagesSeenByAgent: (...args: unknown[]) =>
-    mocks.stampMessagesSeenByAgent(...args),
-  db: {
-    insert: () => ({
-      values: () => ({
-        onConflictDoNothing: () => ({
-          returning: async () => mocks.insertReturning,
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    ChatTurnStatus: {
+      RUNNING: "running",
+      COMPLETED: "completed",
+      FAILED: "failed",
+      CANCELLED: "cancelled",
+    },
+    chatTurns: {
+      id: "id",
+      userId: "user_id",
+      requestId: "request_id",
+    },
+    messages: { id: "id" },
+    RoutedSource: {
+      ORCHESTRATOR: "orchestrator",
+      MENTION: "mention",
+      DIRECT: "direct",
+    },
+    eq: () => ({}),
+    and: () => ({}),
+    gte: () => ({}),
+    persistAssistantReply: (...args: unknown[]) =>
+      mocks.persistAssistantReply(...args),
+    claimRun: async (_db: unknown, input: Record<string, unknown>) => {
+      mocks.claims.push(input);
+      return { rows: [], transitions: [] };
+    },
+    drizzleSql: () => ({}),
+    playbookRuns: { sessionId: "session_id", holder: "holder" },
+    agentOverridesForTurn: (...args: unknown[]) =>
+      mocks.agentOverridesForTurn(...args),
+    stampMessagesSeenByAgent: (...args: unknown[]) =>
+      mocks.stampMessagesSeenByAgent(...args),
+    db: {
+      insert: () => ({
+        values: () => ({
+          onConflictDoNothing: () => ({
+            returning: async () => mocks.insertReturning,
+          }),
         }),
       }),
-    }),
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => mocks.selectReturning,
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => mocks.selectReturning,
+          }),
         }),
       }),
-    }),
-    update: () => ({
-      set: (values: Record<string, unknown>) => {
-        mocks.updateSets.push(values);
-        return {
-          // finish: await where(); reopen CAS: where().returning()
-          where: () => {
-            const p = Promise.resolve(undefined) as Promise<undefined> & {
-              returning: () => Promise<Array<{ id: string }>>;
-            };
-            p.returning = async () =>
-              values.status === ChatTurnStatus.RUNNING ? [{ id: turnId }] : [];
-            return p;
-          },
-        };
-      },
-    }),
-    query: {
-      messages: {
-        findFirst: async () => mocks.messageLookup,
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          mocks.updateSets.push(values);
+          return {
+            // finish: await where(); reopen CAS: where().returning()
+            where: () => {
+              const p = Promise.resolve(undefined) as Promise<undefined> & {
+                returning: () => Promise<Array<{ id: string }>>;
+              };
+              p.returning = async () =>
+                values.status === ChatTurnStatus.RUNNING
+                  ? [{ id: turnId }]
+                  : [];
+              return p;
+            },
+          };
+        },
+      }),
+      query: {
+        messages: {
+          findFirst: async () => mocks.messageLookup,
+        },
       },
     },
-  },
-}));
+  })
+);
 
 const {
   handleA2AIResponseTrigger,

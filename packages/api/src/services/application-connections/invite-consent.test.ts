@@ -10,20 +10,23 @@
  * (`application-connections.requester-account.test.ts`).
  */
 import { describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
-vi.mock("@synap/database", () => ({
-  FederatedApplicationConnectionService: class {},
-  TrustedIssuerService: class {},
-  findOpenPodInviteAcceptance: vi.fn(),
-  hasActivePodAccess: vi.fn(),
-  readPodUserAccess: vi.fn(),
-  db: {},
-  and: vi.fn(),
-  eq: vi.fn(),
-  users: {},
-  federatedApplicationConnections: {},
-  trustedIssuers: {},
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    FederatedApplicationConnectionService: class {},
+    TrustedIssuerService: class {},
+    findOpenPodInviteAcceptance: vi.fn(),
+    hasActivePodAccess: vi.fn(),
+    readPodUserAccess: vi.fn(),
+    db: {},
+    and: vi.fn(),
+    eq: vi.fn(),
+    users: {},
+    federatedApplicationConnections: {},
+    trustedIssuers: {},
+  })
+);
 vi.mock("../../notifications/NotificationService.js", () => ({
   NotificationService: { create: vi.fn() },
 }));

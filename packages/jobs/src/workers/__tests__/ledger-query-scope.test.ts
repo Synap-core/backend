@@ -26,6 +26,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 // Membership fixture the mocked `userVisibleWhere` consults.
 const WS_A = "ws-a";
@@ -38,16 +39,18 @@ const VISIBLE_WORKSPACES: Record<string, Set<string>> = {
   [OTHER]: new Set([WS_B]),
 };
 
-vi.mock("@synap/database", () => ({
-  eq: (col: unknown, val: unknown) => ({ _tag: "eq", col, val }),
-  userVisibleWhere: (col: unknown, userId: string) => ({
-    _tag: "userVisible",
-    col,
-    userId,
-  }),
-  automationRuns: { workspaceId: { _colName: "workspace_id", _t: "runs" } },
-  proposals: { workspaceId: { _colName: "workspace_id", _t: "proposals" } },
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    eq: (col: unknown, val: unknown) => ({ _tag: "eq", col, val }),
+    userVisibleWhere: (col: unknown, userId: string) => ({
+      _tag: "userVisible",
+      col,
+      userId,
+    }),
+    automationRuns: { workspaceId: { _colName: "workspace_id", _t: "runs" } },
+    proposals: { workspaceId: { _colName: "workspace_id", _t: "proposals" } },
+  })
+);
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

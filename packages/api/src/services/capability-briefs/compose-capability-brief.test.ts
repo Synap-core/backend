@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const { mockDbSelect, mockDryRun, mockGetEffectiveAiPosture } = vi.hoisted(
   () => ({
@@ -16,25 +17,27 @@ const { mockDbSelect, mockDryRun, mockGetEffectiveAiPosture } = vi.hoisted(
   })
 );
 
-vi.mock("@synap/database", () => ({
-  db: { select: mockDbSelect },
-  skills: {
-    slug: "slug",
-    description: "description",
-    body: "body",
-    teachesTools: "teachesTools",
-    alwaysOn: "alwaysOn",
-    kind: "kind",
-    workspaceId: "workspaceId",
-    status: "status",
-    approved: "approved",
-  },
-  ProfileResolutionService: class {
-    getEffectiveAiPosture(...args: unknown[]) {
-      return mockGetEffectiveAiPosture(...args);
-    }
-  },
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: { select: mockDbSelect },
+    skills: {
+      slug: "slug",
+      description: "description",
+      body: "body",
+      teachesTools: "teachesTools",
+      alwaysOn: "alwaysOn",
+      kind: "kind",
+      workspaceId: "workspaceId",
+      status: "status",
+      approved: "approved",
+    },
+    ProfileResolutionService: class {
+      getEffectiveAiPosture(...args: unknown[]) {
+        return mockGetEffectiveAiPosture(...args);
+      }
+    },
+  })
+);
 
 vi.mock("@synap/database/agent-governance", () => ({
   dryRunAgentGovernanceDecision: (...args: unknown[]) => mockDryRun(...args),

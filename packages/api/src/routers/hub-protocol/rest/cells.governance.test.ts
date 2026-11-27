@@ -15,6 +15,7 @@
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const h = vi.hoisted(() => ({
   defineCalls: [] as Array<Record<string, unknown>>,
@@ -26,31 +27,33 @@ const h = vi.hoisted(() => ({
     { scopes: Array<Record<string, unknown>>; clientId: null } | undefined,
 }));
 
-vi.mock("@synap/database", () => ({
-  // The grant rung (utils/grant-write-check.ts) reads the request's grant.
-  db: {},
-  getRequestGrant: () => h.grant,
-  getDb: async () => ({
-    query: { widgetDefinitions: { findMany: async () => [] } },
-    // The define-time check reads the stored row only for a source it
-    // refuses (is it kept as builtin / mcp-app, does it hold an egress grant):
-    // none here.
-    select: () => ({
-      from: () => ({ where: () => ({ limit: async () => [] }) }),
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    // The grant rung (utils/grant-write-check.ts) reads the request's grant.
+    db: {},
+    getRequestGrant: () => h.grant,
+    getDb: async () => ({
+      query: { widgetDefinitions: { findMany: async () => [] } },
+      // The define-time check reads the stored row only for a source it
+      // refuses (is it kept as builtin / mcp-app, does it hold an egress grant):
+      // none here.
+      select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [] }) }),
+      }),
     }),
-  }),
-  and: (...c: unknown[]) => ({ op: "and", c }),
-  eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
-  isNull: (a: unknown) => ({ op: "isNull", a }),
-  or: (...c: unknown[]) => ({ op: "or", c }),
-  // The route's import chain now reaches `services/status/status-facts.ts`
-  // (domain-event-bridge → status-floor → status-facts), which names
-  // `drizzleSql` as a binding; a total mock must define it. Never called here.
-  drizzleSql: Object.assign(() => ({ op: "sql" }), {
-    join: () => ({ op: "sql" }),
-    raw: () => ({ op: "sql" }),
-  }),
-}));
+    and: (...c: unknown[]) => ({ op: "and", c }),
+    eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
+    isNull: (a: unknown) => ({ op: "isNull", a }),
+    or: (...c: unknown[]) => ({ op: "or", c }),
+    // The route's import chain now reaches `services/status/status-facts.ts`
+    // (domain-event-bridge → status-floor → status-facts), which names
+    // `drizzleSql` as a binding; a total mock must define it. Never called here.
+    drizzleSql: Object.assign(() => ({ op: "sql" }), {
+      join: () => ({ op: "sql" }),
+      raw: () => ({ op: "sql" }),
+    }),
+  })
+);
 
 // PARTIAL mock: the route also reads `CONTENT_KINDS` (it builds its
 // `contentKind` zod enum from that runtime SSOT). A TOTAL replacement dropped

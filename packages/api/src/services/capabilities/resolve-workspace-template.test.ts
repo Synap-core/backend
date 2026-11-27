@@ -14,6 +14,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const {
   cacheRows,
@@ -27,19 +28,21 @@ const {
   mockToWorkspaceDefinition: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => ({
-  db: {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => cacheRows,
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => cacheRows,
+          }),
         }),
       }),
-    }),
-  },
-  and: (...a: unknown[]) => a,
-  eq: (...a: unknown[]) => a,
-}));
+    },
+    and: (...a: unknown[]) => a,
+    eq: (...a: unknown[]) => a,
+  })
+);
 
 vi.mock("@synap/database/schema", () => ({
   cpCatalogCache: {

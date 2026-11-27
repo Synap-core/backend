@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const uploadMock = vi.fn();
 const storageDeleteMock = vi.fn();
@@ -29,38 +30,40 @@ const entityUpdateMock = vi.fn();
 // must be listed here. `entities`/`and`/`eq`/`isNull` are used by the
 // documentId no-clobber UPDATE; omitting one makes it `undefined` at runtime
 // with NO type error (the "total vi.mock breaks on a new import" trap).
-vi.mock("@synap/database", () => ({
-  eventRepository: {},
-  documentVersionSnapshotFromUpload: (input: {
-    metadata: { url: string; path: string; size: number; checksum?: string };
-    mimeType: string;
-    extractedText?: string;
-  }) => ({
-    storageUrl: input.metadata.url,
-    storageKey: input.metadata.path,
-    size: input.metadata.size,
-    mimeType: input.mimeType,
-    checksum: input.metadata.checksum ?? "",
-    contentPreview: input.extractedText ?? "",
-    metadata: input.metadata,
-  }),
-  entities: {
-    id: "entities.id",
-    userId: "entities.user_id",
-    documentId: "entities.document_id",
-  },
-  documents: { id: "documents.id" },
-  and: (...a: unknown[]) => ({ _and: a }),
-  eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
-  isNull: (a: unknown) => ({ _isNull: a }),
-  DocumentRepository: class {
-    create = docCreateMock;
-    delete = docDeleteMock;
-  },
-  EntityRepository: class {
-    update = entityUpdateMock;
-  },
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    eventRepository: {},
+    documentVersionSnapshotFromUpload: (input: {
+      metadata: { url: string; path: string; size: number; checksum?: string };
+      mimeType: string;
+      extractedText?: string;
+    }) => ({
+      storageUrl: input.metadata.url,
+      storageKey: input.metadata.path,
+      size: input.metadata.size,
+      mimeType: input.mimeType,
+      checksum: input.metadata.checksum ?? "",
+      contentPreview: input.extractedText ?? "",
+      metadata: input.metadata,
+    }),
+    entities: {
+      id: "entities.id",
+      userId: "entities.user_id",
+      documentId: "entities.document_id",
+    },
+    documents: { id: "documents.id" },
+    and: (...a: unknown[]) => ({ _and: a }),
+    eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
+    isNull: (a: unknown) => ({ _isNull: a }),
+    DocumentRepository: class {
+      create = docCreateMock;
+      delete = docDeleteMock;
+    },
+    EntityRepository: class {
+      update = entityUpdateMock;
+    },
+  })
+);
 
 const checkPermissionOrProposeMock = vi.fn();
 vi.mock("../permission-check.js", () => ({
