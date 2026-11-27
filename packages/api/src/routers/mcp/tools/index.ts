@@ -3411,7 +3411,7 @@ export function toolDefinitions() {
         "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
         "PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus, once a day per agent (your next due-soon ask that day is a normal push, counted against the person's daily push budget); any other ask is a normal push. An answerBy already in the past is refused. " +
         "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
-        "Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+        "Then read their answer with `synap_get_session` on the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
       input: z.object({
         question: z
           .string()
@@ -3901,7 +3901,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "What happened to a goal, a session or a pull request, newest first — read-only. Name exactly ONE: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, its status moves with their `hold`, the dev facts of its PRs and devbox jobs: pr_opened / pr_merged / pr_closed, checks_finished; its decisions and asks; its chain: stage_moved, child_started, runner_seen, room_post (one line, never the body: open the room at refs.messageId)) or `pr` (`owner/name#n` or its url: its PR facts and CI runs). Each event: `id`, `kind`, `at` (when it HAPPENED), `recordedAt` only when the pod recorded it a second or more later (a backdated move, a late webhook), `actor` (named by the pod) and `refs` (doors: sessionId, proposalId, url, messageId, channelId, runnerId). `truncated` = older events exist. For what is new since your last look, wait on the session's changes instead (synap_wait_for_answer `events`).",
+        "What happened to a goal, a session or a pull request, newest first — read-only. Name exactly ONE: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, its status moves with their `hold`, the dev facts of its PRs and devbox jobs: pr_opened / pr_merged / pr_closed, checks_finished; its decisions and asks; its chain: stage_moved, child_started, runner_seen, room_post (one line, never the body: open the room at refs.messageId)) or `pr` (`owner/name#n` or its url: its PR facts and CI runs). Each event: `id`, `kind`, `at` (when it HAPPENED), `recordedAt` only when the pod recorded it a second or more later (a backdated move, a late webhook), `actor` (named by the pod) and `refs` (doors: sessionId, proposalId, url, messageId, channelId, runnerId). `truncated` = older events exist.",
       input: z.object({
         goalId: z.string().optional().describe("A goal (track) id."),
         sessionId: z.string().optional().describe("A focus session id."),
