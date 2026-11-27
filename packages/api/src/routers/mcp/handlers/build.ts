@@ -1295,25 +1295,13 @@ export const buildHandlers = {
       });
     }
     const version = args.version;
-    if (
-      typeof version !== "number" ||
-      !Number.isFinite(version) ||
-      version <= 0
-    ) {
+    if (version <= 0) {
       return ok({
         error:
           "version is required and must be a positive number — it is the optimistic-locking version of the view's current content.",
       });
     }
-    const store =
-      typeof args.store === "object" && args.store !== null
-        ? (args.store as Record<string, unknown>)
-        : undefined;
-    if (!store) {
-      return ok({
-        error: "store is required — the canonical tldraw payload.",
-      });
-    }
+    const store = args.store;
     const result = await caller.views.updateContent({
       userId,
       viewId,
@@ -1864,18 +1852,8 @@ export const buildHandlers = {
     if (authoringProblem) return ok({ error: authoringProblem });
     const skillWorkspaceId =
       typeof args.workspaceId === "string" ? args.workspaceId : undefined;
-    // Same bound as `skills.create` (1..300 s), refused here in words rather
-    // than as a zod dump.
-    let timeoutSeconds: number | undefined;
-    if (args.timeoutSeconds !== undefined) {
-      const t = args.timeoutSeconds;
-      if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > 300) {
-        return ok({
-          error: "timeoutSeconds must be a whole number of seconds, 1 to 300.",
-        });
-      }
-      timeoutSeconds = t;
-    }
+    // Same bound as `skills.create` (1..300 s): the tool's input holds it.
+    const timeoutSeconds = args.timeoutSeconds;
     // `requiredTools` are tool NAMES (as synap_list_capabilities lists them),
     // resolved under the same visibility + lens `synap_create_verb` uses for
     // its parent tool. An unknown name is refused, never dropped.
@@ -1893,13 +1871,7 @@ export const buildHandlers = {
     }
     // A box script (0356): the declaration is parsed by the router's one box
     // rule (`boxSkillMetadata`), which refuses a bad one in words.
-    let executionMode: "sync" | "box" | undefined;
-    if (args.executionMode !== undefined) {
-      if (args.executionMode !== "sync" && args.executionMode !== "box") {
-        return ok({ error: "executionMode must be 'sync' or 'box'." });
-      }
-      executionMode = args.executionMode;
-    }
+    const executionMode = args.executionMode;
     if (executionMode === "box" && !skillCode) {
       return ok({ error: "A box skill is a script: send its code." });
     }
@@ -2036,15 +2008,9 @@ export const buildHandlers = {
       }
       patch.parameters = args.parameters as Record<string, unknown>;
     }
-    // Same bound as `synap_create_skill` (1..300 s).
+    // Same bound as `synap_create_skill` (1..300 s): the input holds it.
     if (args.timeoutSeconds !== undefined) {
-      const t = args.timeoutSeconds;
-      if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > 300) {
-        return toolError(
-          `Tool '${toolName}': timeoutSeconds must be a whole number of seconds, 1 to 300.`
-        );
-      }
-      patch.timeoutSeconds = t;
+      patch.timeoutSeconds = args.timeoutSeconds;
     }
     if (args.requiredTools !== undefined) {
       const names = readRequiredToolNames(args.requiredTools);

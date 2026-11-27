@@ -30,7 +30,6 @@ import {
   leanListedUnderRole,
 } from "../../../services/entity-lean-list.js";
 import {
-  ASK_DETAILS,
   synthesizeAnswer,
   type AskDetail,
 } from "../../../services/knowledge/synthesize.js";
@@ -120,14 +119,9 @@ export const readHandlers = {
     if (typeof args.query !== "string" || args.query.trim() === "") {
       return ok({ error: "query is required" });
     }
-    // `detail` (decision B9a): refused when unknown, never read as `full` — a
-    // typo must not silently cost the caller the long answer it tried to avoid.
-    const detail = (args.detail ?? "brief") as AskDetail;
-    if (!ASK_DETAILS.includes(detail)) {
-      return toolError(
-        `detail must be one of ${ASK_DETAILS.join(", ")} (got ${JSON.stringify(args.detail)}).`
-      );
-    }
+    // `detail` (decision B9a): an unknown one is refused at the door, never
+    // read as `full` — a typo must not cost the long answer it tried to avoid.
+    const detail: AskDetail = args.detail ?? "brief";
     // ACCESS + DOOR PARITY, via the ONE helper every knowledge door shares
     // (services/knowledge/resolve-lens.ts):
     //  - the `mcp.read` scope proves "may call recall", NEVER "may see THIS
@@ -591,12 +585,7 @@ export const readHandlers = {
       typeof args.proposalId === "string" ? args.proposalId.trim() : "";
     if (!raw) return ok({ error: "proposalId is required." });
     // `lean` (default) is one copy of the payload; `full` is the whole row.
-    const detail = (args.detail as string | undefined) ?? "lean";
-    if (detail !== "lean" && detail !== "full") {
-      return ok({
-        error: `Unknown detail '${detail}'. Valid values: lean (default), full.`,
-      });
-    }
+    const detail = args.detail ?? "lean";
     // Short-id parity with `synap_reject_proposal` / `synap_revise_proposal`:
     // a bare prefix in a `WHERE id = $1` uuid lookup throws.
     const { resolveProposalId } =
@@ -678,10 +667,6 @@ export const readHandlers = {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const view = args.view ?? "home";
-    if (view !== "home" && view !== "moving")
-      return ok({
-        error: `view must be 'home' or 'moving', not ${String(view)}.`,
-      });
     const projectId =
       typeof args.projectId === "string" && args.projectId
         ? args.projectId

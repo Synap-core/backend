@@ -48,6 +48,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { readHandlers } from "./read.js";
 import { sessionHandlers } from "./session.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
@@ -310,13 +311,12 @@ describe("synap_list_sessions — pages past 50", () => {
     expect(out.unknownFields).toEqual(["nope"]);
   });
 
-  it("an unknown detail is named, not silently lean", async () => {
-    const out = json(
-      (await sessionHandlers.synap_list_sessions!(
-        ctx("synap_list_sessions", { detail: "huge" })
-      )) as { content: Array<{ text?: string }> }
+  it("an unknown detail is refused at the door, not silently lean", () => {
+    const out = parseToolArgs("synap_list_sessions", { detail: "huge" });
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : JSON.stringify(out.result.content)).toMatch(
+      /invalid input[\s\S]*detail/
     );
-    expect(out.error).toMatch(/Unknown detail 'huge'/);
   });
 
   it("still caps a page at 50", async () => {

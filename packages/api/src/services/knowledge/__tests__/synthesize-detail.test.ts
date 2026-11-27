@@ -31,6 +31,7 @@ vi.mock("../resolve-lens.js", () => ({
 
 import type { AskAnswer } from "../ask.js";
 import { readHandlers } from "../../../routers/mcp/handlers/read.js";
+import { parseToolArgs } from "../../../routers/mcp/define-tool.js";
 import type { McpToolContext } from "../../../routers/mcp/handlers/shared.js";
 
 const ANSWERS = [
@@ -304,14 +305,11 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect((JSON.parse(text) as { detail: string }).detail).toBe("full");
   });
 
-  it("an unknown detail is refused before retrieval, never read as full", async () => {
-    const fetchMock = isReplies({ answer: "x" });
-
-    const { result, text } = await callAsk({ detail: "tiny" });
-
-    expect(result.isError).toBe(true);
-    expect(text).toMatch(/detail must be one of sources, brief, full/);
-    expect(askMock).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+  it("an unknown detail is refused at the door, never read as full", () => {
+    const out = parseToolArgs("synap_ask", { query: "q", detail: "tiny" });
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : JSON.stringify(out.result.content)).toMatch(
+      /invalid input[\s\S]*sources[\s\S]*brief[\s\S]*full/
+    );
   });
 });

@@ -67,7 +67,6 @@ import {
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
-import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
@@ -77,7 +76,6 @@ import {
   requireScope,
   resolveAmbientSession,
   OPEN_SESSION_STATUSES,
-  SESSION_STATUSES,
   type CallToolResult,
   type McpHandlerMap,
   pageLimit,
@@ -95,9 +93,6 @@ import {
   readBlockerIds,
 } from "./blocker-args.js";
 import { SESSION_TARGETS_MAX } from "../../../services/focus-sessions/session-targets-wire.js";
-
-/** One line, not a transcript — mirrors the tool schema's `maxLength`. */
-const SUSPENDED_INTENT_MAX = 400;
 
 /**
  * PARSE the slot shapes at the MCP door, with the SAME schemas every other door
@@ -511,17 +506,8 @@ export const sessionHandlers = {
           "parentSessionId must be a session UUID (the id of a session you own that you are pushing FROM).",
       });
     }
-    // Same advisory-schema reason: a title is ONE line, and the blockers are
-    // session handles — refused here in words, not as a varchar or uuid error.
-    if (
-      args.title !== undefined &&
-      args.title !== null &&
-      (typeof args.title !== "string" || args.title.length > SESSION_TITLE_MAX)
-    ) {
-      return ok({
-        error: `title must be a string of at most ${SESSION_TITLE_MAX} characters — ONE line naming the session; put the outcome in goal.`,
-      });
-    }
+    // Same reason: the blockers are session handles — refused here in words,
+    // not as a uuid error (a title's length is the input's).
     const blockedByArg = args.blockedBySessionIds;
     if (
       blockedByArg !== undefined &&
@@ -553,28 +539,6 @@ export const sessionHandlers = {
     // The step's time (B5), refused in words before anything is read.
     const stepTime = stepTimePatch(stepTimeArgs(args));
     if (!stepTime.ok) return ok({ error: stepDateRefusal(stepTime.invalid) });
-    const suspendedIntentArg = args.suspendedIntent;
-    if (
-      suspendedIntentArg !== undefined &&
-      suspendedIntentArg !== null &&
-      (typeof suspendedIntentArg !== "string" ||
-        suspendedIntentArg.length > SUSPENDED_INTENT_MAX)
-    ) {
-      return ok({
-        error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
-      });
-    }
-    const forOutputArg = args.forOutput;
-    if (
-      forOutputArg !== undefined &&
-      forOutputArg !== null &&
-      (typeof forOutputArg !== "string" || forOutputArg.length > 120)
-    ) {
-      return ok({
-        error:
-          "forOutput must be a string of at most 120 characters: the key of the parent's outcome this session delivers.",
-      });
-    }
     // `subjectRef` (W2): an identity naming the subject — the same
     // advisory-schema reason, refused in words.
     const subjectRefArg = args.subjectRef;
@@ -664,7 +628,7 @@ export const sessionHandlers = {
         // (the playbook owns the shape); validated against the declaration by the
         // service, with the same pure function the run funnel uses. A JSON
         // string is read as the object at the door (`jsonObjectInput`).
-        params: args.params as Record<string, unknown> | undefined,
+        params: args.params,
         // Binds the session to THIS client and adopts the session the gate
         // auto-opened for it, if any (never a duplicate) — unless it is
         // started for another agent or a teammate (C7, `session-client-binding.ts`).
@@ -676,7 +640,7 @@ export const sessionHandlers = {
             ? (args.agentIds as string[])
             : null,
           parentSessionId: args.parentSessionId as string | undefined,
-          suspendedIntent: args.suspendedIntent as string | undefined,
+          suspendedIntent: args.suspendedIntent,
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
@@ -690,8 +654,8 @@ export const sessionHandlers = {
         // first place — and a cast narrows nothing while checking nothing.
         expectedOutputs: declared.expectedOutputs,
         parentSessionId: args.parentSessionId as string | undefined,
-        suspendedIntent: args.suspendedIntent as string | undefined,
-        forOutput: (forOutputArg as string | null | undefined) ?? null,
+        suspendedIntent: args.suspendedIntent,
+        forOutput: args.forOutput ?? null,
         // Validated above (array of UUIDs), so this narrows nothing unchecked.
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
@@ -1208,33 +1172,14 @@ export const sessionHandlers = {
   synap_list_sessions: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const statusArg = (args.status as string | undefined) ?? "open";
-    // MCP schemas are ADVISORY — nothing validates `status` server-side, so
-    // an off-enum value ("done", "completed") would silently match zero rows
-    // instead of telling the agent what it may ask for.
-    if (
-      statusArg !== "open" &&
-      statusArg !== "all" &&
-      !(SESSION_STATUSES as readonly string[]).includes(statusArg)
-    ) {
-      return ok({
-        error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
-      });
-    }
-    // Population lens (`services/focus-sessions/session-kind.ts`). MCP schemas
-    // are ADVISORY — nothing validates args server-side — so an off-enum value
-    // is answered with the vocabulary rather than silently matching zero rows.
+    // An off-enum status ("done") is refused at the door, never read as
+    // "nothing matches".
+    const statusArg = args.status ?? "open";
+    // Population lens (`services/focus-sessions/session-kind.ts`); an off-enum
+    // value is refused at the door, never silently matching zero rows.
     // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
     // listing sessions wants the runs and write receipts it just opened.
-    const kindArg = (args.kind as string | undefined) ?? "all";
-    if (
-      kindArg !== "all" &&
-      !(SESSION_KINDS as readonly string[]).includes(kindArg)
-    ) {
-      return ok({
-        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
-      });
-    }
+    const kindArg = args.kind ?? "all";
     const idArg = (v: unknown) => (typeof v === "string" && v ? v : undefined);
     const subjectEntityId = idArg(args.subjectEntityId);
     // The subject predicate compares as text, so a malformed id would match
@@ -1285,12 +1230,7 @@ export const sessionHandlers = {
     // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
     // one row past it tells whether another page exists. `id` breaks ties so
     // two sessions started in the same instant never swap between pages.
-    const detailArg = (args.detail as string | undefined) ?? "lean";
-    if (detailArg !== "lean" && detailArg !== "full") {
-      return ok({
-        error: `Unknown detail '${detailArg}'. Valid values: lean (default), full.`,
-      });
-    }
+    const detailArg = args.detail ?? "lean";
     const limit = pageLimit(args.limit, 20, SESSIONS_PAGE_MAX);
     const offset = pageOffset(args.offset);
     const page = await db
@@ -1365,9 +1305,8 @@ export const sessionHandlers = {
   synap_get_work_graph: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    // MCP schemas are ADVISORY — nothing validates args server-side — so an
-    // off-vocabulary value is answered with the vocabulary, never silently
-    // read as "nothing matches".
+    // An off-vocabulary value is answered with the vocabulary, never silently
+    // read as "nothing matches" (the enums are refused at the door).
     const windowHours =
       args.windowHours === undefined ? undefined : Number(args.windowHours);
     if (
@@ -1381,21 +1320,8 @@ export const sessionHandlers = {
       });
     }
     // Agent-door defaults, as synap_list_sessions: every kind, every lens.
-    const kindArg = (args.kind as string | undefined) ?? "all";
-    if (
-      kindArg !== "all" &&
-      !(SESSION_KINDS as readonly string[]).includes(kindArg)
-    ) {
-      return ok({
-        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
-      });
-    }
-    const lensArg = (args.lens as string | undefined) ?? "all";
-    if (lensArg !== "default" && lensArg !== "triage" && lensArg !== "all") {
-      return ok({
-        error: `Unknown lens '${lensArg}'. Valid values: default, triage, all.`,
-      });
-    }
+    const kindArg = args.kind ?? "all";
+    const lensArg = args.lens ?? "all";
     const trackIdArg = typeof args.trackId === "string" ? args.trackId : "";
     const rootArg =
       typeof args.rootSessionId === "string" ? args.rootSessionId : "";
@@ -1416,12 +1342,7 @@ export const sessionHandlers = {
         return ok({ error: `${name} is not a valid id: ${value}` });
       }
     }
-    const detailArg = (args.detail as string | undefined) ?? "lean";
-    if (detailArg !== "lean" && detailArg !== "full") {
-      return ok({
-        error: `Unknown detail '${detailArg}'. Valid values: lean (default), full.`,
-      });
-    }
+    const detailArg = args.detail ?? "lean";
     // The URL lens auto-injects workspaceId/projectId — honoured as lenses,
     // never as an authorization boundary (the floor is the owner). The
     // workspace lens is the CONFINED one (`adapter.ts`): a workspace-bound key
@@ -1764,15 +1685,8 @@ export const sessionHandlers = {
       outcomeLists = resolved;
     }
     // The status the agent SAW (compare-and-set); a value that is no session
-    // status is refused with the list, never read as "no expectation".
-    const expectedStatus = SESSION_STATUSES.find(
-      (st) => st === args.expectedStatus
-    );
-    if (args.expectedStatus != null && !expectedStatus) {
-      return reply({
-        error: `expectedStatus must be one of ${SESSION_STATUSES.join(" | ")}.`,
-      });
-    }
+    // status is refused at the door, never read as "no expectation".
+    const expectedStatus = args.expectedStatus;
     const updateTargets = readTargetsArg(args.targets);
     if (updateTargets === "invalid") {
       return reply({ error: TARGETS_ARG_ERROR });
