@@ -7,7 +7,7 @@
  *              hostname
  *   • Center — ⌘K Search trigger — opens the global SearchModal palette
  *   • Right  — user avatar menu (personal pages — Security, My connections,
- *              My computers, My vault — account links, sign out)
+ *              My devices, My vault — account links, sign out)
  *
  * Only global controls live here. Page freshness ("last checked · Check
  * again") belongs to the page it describes — Home's status line.
@@ -58,7 +58,7 @@ const ACCOUNT_LINKS: { page: AccountPage; label: ShellKey }[] = [
 /** Self-service pages about YOU (not the pod), beside Security. */
 const PERSONAL_LINKS: { href: string; label: ShellKey }[] = [
   { href: "/my-connections", label: "user.connections" },
-  { href: "/my-computers", label: "user.computers" },
+  { href: "/my-devices", label: "user.devices" },
   { href: "/my-notifications", label: "user.notifications" },
   { href: "/my-vault", label: "user.vault" },
 ];

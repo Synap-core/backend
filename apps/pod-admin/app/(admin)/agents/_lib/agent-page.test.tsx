@@ -123,7 +123,7 @@ describe("/agents/[id] — the agent's page in the console", () => {
   it("opens its computer, its keys and its owner from the page", () => {
     answer();
     const html = renderToStaticMarkup(<AgentPage />);
-    expect(html).toContain(`href="/computers/${COMPUTER}"`);
+    expect(html).toContain(`href="/devices/${COMPUTER}"`);
     expect(html).toContain(`href="/keys?q=Build%20worker"`);
     expect(html).toContain(`href="/members?focus=${OWNER}"`);
     expect(text(html)).toContain("Ada Lovelace");

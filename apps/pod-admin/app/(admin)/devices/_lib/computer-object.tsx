@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * One computer, the one object page — drawn by `/computers/[id]` (pod admin,
- * any member's computer) and `/my-computers/[id]` (the person's own). The
+ * One computer, the one object page — drawn by `/devices/[id]` (pod admin,
+ * any member's computer) and `/my-devices/[id]` (the person's own). The
  * route supplies the row (from `machines.adminList` or `machines.list`), the
  * frame, and what the viewer may follow (`links`); everything else is here.
  *

@@ -74,8 +74,8 @@ export function isSelfService(path: string): boolean {
     // to the computers you approved, and `rename` / `setKeyTtl` / `revoke`
     // re-load the computer and refuse anyone but its owner or a pod admin
     // (`loadManageableMachine`), so this grants no reach.
-    path === "/my-computers" ||
-    path.startsWith("/my-computers/") ||
+    path === "/my-devices" ||
+    path.startsWith("/my-devices/") ||
     // Your OWN push settings and phones. `notifCenter.pushPrefs` /
     // `setPushPrefs` / `listDevices` / `revokeDevice` are floored on the
     // caller's `userId` (another person's phone answers NOT_FOUND, pod admins

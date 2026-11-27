@@ -58,7 +58,7 @@ export function consoleWidth(
 
 /**
  * The console's frame: the page itself, under a crumb back to `list`. A
- * self-service list (`/my-computers`) passes its `personal` column width.
+ * self-service list (`/my-devices`) passes its `personal` column width.
  */
 export function consoleFrame(list: {
   label: string;

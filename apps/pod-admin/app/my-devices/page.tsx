@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * /my-computers — the computers YOU connected, and how long their keys
+ * /my-devices — the computers YOU connected, and how long their keys
  * last. Self-service, like `/my-connections` and `/my-vault`: the read is
  * `machines.list`, floored to the computers you approved, and every act on
  * one (`rename` / `setKeyTtl` / `revoke`) re-loads it and refuses anyone but
- * its owner or a pod admin — see the `/my-computers` line in route-policy.
+ * its owner or a pod admin — see the `/my-devices` line in route-policy.
  *
- * Drawn by the same list as the admin's Access › Computers, without the
+ * Drawn by the same list as the admin's Access › Devices, without the
  * Owner column and the pod-wide key lifetime (a pod admin's setting), in
  * the narrower column of the other self-service pages.
  */
@@ -21,14 +21,12 @@ import {
   PageShell,
   PageSkeleton,
 } from "../(admin)/components/page-header";
-import { ComputerList } from "../(admin)/computers/_lib/computer-list";
+import { ComputerList } from "../(admin)/devices/_lib/computer-list";
 import { Breadcrumbs } from "../_lib/object/object-header";
+import { useT } from "../../lib/i18n/locale-provider";
+import { en, fr } from "../(admin)/components/copy";
 
-/** Where the console starts for every member (Home). */
-const CRUMBS = [
-  { label: navLabel("home"), href: navHref("home") },
-  { label: "My computers" },
-];
+const SHELL_CATALOGS = { en, fr };
 
 export default function MyComputersPage() {
   return (
@@ -45,6 +43,7 @@ export default function MyComputersPage() {
 }
 
 function MyComputersInner() {
+  const t = useT(SHELL_CATALOGS);
   const list = trpc.machines.list.useQuery(undefined, { staleTime: 30_000 });
 
   useEffect(() => {
@@ -55,10 +54,16 @@ function MyComputersInner() {
   return (
     <PageShell width="personal">
       <div className="mb-3">
-        <Breadcrumbs crumbs={CRUMBS} />
+        {/* Where the console starts for every member (Home). */}
+        <Breadcrumbs
+          crumbs={[
+            { label: navLabel("home"), href: navHref("home") },
+            { label: t("user.devices") },
+          ]}
+        />
       </div>
       <PageHeader
-        title="My computers"
+        title={t("user.devices")}
         description="The machines you connected to this pod, the agents they run, and how long their keys last."
       />
       <ComputerList
@@ -66,7 +71,7 @@ function MyComputersInner() {
         isLoading={list.isLoading || isAuthRedirecting}
         isError={list.isError && !isAuthRedirecting}
         onRetry={() => void list.refetch()}
-        hrefFor={(id) => `/my-computers/${encodeURIComponent(id)}`}
+        hrefFor={(id) => `/my-devices/${encodeURIComponent(id)}`}
         showOwner={false}
         viewerId={null}
       />
