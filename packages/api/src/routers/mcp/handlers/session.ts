@@ -240,61 +240,6 @@ function parseServesEdits(
 }
 
 /**
- * The caller's answers to a template's declared params, off the MCP wire.
- *
- * MCP clients do not agree on how to serialise an object-valued argument: some
- * send a real JSON object, some send it JSON-ENCODED AS A STRING. This used to
- * accept only the former and silently drop the latter — and because an
- * unanswered required param becomes an owed slot, the session then told the
- * person *"Nobody supplied it"* about a value the caller had, in fact,
- * supplied. Observed live on 2026-09-21: the same call succeeded over raw HTTP
- * and lost its params through a client that string-encoded them.
- *
- * "No params" and "params I could not read" are different facts, so a string
- * that does not parse to an object THROWS rather than resolving to `undefined`
- * — a caller who sent something is told it was unusable instead of being told
- * nobody sent anything.
- */
-function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
-  if (raw == null) return undefined;
-  if (typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (trimmed === "") return undefined;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      throw Object.assign(
-        new Error(
-          '`params` was sent as a string that is not JSON. Send it as a JSON object, e.g. {"clientName": "Acme"}.'
-        ),
-        { code: "BAD_REQUEST" }
-      );
-    }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    throw Object.assign(
-      new Error(
-        "`params` must be a JSON OBJECT of answers keyed by param name, not " +
-          (Array.isArray(parsed) ? "an array" : `a ${typeof parsed}`) +
-          "."
-      ),
-      { code: "BAD_REQUEST" }
-    );
-  }
-  throw Object.assign(
-    new Error(
-      `\`params\` must be a JSON object of answers keyed by param name, not a ${typeof raw}.`
-    ),
-    { code: "BAD_REQUEST" }
-  );
-}
-
-/**
  * `targets` on start / update: entity UUIDs (at most `SESSION_TARGETS_MAX`).
  * Absent or empty ⇒ undefined; anything else malformed ⇒ "invalid", refused
  * in words (the tool schema is advisory to the client).
@@ -720,8 +665,9 @@ export const sessionHandlers: McpHandlerMap = {
         offerStartContext: true,
         // Answers to the named template's declared params. Free-form on the wire
         // (the playbook owns the shape); validated against the declaration by the
-        // service, with the same pure function the run funnel uses.
-        params: readParamsArg(args.params),
+        // service, with the same pure function the run funnel uses. A JSON
+        // string is read as the object at the door (`jsonObjectInput`).
+        params: args.params as Record<string, unknown> | undefined,
         // Binds the session to THIS client and adopts the session the gate
         // auto-opened for it, if any (never a duplicate) — unless it is
         // started for another agent or a teammate (C7, `session-client-binding.ts`).
@@ -2121,7 +2067,6 @@ export const sessionHandlers: McpHandlerMap = {
 };
 
 /** Test-only export of the wire coercion above. */
-export { readParamsArg as __readParamsArgForTest };
 export { readTemplateIdArg as __readTemplateIdArgForTest };
 
 /**
