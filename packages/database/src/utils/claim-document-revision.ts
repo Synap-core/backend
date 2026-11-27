@@ -50,6 +50,7 @@ import {
   type CreateDocumentInput,
 } from "../repositories/document-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
+import { HTML_PAGE_DOOR_MARK, isHtmlPageBody } from "./html-page-door-token.js";
 import type { Document } from "../schema/documents.js";
 import type { LensScope } from "@synap-core/types/lens";
 
@@ -531,6 +532,17 @@ export async function createDocumentWithContent(
   eventRepo: EventRepository,
   input: CreateDocumentWithContentInput
 ): Promise<CreatedDocument> {
+  // An HTML page is written only through the HTML page door (`html-page.ts`:
+  // size cap, declared reads), which marks its input. Refused before any
+  // upload, so a page that skipped the door's checks is never stored.
+  if (
+    isHtmlPageBody(input) &&
+    (input as { [HTML_PAGE_DOOR_MARK]?: true })[HTML_PAGE_DOOR_MARK] !== true
+  ) {
+    throw new Error(
+      "An HTML page is created only through createHtmlPage (@synap/database html-page door), which checks its size and declared reads."
+    );
+  }
   const id = input.id ?? randomUUID();
   const { title, content } = namedDocumentBody(input);
   const key = storage.buildPath(

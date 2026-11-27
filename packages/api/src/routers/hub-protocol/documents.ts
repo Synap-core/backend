@@ -9,7 +9,8 @@
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import type { CellBridgeDeclaredReads } from "@synap-core/types/cell-bridge";
-import { readDeclaredFrameIo } from "../../services/cells/declared-frame-io.js";
+import { assertHtmlPage } from "../../services/document-patch/html-page-check.js";
+import { placeHtmlPage } from "../../services/cells/create-cell-instance.js";
 import { randomUUID } from "crypto";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -27,6 +28,7 @@ import {
   DocumentRepository,
   eventRepository,
   createDocumentWithContent,
+  createHtmlPage,
   namedDocumentBody,
   documents,
   and,
@@ -67,7 +69,6 @@ import {
   materializeAskDefinitions,
 } from "../../services/document-patch/materialize-asks.js";
 import { askNudgeFor } from "../../services/document-patch/ask-nudge.js";
-import { diagnoseHtmlPage } from "../../services/document-patch/document-diagnostics.js";
 import {
   podDocumentScopeFloor,
   resolveDocumentScopeFields,
@@ -152,6 +153,20 @@ export const documentsRouter = router({
          * `type: "html"` page takes it. Absent = undeclared.
          */
         reads: z.unknown().optional(),
+        /**
+         * Place the page as an html-embed CELL too (the cell routes,
+         * `POST /cell-instances/html`): the cell only points at this page.
+         * Auto-applied: placed at once (`cellInstanceId` on the receipt).
+         * Proposed: carried by the proposal and placed on its approval, under
+         * `cellId`. Only a `type: "html"` page in a space takes it.
+         */
+        placeAs: z
+          .object({
+            kind: z.literal("html-embed-cell"),
+            cellId: z.string().uuid(),
+            name: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -164,9 +179,9 @@ export const documentsRouter = router({
             'A `type: "html"` page is not taken with `url`: send the page itself as `content`, or drop `type` to keep a reference to the url.',
         });
       }
-      // Declared reads: an html page's only, inside the ceiling, refused
-      // before anything is filed.
-      let declaredReads: CellBridgeDeclaredReads | undefined;
+      // An html page through the HTML page door's checks (size cap, declared
+      // reads inside the ceiling), refused before anything is filed; its
+      // warnings (what will not run) ride on the receipt.
       if (input.reads !== undefined && input.reads !== null) {
         if (input.type !== "html") {
           throw new TRPCError({
@@ -175,13 +190,19 @@ export const documentsRouter = router({
               '`reads` declares what an html page reads: only a `type: "html"` document takes it.',
           });
         }
-        // The one parser of a framed surface's declaration (the cell door's,
-        // `surfaces.create`'s, this proposal's approval).
-        const parsed = readDeclaredFrameIo({ reads: input.reads });
-        if (!parsed.ok) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
-        }
-        declaredReads = parsed.reads ?? undefined;
+      }
+      const page =
+        input.type === "html"
+          ? assertHtmlPage({ content: input.content, reads: input.reads })
+          : null;
+      const declaredReads: CellBridgeDeclaredReads | undefined =
+        page?.reads ?? undefined;
+      if (input.placeAs && (input.type !== "html" || !input.workspaceId)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'Only a `type: "html"` page in a space is placed as a cell (`placeAs`).',
+        });
       }
       // Decode an agent's XML-escaped title once, at the one door both MCP
       // (synap_create_document) and Hub REST call through — see
@@ -200,6 +221,28 @@ export const documentsRouter = router({
         }).content;
       }
       const userId = ctx.userId!;
+      const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = actingAgent ?? userId;
+      // The page placed as a cell (`placeAs`), once the page exists: the
+      // reserved id, or the cell that already places this page.
+      const placeAs = input.placeAs;
+      const placeCell = async (
+        pageId: string
+      ): Promise<{ cellInstanceId?: string }> =>
+        placeAs && input.workspaceId
+          ? {
+              cellInstanceId: (
+                await placeHtmlPage({
+                  id: placeAs.cellId,
+                  documentId: pageId,
+                  workspaceId: input.workspaceId,
+                  userId,
+                  name: placeAs.name,
+                  agentUserId: actingAgent ?? null,
+                })
+              ).id,
+            }
+          : {};
       // A caller-named id that already names a row: the caller's own live
       // document ⇒ this create already landed (a replay run twice): return
       // it; any other row ⇒ not ours to reuse: mint a fresh id.
@@ -222,13 +265,12 @@ export const documentsRouter = router({
               status: "created" as const,
               ackState: "duplicate-ignored" as const,
               priorDocumentId: taken.id,
+              ...(await placeCell(taken.id)),
             };
           }
           documentId = randomUUID();
         }
       }
-      const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
-      const agentUserId = actingAgent ?? userId;
       const correlationId = randomUUID();
       // Scope + refresher: read and floored (as the principal) BEFORE the
       // gate, so a proposal never carries a scope its author could not read.
@@ -278,6 +320,7 @@ export const documentsRouter = router({
             status: "created" as const,
             ackState: "duplicate-ignored" as const,
             priorDocumentId: priorDoc.id,
+            ...(await placeCell(priorDoc.id)),
           };
         }
       } catch (err) {
@@ -335,6 +378,16 @@ export const documentsRouter = router({
           ...scoped,
           // The page's declared reads: the approval stores them in metadata.
           ...(declaredReads ? { reads: declaredReads } : {}),
+          // The page placed as an html-embed cell on approval (the cell
+          // routes): the reserved cell id and who placed it.
+          ...(placeAs
+            ? {
+                placeAs: {
+                  ...placeAs,
+                  ...(actingAgent ? { agentUserId: actingAgent } : {}),
+                },
+              }
+            : {}),
         },
       } satisfies PermissionCheckOpts;
       // A question DEFINITION in an agent's markdown (`:::synap-ask` + `ask`)
@@ -379,10 +432,7 @@ export const documentsRouter = router({
       // written (the frame policy names no remote origin, so readers' hosts
       // would not run it): the same sentence `synap_get_document` returns in
       // `diagnostics`.
-      const pageWarnings =
-        input.type === "html" && !input.url
-          ? diagnoseHtmlPage(input.content).map((d) => `${d.message} ${d.fix}`)
-          : [];
+      const pageWarnings = page && !input.url ? page.warnings : [];
       const warnings = [
         ...(slotClaimWarning ? [slotClaimWarning] : []),
         ...pageWarnings,
@@ -510,26 +560,35 @@ export const documentsRouter = router({
       // create door writes the body (fresh key), the row and the v1 checkpoint
       // (authored `ai` — provenance), and emits `document.create.completed`, so
       // no manual auditLog(completed). Typesense emitSideEffects kept.
-      const created = await createDocumentWithContent(db, eventRepository, {
+      // An html page: the HTML page door (`createHtmlPage`: checked again,
+      // stored as `html` / `text/html`, its reads on `metadata.reads`).
+      const createInput = {
         id: documentId,
         ownerUserId: userId,
         workspaceId: input.workspaceId ?? null,
         title: input.title,
-        type: normalizeDocumentType(input.type, "markdown"),
         content: input.content || "",
-        mimeType: "text/markdown",
-        metadata: {
-          idempotencyKey,
-          ...(declaredReads ? { reads: declaredReads } : {}),
-        },
         ...scoped,
         provenance: {
-          createdByKind: "ai_agent",
+          createdByKind: "ai_agent" as const,
           createdByUserId: userId,
           agentUserId: actingAgent,
           correlationId,
         },
-      });
+      };
+      const created = page
+        ? await createHtmlPage(db, eventRepository, {
+            ...createInput,
+            metadata: { idempotencyKey },
+            reads: declaredReads,
+          })
+        : await createDocumentWithContent(db, eventRepository, {
+            ...createInput,
+            type: normalizeDocumentType(input.type, "markdown"),
+            mimeType: "text/markdown",
+            metadata: { idempotencyKey },
+          });
+      const placedCell = await placeCell(created.id);
 
       emitSideEffects({
         subjectType: "document",
@@ -553,7 +612,12 @@ export const documentsRouter = router({
       // never the receipt's pre-minted `targetId` (see the helper).
       await stampAutoApprovedCreate({
         receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
-        record: { documentIds: [created.id] },
+        record: {
+          documentIds: [created.id],
+          ...(placedCell.cellInstanceId
+            ? { cellIds: [placedCell.cellInstanceId] }
+            : {}),
+        },
         door: "hub.documents.create",
       });
 
@@ -562,6 +626,7 @@ export const documentsRouter = router({
         documentId: created.id,
         status: "created" as const,
         ackState: "applied" as const,
+        ...placedCell,
         ...receiptWarnings,
       };
     }),

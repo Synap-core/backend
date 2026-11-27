@@ -158,6 +158,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       scope?: Record<string, unknown> | null;
       /** The automation bound to refresh it (0387, D4), or null. */
       refreshAutomationId?: string | null;
+      /** An html page's declared reads (checked by the document door). */
+      reads?: unknown;
     };
     try {
       const acting = await resolveActingContext(c, {
@@ -219,6 +221,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         ...(body.refreshAutomationId !== undefined
           ? { refreshAutomationId: body.refreshAutomationId }
           : {}),
+        ...(body.reads !== undefined ? { reads: body.reads } : {}),
       });
       if (!body.entityId) return jsonGoverned(c, result);
       return jsonGoverned(

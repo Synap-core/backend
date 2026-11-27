@@ -55,6 +55,7 @@ export * from "./errors/index.js";
 export * from "./utils/preferences.js";
 export * from "./utils/document-version-storage.js";
 export * from "./utils/claim-document-revision.js";
+export * from "./utils/html-page.js";
 export * from "./utils/document-content-replaced.js";
 export * from "./utils/document-body-text.js";
 export * from "./utils/entity-project-membership.js";

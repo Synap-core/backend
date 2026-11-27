@@ -44,6 +44,7 @@ import {
   automations,
   getActingAgentUserId,
   ownerPrivateVisibleWhere,
+  checkHtmlPage,
 } from "@synap/database";
 import {
   AUTOMATION_CELL_BY_MODE,
@@ -500,6 +501,38 @@ export function assertEmbeddableResources(
   });
 }
 
+/**
+ * Every html page a placement would write (an html resource, a deck's
+ * slides), through the HTML page door's checks (`checkHtmlPage`: the size
+ * cap), refused BEFORE governance or any write. The page itself is written
+ * by the door (`createHtmlCellInstance` → `createHtmlPage`), which checks
+ * again.
+ */
+export function assertHtmlResources(
+  resources: readonly BoardResourceRef[]
+): void {
+  resources.forEach((r, i) => {
+    const pages =
+      r.kind === "html"
+        ? [{ at: `resources[${i}]`, html: r.html }]
+        : r.kind === "artboard-deck"
+          ? r.slides.map((slide, j) => ({
+              at: `resources[${i}].slides[${j}]`,
+              html: slide.html,
+            }))
+          : [];
+    for (const page of pages) {
+      const checked = checkHtmlPage({ content: page.html });
+      if (!checked.ok) {
+        throw new BoardPlaceError(
+          "bad_request",
+          `${page.at}: ${checked.error} Nothing was placed.`
+        );
+      }
+    }
+  });
+}
+
 // ── The cores the door and the executors share ──────────────────────────────
 
 /**
@@ -716,6 +749,7 @@ export async function buildPlacement(input: {
   pending: boolean;
 }): Promise<{ records: BoardRecord[]; shapeIds: string[] }> {
   assertEmbeddableResources(input.resources);
+  assertHtmlResources(input.resources);
   const workspaceId = input.board.view.workspaceId ?? null;
   const resolved = await resolveBoardReferences(input.resources, {
     userId: input.userId,
@@ -881,6 +915,7 @@ export async function placeOnBoard(
   // (1) Check the whole call against the board BEFORE governance or any
   // write: a bad frame, reference, embed or unknown shape refuses everything.
   assertEmbeddableResources(resources);
+  assertHtmlResources(resources);
   await resolveBoardReferences(resources, {
     userId: input.userId,
     boardWorkspaceId: workspaceId,
