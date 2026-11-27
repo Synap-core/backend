@@ -757,7 +757,7 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
         h.userId
       );
       if (!row) return false;
-      await followUp(h, to);
+      await followUp(h, to, reason);
       // The goal loop reads a goal's status moves off this event.
       void emitSideEffects({
         subjectType: "track",
@@ -789,7 +789,7 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       for (const t of transitions) {
         await dispatchLifecycleTransition(t.transitionId);
       }
-      if (rows.length > 0) await followUp(h, to);
+      if (rows.length > 0) await followUp(h, to, reason);
       return rows.length > 0;
     }
     case "playbook_run": {
@@ -825,7 +825,8 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
 /**
  * What the api's own doors do after the same move (a goal's judgement
  * notices, `refreshGoalJudgements`; a stale session's runs back to running,
- * as `reviveStaleSession`). `@synap/api` depends on `@synap/jobs`, so it fills
+ * as `reviveStaleSession`; the holder woken when the hold asked for it,
+ * `wakeSessionHolder`). `@synap/api` depends on `@synap/jobs`, so it fills
  * this slot at boot (apps/api), the pattern of `registerSessionCloser`.
  */
 export type HoldResumeFollowUp = (resumed: {
@@ -834,6 +835,12 @@ export type HoldResumeFollowUp = (resumed: {
   userId: string;
   from: string;
   to: string;
+  /** The hold that resumed, as recorded when the pause began (`wake` included). */
+  hold?: CurrentHold["hold"];
+  /** The transition that recorded that hold: one resume of it, one wake. */
+  holdTransitionId?: string;
+  /** Why it resumed, as the resume move records it (what moved). */
+  reason?: string;
 }) => Promise<void>;
 
 let holdResumeFollowUp: HoldResumeFollowUp | null = null;
@@ -842,7 +849,11 @@ export function registerHoldResumeFollowUp(fn: HoldResumeFollowUp): void {
   holdResumeFollowUp = fn;
 }
 
-async function followUp(h: CurrentHold, to: string): Promise<void> {
+async function followUp(
+  h: CurrentHold,
+  to: string,
+  reason: string
+): Promise<void> {
   if (!holdResumeFollowUp) {
     logger.warn(
       { subjectType: h.subjectType, subjectId: h.subjectId },
@@ -856,6 +867,9 @@ async function followUp(h: CurrentHold, to: string): Promise<void> {
     userId: h.userId,
     from: h.status,
     to,
+    hold: h.hold,
+    holdTransitionId: h.transitionId,
+    reason,
   });
 }
 

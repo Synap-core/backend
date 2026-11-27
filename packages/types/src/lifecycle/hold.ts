@@ -56,7 +56,23 @@ export interface Hold {
   until?: HoldUntil | null;
   /** ISO date by which someone looks at it again (never a move). */
   reviewBy?: string | null;
+  /**
+   * Wake whoever holds the thing when this hold resumes (a session's pause
+   * only: the agent working that session). The pauser ASKS for it; absent or
+   * false wakes nobody, as before. See {@link HOLD_WAKE_HELP}.
+   */
+  wake?: boolean | null;
 }
+
+/**
+ * What `hold.wake` does, in the fewest words (the session tool's text; the
+ * tool-definition token budget has no room for more).
+ */
+export const HOLD_WAKE_HELP = "wake: true = wake its agent on resume.";
+
+/** `hold.wake` on a pause of something that is not a session: nobody holds it to wake. */
+export const HOLD_WAKE_NOT_A_SESSION_MESSAGE =
+  "`hold.wake` applies only to a session's pause (it wakes the agent working that session). Remove it, or pause the session instead.";
 
 /**
  * A hold as the transition records it: the mover's hold plus what the server
@@ -424,6 +440,8 @@ export function recordHold(
         ? { date: new Date(hold.until.date).toISOString() }
         : (canonicalMoves(hold.until) ?? null),
     reviewBy,
+    // Recorded only when asked: every hold without it keeps its shape.
+    ...(hold.wake === true ? { wake: true } : {}),
     resumeTo: at.resumeTo,
     since: at.since.toISOString(),
   };
@@ -538,8 +556,20 @@ export function decideMoveHold(input: {
   /** When the move is recorded: what a hold's dates must lie ahead of. */
   now?: Date;
   base?: HoldReviewBase | null;
+  /**
+   * The subject has a holder a resume can wake (a session): only then may a
+   * hold carry `wake`. Every other door refuses it.
+   */
+  wakeable?: boolean;
 }): MoveHoldDecision {
   const given = input.given ?? null;
+  if (given?.wake === true && !input.wakeable) {
+    return {
+      ok: false,
+      code: "HOLD_INVALID",
+      message: HOLD_WAKE_NOT_A_SESSION_MESSAGE,
+    };
+  }
   if (input.toCategory !== "paused") {
     return given
       ? {

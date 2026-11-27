@@ -560,7 +560,13 @@ function wakeTargetLabel(target: WakeTarget | null): string | null {
   return target?.agentType ?? null;
 }
 
-async function wake(p: {
+/**
+ * Wake a resolved target at a message already in the session room: an IS turn
+ * (with the live run's turn context) or the dispatch agent's `send`. True when
+ * the turn was queued or the send went out. Also the pod-run half of
+ * `wakeSessionHolder` (a resume a hold asked to wake on).
+ */
+export async function wake(p: {
   channelId: string;
   messageId: string;
   content: string;
@@ -719,7 +725,7 @@ async function wakeOnFreeMessage(p: {
  * (`runTurns`, the ledger `complete-run` keeps), else the kickoff's default
  * "meta" (`is-agent-executor.ts`), as the automatic continuation does.
  */
-async function liveRunWakeTarget(
+export async function liveRunWakeTarget(
   sessionId: string,
   metadata: unknown
 ): Promise<WakeTarget | null> {
