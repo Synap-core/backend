@@ -17,7 +17,9 @@
  *     follow would file a widening proposal the agent never asked for); the
  *     reply says it fits and how to follow it;
  *   - a session that released a playbook (`unfollowedAt`) or already follows
- *     one is never bound again by the server.
+ *     one is never bound again by the server;
+ *   - a session started with `templateId: null` (`parentPlaybookDeclinedAt`)
+ *     never inherits its parent's playbook, at the start or later.
  *
  * Every server bind is recorded on `metadata.boundBy` ({rung, reason,
  * playbookId, phase, at}) and said back in ONE reply line (`bindingLine`).
@@ -43,6 +45,7 @@ import {
 } from "../links/links-service.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { UNFOLLOWED_AT_METADATA_KEY } from "./follow-playbook.js";
+import { PARENT_PLAYBOOK_DECLINED_AT_METADATA_KEY } from "./follow-markers.js";
 import {
   bindingLine,
   resolveBindingRung,
@@ -339,7 +342,11 @@ export async function rebindOnFirstFact(input: {
       subjectEntityId: session.subjectEntityId,
       // The `spawned_from` edge, read-only: a lane's parent may follow a
       // playbook (rung 3). Never a close path (`session-detour-pop.test.ts`).
-      parentSessionId: await getParentSessionId(session.id),
+      // A start that said `templateId: null` declined it (finding 42e4af30).
+      parentSessionId:
+        meta[PARENT_PLAYBOOK_DECLINED_AT_METADATA_KEY] !== undefined
+          ? null
+          : await getParentSessionId(session.id),
     });
   } catch (err) {
     logger.warn(
