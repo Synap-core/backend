@@ -2594,13 +2594,13 @@ export function toolDefinitions() {
         openWorldHint: true,
       },
       description:
-        "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBy*Ids (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to, instead of opening a session you work; it takes only the playbook inputs, and its goal and criteria are the playbook's. Outcomes, none to retry: \"draft\" (an agent's launch: the person's draft, not started until they accept it; tell them), \"proposed\" (SUCCESS, pass on reviewUrl), \"blocked\" (nothing ran: `unenabledSkills`; run again once `enableProposals` are approved), \"running\", \"already_running\" (nothing started: `session` is the live run; startAnother only if they asked), \"generated\" (one-shot: pass on generated.reviewUrl), \"skipped\" (nothing ran: read `message`).",
+        "Start a focus session: goal-bound work. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, its space comes from its playbook, subject, parent session, project or your focus. Give a short `title` and a one-sentence `goal`. Decompose with parentSessionId (children) and blockedBy*Ids (ordering), never a chain in the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent, which blocks the parent until it closes. An open session with the same goal here comes back 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`); another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title (`binding` says which). Without templateId, `playbooks` ranks candidates (suggestions); follow or release one later with synap_update_session followPlaybookId; templateId: null skips the ranking. `offers` (suggestions) lists open `goals` when you named no trackId, open `sessions` on close work (continue them), or `homes`. One session per thing that needs its own thinking, one per batch of like items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus). DECLARE at least one criterion, or an outcome with `verify`, else the start is refused (NO_CRITERIA, nothing created): two to five binary, observable statements for the person to validate; `outcomes` for what it will produce. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to; only the playbook inputs count, its goal and criteria are the playbook's. Outcomes, none to retry: \"draft\" (the person's draft until they accept; tell them), \"proposed\" (SUCCESS, pass on reviewUrl), \"blocked\" (nothing ran: `unenabledSkills`; again once `enableProposals` are approved), \"running\", \"already_running\" (`session` is the live run; startAnother only if asked), \"generated\" (pass on generated.reviewUrl), \"skipped\" (read `message`).",
       input: z.object({
         launch: z
           .boolean()
           .optional()
           .describe(
-            "true: RUN the playbook instead of opening a session you work (see the description)."
+            "true: RUN the playbook (see the description)."
           ),
         forceCreate: z
           .boolean()
@@ -2619,7 +2619,7 @@ export function toolDefinitions() {
           .string()
           .optional()
           .describe(
-            "Required, except with launch. The OUTCOME — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. The name goes in title; detail, scope, and deliverables go in expectedOutputs; dependencies go in blockedBySessionIds."
+            "Required, except with launch. The OUTCOME, one sentence (e.g. 'Research web-scraping approaches'), not a paragraph: the name goes in title, deliverables in outcomes, dependencies in blockedBySessionIds."
           ),
         workspaceId: z
           .string()
@@ -2681,19 +2681,19 @@ export function toolDefinitions() {
           .nullable()
           .optional()
           .describe(
-            "Optional playbook UUID this session follows from the start. Omit it and the pod binds on facts (subject kind, parent's playbook, `main red:` title) and ranks the rest against your words in `playbooks` (suggestions, nothing applied); null skips those suggestions. Later, synap_update_session followPlaybookId binds or releases one. With launch: the playbook to run."
+            "Optional playbook UUID it follows from the start (omitted: bound on facts, see the description; null skips the suggestions). With launch: the playbook to run."
           ),
         playbookName: z
           .string()
           .optional()
           .describe(
-            "With launch, instead of templateId: the playbook's name, unique among those you see (several: candidates, never a pick)."
+            "With launch, instead of templateId: the playbook's unique name."
           ),
         handToAgentId: z
           .string()
           .optional()
           .describe(
-            "With launch: the agent (synap_list_agents) that does the run instead of its executor; an agent may name only itself. Refused by name, never replaced."
+            "With launch: the agent (synap_list_agents) that runs it; an agent may name only itself."
           ),
         runner: z
           .unknown()
@@ -2707,7 +2707,7 @@ export function toolDefinitions() {
           .boolean()
           .optional()
           .describe(
-            "With launch: start a second run although one is live on the subject."
+            "With launch: a second run beside a live one."
           ),
         reasoning: z
           .string()
