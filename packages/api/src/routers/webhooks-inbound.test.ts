@@ -66,6 +66,8 @@ let toolRow: {
   metadata: unknown;
 } | null = null;
 let vaultSecret: string | null = null;
+// What each route redeemed the signing secret with (id, owner, field).
+const resolveVaultSecretMock = vi.fn();
 const sendJob = vi.fn().mockResolvedValue(undefined);
 
 // The generic door's two steps: store the delivery, then dispatch it FROM the
@@ -150,7 +152,10 @@ vi.mock("@synap/database", async (importOriginal) => ({
   entities: {},
   messagingAccounts: {},
   webhookSubscriptions: { id: "id", active: "active", direction: "direction" },
-  resolveVaultSecret: () => Promise.resolve(vaultSecret),
+  resolveVaultSecret: (...args: unknown[]) => {
+    resolveVaultSecretMock(...args);
+    return Promise.resolve(vaultSecret);
+  },
   resolveIdentity: (...args: unknown[]) => resolveIdentityMock(...args),
   recordInboundDelivery: (...args: unknown[]) => recordInboundDelivery(...args),
 }));
@@ -204,11 +209,33 @@ vi.mock("../services/capture-agent/submit-capture-graph.js", () => ({
 vi.mock("../services/capture-agent/ensure-capture-agent.js", () => ({
   getCaptureAgentUserId: () => captureAgentId(),
 }));
-vi.mock("../services/calcom/map-booking-to-graph.js", () => ({
-  mapBookingToGraph: () => ({ entities: [], relations: [] }),
+// The booking's graph (lead, call, attribution-event) is built by its own
+// door, proven in services/calcom; here only what the route hands it and files.
+const BOOKING_GRAPH = {
+  entities: [
+    { ref: "person", profileSlug: "person", title: "Ada" },
+    {
+      ref: "attribution",
+      profileSlug: "attribution-event",
+      title: "Booking: Ada (bk-1)",
+    },
+  ],
+  relations: [
+    { sourceRef: "attribution", targetRef: "person", type: "relates_to" },
+  ],
+  attribution: true,
+};
+const bookingGraphForMock = vi.fn(async (..._args: unknown[]) => BOOKING_GRAPH);
+vi.mock("../services/calcom/booking-graph.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/calcom/booking-graph.js")
+  >()),
+  bookingGraphFor: (...args: unknown[]) => bookingGraphForMock(...args),
 }));
 
 const { webhooksInboundRouter } = await import("./webhooks-inbound.js");
+const { calBookingIdempotencyKey } =
+  await import("../services/calcom/booking-graph.js");
 
 const app = new Hono();
 app.route("/api/webhooks", webhooksInboundRouter);
@@ -853,6 +880,8 @@ async function postCalcom(token: string, body: string, sig?: string) {
 
 describe("cal.com inbound webhook", () => {
   beforeEach(() => {
+    bookingGraphForMock.mockClear();
+    resolveVaultSecretMock.mockClear();
     submitCaptureGraphMock.mockClear();
     submitCaptureGraphMock.mockResolvedValue({ proposalId: "p-1" });
     stageCaptureSourcesMock.mockReset();
@@ -971,6 +1000,97 @@ describe("cal.com inbound webhook", () => {
 
     expect(res.status).toBe(401);
     expect(submitCaptureGraphMock).not.toHaveBeenCalled();
+  });
+
+  // ── Founder, 26 Nov 2026: bookings land directly (governed) + attribution ──
+  it("files the booking WITH its attribution-event, timed at Cal.com's createdAt, under the key the backfill shares", async () => {
+    captureAgentId.mockResolvedValueOnce("capture-agent");
+    const payload = { uid: "bk-1", title: "Intro call" };
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      createdAt: "2026-11-26T10:00:00.000Z",
+      payload,
+    });
+
+    expect((await postCalcom(CAL_TOKEN, body)).status).toBe(200);
+
+    expect(bookingGraphForMock).toHaveBeenCalledWith(payload, {
+      userId: OWNER_ID,
+      workspaceId: WS_ID,
+      receivedAt: "2026-11-26T10:00:00.000Z",
+    });
+    const filed = submitCaptureGraphMock.mock.calls[0]![0] as {
+      agentUserId?: string;
+      entities: Array<{ profileSlug: string }>;
+      relations: unknown[];
+      rawSource: { idempotencyKey?: string };
+    };
+    // Agent mode (Capture) is what lets the policy APPLY it: no agent, no
+    // auto-apply terminal.
+    expect(filed.agentUserId).toBe("capture-agent");
+    expect(filed.entities.map((e) => e.profileSlug)).toContain(
+      "attribution-event"
+    );
+    expect(filed.relations).toEqual(BOOKING_GRAPH.relations);
+    expect(filed.rawSource.idempotencyKey).toBe(
+      calBookingIdempotencyKey("tool-cal", "bk-1")
+    );
+  });
+
+  it("answers how the booking landed: applied when the policy applied it, proposed when it filed it", async () => {
+    submitCaptureGraphMock.mockResolvedValueOnce({
+      proposalId: "p-applied",
+      applied: true,
+    });
+    const applied = await postCalcom(
+      CAL_TOKEN,
+      JSON.stringify({ triggerEvent: "BOOKING_CREATED", payload: { uid: "a" } })
+    );
+    expect(await applied.json()).toEqual({ received: true, landed: "applied" });
+
+    submitCaptureGraphMock.mockResolvedValueOnce({
+      proposalId: "p-pending",
+      applied: false,
+    });
+    const proposed = await postCalcom(
+      CAL_TOKEN,
+      JSON.stringify({ triggerEvent: "BOOKING_CREATED", payload: { uid: "b" } })
+    );
+    expect(await proposed.json()).toEqual({
+      received: true,
+      landed: "proposed",
+    });
+  });
+
+  it("a replay of a handled booking files nothing: no second booking, no second attribution-event", async () => {
+    (
+      toolRow!.metadata as { calcom: { webhook: { seen: object } } }
+    ).calcom.webhook.seen = { "bk-1:BOOKING_CREATED": "2026-11-26T10:00:01Z" };
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      payload: { uid: "bk-1" },
+    });
+
+    const res = await postCalcom(CAL_TOKEN, body);
+
+    expect(await res.json()).toEqual({ received: true, deduped: true });
+    expect(bookingGraphForMock).not.toHaveBeenCalled();
+    expect(submitCaptureGraphMock).not.toHaveBeenCalled();
+  });
+
+  it("redeems the secret the mint door stored (a vault:// reference) by its id", async () => {
+    const id = "0c0ffee0-0000-4000-8000-000000000001";
+    (
+      toolRow!.metadata as { calcom: { webhook: { secretVaultRef: string } } }
+    ).calcom.webhook.secretVaultRef = `vault://${id}`;
+    const body = JSON.stringify({ triggerEvent: "PING", payload: {} });
+
+    expect((await postCalcom(CAL_TOKEN, body)).status).toBe(200);
+    expect(resolveVaultSecretMock).toHaveBeenCalledWith(
+      id,
+      OWNER_ID,
+      undefined
+    );
   });
 });
 

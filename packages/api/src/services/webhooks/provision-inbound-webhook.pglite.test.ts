@@ -16,10 +16,17 @@ import {
   beforeEach,
 } from "vitest";
 
-const holder = vi.hoisted(() => ({
-  db: undefined as unknown,
-  audits: [] as unknown[],
-}));
+const holder = vi.hoisted(() => {
+  // The vault encrypts with the pod's server key (read when first used).
+  process.env.VAULT_SERVER_KEY = "ab".repeat(32);
+  return {
+    db: undefined as unknown,
+    pg: undefined as unknown,
+    audits: [] as unknown[],
+    /** Redeem from the real `secrets` rows instead of the fixed secret. */
+    realVault: false,
+  };
+});
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -30,7 +37,35 @@ vi.mock("@synap/database", async (importOriginal) => {
   });
   // The routes redeem a signing secret after the token matches; a resolved
   // secret makes them answer the signature check (401), never the 404.
-  mocked.resolveVaultSecret = async () => "signing-secret";
+  // `realVault`: what `resolveVaultSecret` does on this db — the caller's OWN
+  // live server-mode row, decrypted with its row id (its own module reads
+  // the pod's pg client, which this test has none of).
+  mocked.resolveVaultSecret = async (secretId: string, userId: string) => {
+    if (!holder.realVault) return "signing-secret";
+    const pg = holder.pg as {
+      query: <T>(q: string, p: unknown[]) => Promise<{ rows: T[] }>;
+    };
+    const { rows } = await pg.query<{
+      id: string;
+      encrypted_data: string;
+      iv: string;
+      auth_tag: string;
+    }>(
+      `select id, encrypted_data, iv, auth_tag from secrets
+       where id = $1 and user_id = $2 and deleted_at is null and encryption_mode = 'server'`,
+      [secretId, userId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const decrypt = actual.decryptServerSide as (
+      b: { encryptedData: string; iv: string; authTag: string },
+      r: { column: string; rowId: string }
+    ) => string;
+    return decrypt(
+      { encryptedData: row.encrypted_data, iv: row.iv, authTag: row.auth_tag },
+      { column: "secrets.encrypted_data", rowId: row.id }
+    );
+  };
   return mocked;
 });
 vi.mock("@synap/events", async (importOriginal) => ({
@@ -53,6 +88,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { Hono } from "hono";
+import { createHmac } from "node:crypto";
 import * as schema from "@synap/database/schema";
 import { webhooksInboundRouter } from "../../routers/webhooks-inbound.js";
 import {
@@ -146,6 +182,7 @@ beforeAll(async () => {
     schema.podMembers,
     schema.users,
     schema.entities,
+    schema.secrets,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }
@@ -154,6 +191,7 @@ beforeAll(async () => {
   );
   db = drizzle(pg, { schema });
   holder.db = db;
+  holder.pg = pg;
   await db
     .insert(schema.workspaces)
     .values({ id: WS, name: "Content", ownerId: OWNER });
@@ -168,6 +206,7 @@ afterAll(async () => pg?.close());
 beforeEach(() => {
   process.env.PUBLIC_URL = `${ORIGIN}/`;
   holder.audits.length = 0;
+  holder.realVault = false;
 });
 
 describe("provisionInboundWebhook", () => {
@@ -276,6 +315,167 @@ describe("provisionInboundWebhook", () => {
       provisionInboundWebhook({ userId: OWNER, toolId: id })
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(await metadataOf(id)).toEqual({});
+  });
+});
+
+// The door for the signing secret the token-in-path routes verify (Cal.com,
+// Mailgun; Fireflies optionally). Before it, nothing wrote
+// `webhook.secretVaultRef`, so a Cal.com webhook could never be accepted.
+describe("provisionInboundWebhook — the webhook signing secret", () => {
+  const SECRET = "whsec_live_7b3f0c";
+  const calSig = (secret: string, body: string) =>
+    createHmac("sha256", secret).update(body).digest("hex");
+  const deliverCal = (token: string, secret: string) => {
+    // No uid: an authenticated delivery the route acks without filing.
+    const body = JSON.stringify({ triggerEvent: "PING", payload: {} });
+    return app.request(`/api/webhooks/calcom/${token}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cal-signature-256": calSig(secret, body),
+      },
+      body,
+    });
+  };
+  async function secretRows(): Promise<
+    Array<{ id: string; user_id: string; encrypted_data: string }>
+  > {
+    return (
+      await pg.query<{ id: string; user_id: string; encrypted_data: string }>(
+        `select id, user_id, encrypted_data from secrets`
+      )
+    ).rows;
+  }
+
+  it("keeps it in the person's vault, merges only the reference in, and the route then accepts what it signs", async () => {
+    holder.realVault = true;
+    const before = (await secretRows()).length;
+    const id = await insertTool({
+      name: "cal_com",
+      metadata: {
+        discord: { channel: "c1" },
+        calcom: { webhook: { seen: { "a:BOOKING_CREATED": "1" } } },
+      },
+    });
+    const out = await provisionInboundWebhook({
+      userId: OWNER,
+      toolId: id,
+      signingSecret: SECRET,
+    });
+
+    expect(out.missingConfig).toEqual([]);
+    expect(out.signingSecretSet).toBe(true);
+    // Never echoed, never audited.
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    expect(JSON.stringify(holder.audits)).not.toContain(SECRET);
+    expect(holder.audits).toEqual([
+      expect.objectContaining({
+        data: { webhook: "calcom", rotated: false, signingSecret: "set" },
+      }),
+    ]);
+
+    expect((await secretRows()).length).toBe(before + 1);
+    const row = (
+      await pg.query<{ id: string; user_id: string; encrypted_data: string }>(
+        `select id, user_id, encrypted_data from secrets where service_id = $1`,
+        [`webhook:calcom:${id}`]
+      )
+    ).rows[0]!;
+    expect(row.user_id).toBe(OWNER);
+    expect(row.encrypted_data).not.toContain(SECRET);
+    expect(await metadataOf(id)).toEqual({
+      discord: { channel: "c1" },
+      calcom: {
+        webhook: {
+          seen: { "a:BOOKING_CREATED": "1" },
+          token: tokenOf(out.url),
+          secretVaultRef: `vault://${row.id}`,
+        },
+      },
+    });
+
+    expect((await deliverCal(tokenOf(out.url), SECRET)).status).toBe(200);
+    expect((await deliverCal(tokenOf(out.url), "not-it")).status).toBe(401);
+  });
+
+  it("setting it again rewrites the SAME vault row and keeps the URL", async () => {
+    holder.realVault = true;
+    const id = await insertTool({ name: "cal_com" });
+    const first = await provisionInboundWebhook({
+      userId: OWNER,
+      toolId: id,
+      signingSecret: SECRET,
+    });
+    const count = (await secretRows()).length;
+    const ref = (
+      (await metadataOf(id)).calcom as { webhook: { secretVaultRef: string } }
+    ).webhook.secretVaultRef;
+
+    const second = await provisionInboundWebhook({
+      userId: OWNER,
+      toolId: id,
+      signingSecret: "whsec_rotated",
+    });
+
+    expect(second.url).toBe(first.url);
+    expect(second.rotated).toBe(false);
+    expect((await secretRows()).length).toBe(count);
+    expect(
+      (
+        (await metadataOf(id)).calcom as {
+          webhook: { secretVaultRef: string };
+        }
+      ).webhook.secretVaultRef
+    ).toBe(ref);
+    expect((await deliverCal(tokenOf(first.url), "whsec_rotated")).status).toBe(
+      200
+    );
+    expect((await deliverCal(tokenOf(first.url), SECRET)).status).toBe(401);
+  });
+
+  it("only the person the webhook acts for may set it; nothing is written otherwise", async () => {
+    const id = await insertTool({
+      name: "cal_com",
+      workspaceId: WS,
+      createdBy: OWNER,
+    });
+    const count = (await secretRows()).length;
+    await expect(
+      provisionInboundWebhook({
+        userId: EDITOR,
+        toolId: id,
+        signingSecret: SECRET,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await metadataOf(id)).toEqual({});
+    expect((await secretRows()).length).toBe(count);
+  });
+
+  it("a provider whose route reads no secret refuses one, and an empty one is refused", async () => {
+    const postiz = await insertTool({ name: "postiz" });
+    await expect(
+      provisionInboundWebhook({
+        userId: OWNER,
+        toolId: postiz,
+        signingSecret: SECRET,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/not signed with a secret/),
+    });
+    const cal = await insertTool({ name: "cal_com" });
+    await expect(
+      provisionInboundWebhook({
+        userId: OWNER,
+        toolId: cal,
+        signingSecret: " ",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/empty/),
+    });
+    expect(await metadataOf(postiz)).toEqual({});
+    expect(await metadataOf(cal)).toEqual({});
   });
 });
 

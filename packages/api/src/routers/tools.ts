@@ -22,6 +22,7 @@ import {
   inArray,
   desc,
   ownerAndActor,
+  getActingAgentUserId,
 } from "@synap/database";
 import {
   tools,
@@ -721,16 +722,32 @@ export const toolsRouter = router({
    * Mint (or return) this tool's inbound webhook token and its full URL — for
    * the token-in-path providers (`/api/webhooks/<provider>/:token`). The one
    * door is `provisionInboundWebhook`; `rotate` replaces the token.
+   * `signingSecret` stores the provider's webhook signing secret in the vault
+   * and points the tool at it (`webhook.secretVaultRef`); it is never echoed.
    */
   provisionWebhook: protectedProcedure
     .input(
       z.object({
         id: z.string().uuid(),
         rotate: z.boolean().optional(),
+        signingSecret: z.string().min(1).max(1024).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // A signing secret is a person's to give. An agent call would be filed
+      // as a proposal (below), and a proposal must never carry a secret — so
+      // an agent is refused before anything is filed, never proposed.
+      if (
+        input.signingSecret !== undefined &&
+        (ctx.agentUserId ?? getActingAgentUserId())
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "An agent cannot set a webhook signing secret: a person sets it, so it never travels through a proposal.",
+        });
+      }
 
       // Governed (CP ticket 7c01a8b7): minting hands out the secret URL a
       // provider posts to, and `rotate` breaks the live integration, so an
@@ -777,6 +794,9 @@ export const toolsRouter = router({
         userId,
         toolId: input.id,
         rotate: input.rotate,
+        ...(input.signingSecret !== undefined
+          ? { signingSecret: input.signingSecret }
+          : {}),
       });
       return { ...provisioned, status: "provisioned" as const };
     }),
