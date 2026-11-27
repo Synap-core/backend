@@ -24875,6 +24875,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "cal_com";
 	};
 	readonly fireflies: {
@@ -24882,6 +24883,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "optional";
 		readonly toolName: "fireflies";
 	};
 	readonly mailgun: {
@@ -24890,6 +24892,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "mailgun";
 	};
 	readonly postiz: {
@@ -24897,6 +24900,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: "In Postiz, open Settings \u2192 Webhooks \u2192 Add a webhook, paste this URL, choose All integrations, and save.";
+		readonly signingSecret: "none";
 		readonly toolName: "postiz";
 	};
 };
@@ -24910,6 +24914,8 @@ export interface ProvisionedInboundWebhook {
 	rotated: boolean;
 	/** Keys the route still needs before it accepts a delivery. */
 	missingConfig: string[];
+	/** True when this call stored a signing secret (never the secret itself). */
+	signingSecretSet?: true;
 	/** The manual step on the provider's side, or null when unchecked. */
 	setupStep: string | null;
 }
@@ -63288,6 +63294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				rotate?: boolean | undefined;
+				signingSecret?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -63299,6 +63306,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				provider: InboundWebhookProvider;
 				rotated: boolean;
 				setupStep: string | null;
+				signingSecretSet?: true;
 				status: "provisioned";
 				url: string;
 			};

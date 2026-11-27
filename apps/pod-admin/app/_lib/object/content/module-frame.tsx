@@ -54,6 +54,7 @@ import {
   type SurfaceContext,
 } from "@synap-core/types/cell-bridge";
 import {
+  createContext,
   useContext,
   useEffect,
   useMemo,
@@ -326,6 +327,14 @@ export const FRAME_INITIAL_HEIGHT = 320;
 const FILL_MIN_HEIGHT = 420;
 /** Under a filling frame: the card's and the page's own bottom padding. */
 const FILL_BOTTOM_GAP = 96;
+
+/**
+ * The space a filling frame leaves under it in the window. The receiver card
+ * needs `FILL_BOTTOM_GAP`; a frame with no card around it (the `/open`
+ * reader, whose body owns the scroll) provides its own bottom padding, so the
+ * view ends at the window's foot instead of a band of empty page above it.
+ */
+export const FillBottomGapContext = createContext(FILL_BOTTOM_GAP);
 /** How near the viewport a frame mounts: about a screen ahead. */
 export const FRAME_NEAR_MARGIN = "600px 0px";
 
@@ -373,20 +382,19 @@ function useFillHeight(
   fill: boolean
 ): number | undefined {
   const [height, setHeight] = useState<number | undefined>(undefined);
+  const gap = useContext(FillBottomGapContext);
   useEffect(() => {
     if (!fill) return;
     const measure = () => {
       const el = ref.current;
       if (!el) return;
       const top = el.getBoundingClientRect().top + window.scrollY;
-      setHeight(
-        Math.max(FILL_MIN_HEIGHT, window.innerHeight - top - FILL_BOTTOM_GAP)
-      );
+      setHeight(Math.max(FILL_MIN_HEIGHT, window.innerHeight - top - gap));
     };
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [fill, ref]);
+  }, [fill, ref, gap]);
   return fill ? (height ?? FILL_MIN_HEIGHT) : undefined;
 }
 

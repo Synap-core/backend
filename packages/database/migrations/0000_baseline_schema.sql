@@ -5644,6 +5644,11 @@ CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_idx"
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_id
   ON focus_sessions ((metadata->>'automationId'))
   WHERE (metadata->>'automationId') IS NOT NULL;
+-- 0462: a person's sessions newest first, without the automation rows (the
+-- agent doors' default population, `notAutomationSessionWhere`).
+CREATE INDEX IF NOT EXISTS "idx_focus_sessions_user_started_not_automation"
+  ON "focus_sessions" ("user_id", "started_at" DESC, "id" DESC)
+  WHERE NOT coalesce((("origin" = 'automation' OR ("metadata" #>> '{automationRunId}' IS NOT NULL or "metadata" #>> '{automationId}' IS NOT NULL)) AND "metadata" #>> '{triage,acceptedAt}' IS NULL AND "status" <> 'scheduled' AND "metadata" #>> '{kind}' IS DISTINCT FROM 'agent-proposal-package'), false);
 
 -- 0324: the lifecycle transition outbox (D8) — the event a status move owes,
 -- written in the move's own transaction; dispatched + retried from here.

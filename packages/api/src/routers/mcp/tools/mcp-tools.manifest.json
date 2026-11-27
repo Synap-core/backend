@@ -3392,7 +3392,7 @@
           },
           "playbookId": {
             "type": "string",
-            "description": "Optional: only runs of this playbook DEFINITION. Pair with kind 'run' or 'all' — flow-linked rows are runs, so under the default nothing would match."
+            "description": "Optional: only runs of this playbook DEFINITION. The default leaves out the runs an automation started; kind 'run' or 'all' includes them."
           },
           "automationId": {
             "type": "string",
@@ -3401,7 +3401,7 @@
           "kind": {
             "type": "string",
             "enum": ["work", "run", "receipt", "all"],
-            "description": "Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way."
+            "description": "Which population. Omitted (default) = every kind EXCEPT the sessions an automation opened; name a kind, automationId or subjectEntityId to get those. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' = no filter, automation sessions included. Every row carries its own `kind` either way."
           },
           "limit": {
             "type": "number",
@@ -3460,7 +3460,7 @@
           "kind": {
             "type": "string",
             "enum": ["work", "run", "receipt", "all"],
-            "description": "Population of the window; 'all' (default). Far ends are any kind."
+            "description": "Population of the window. Omitted (default) = every kind EXCEPT the sessions an automation opened (kept with subjectEntityId); 'all' = no filter, automation sessions included. Far ends are any kind."
           },
           "lens": {
             "type": "string",

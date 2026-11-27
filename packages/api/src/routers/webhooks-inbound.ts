@@ -12,6 +12,7 @@ import {
   messagingAccounts,
   webhookSubscriptions,
   resolveVaultSecret,
+  parseVaultReference,
   resolveIdentity,
   ProfileResolutionService,
   recordInboundDelivery,
@@ -46,10 +47,11 @@ import { markWebhookSeen } from "../services/connectors/mark-webhook-seen.js";
 import { submitCaptureGraph } from "../services/capture-agent/submit-capture-graph.js";
 import { stageCaptureSources } from "../services/intake/record-structure-intake.js";
 import { getCaptureAgentUserId } from "../services/capture-agent/ensure-capture-agent.js";
+import type { CalBookingPayload } from "../services/calcom/map-booking-to-graph.js";
 import {
-  mapBookingToGraph,
-  type CalBookingPayload,
-} from "../services/calcom/map-booking-to-graph.js";
+  bookingGraphFor,
+  calBookingIdempotencyKey,
+} from "../services/calcom/booking-graph.js";
 import { mapMailgunInboundToMessage } from "../services/mailgun/map-inbound-to-message.js";
 import { resolveToolByWebhookToken } from "../services/webhooks/resolve-tool-by-webhook-token.js";
 import {
@@ -75,6 +77,23 @@ function tokensMatch(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
   return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Redeem a token-in-path route's signing secret from `webhook.secretVaultRef`.
+ * The mint door (`provisionInboundWebhook`, `signingSecret`) stores it as a
+ * `vault://<id>` reference; `resolveVaultSecret` takes the bare id (and an
+ * optional field), so the reference is parsed first. A value that is not a
+ * reference is passed as it is (a bare id written by hand). Never logged.
+ */
+function redeemWebhookSecret(
+  secretVaultRef: string,
+  ownerUserId: string
+): Promise<string | null> {
+  const ref = parseVaultReference(secretVaultRef);
+  return ref
+    ? resolveVaultSecret(ref.secretId, ownerUserId, ref.fieldName)
+    : resolveVaultSecret(secretVaultRef, ownerUserId);
 }
 
 // Generic inbound webhook — external backend → Synap
@@ -245,9 +264,21 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
 // Cal.com POSTs booking events here. We verify the signature (header
 // `x-cal-signature-256` = hex HMAC-SHA256 of the RAW body, NO `sha256=` prefix —
 // different from Synap's own `/inbound` scheme), dedup on booking uid + trigger,
-// and turn a BOOKING_CREATED into ONE composite `capture/graph` proposal
-// (person wearing the `lead` role at engaged + company + event, never a deal —
-// W15) via the shared submitCaptureGraph door.
+// and turn a BOOKING_CREATED into ONE composite capture graph (person wearing
+// the `lead` role at engaged + company + event, never a deal — W15; plus the
+// booking's `attribution-event` linked to the person) via the shared
+// submitCaptureGraph door.
+//
+// LANDS DIRECTLY, GOVERNED (founder, 26 Nov 2026: storing data from a
+// connected tool is a data-only create). The graph is filed by the Capture
+// agent for the tool's person, so `submitCaptureGraph` takes its agent-mode
+// terminal: every member is scored by the ONE resolver
+// (`captureGraphMemberVerdict` → `resolveAgentGovernanceDecision`, the engine
+// the automation door's `checkAutomationWriteOrPropose` also runs). Under the
+// default policy every member is a create on the `DEFAULT_AUTO_APPROVE` floor,
+// so the booking is applied at once; a space or agent tightened to propose,
+// a possible duplicate, or a pod with no Capture agent files ONE reviewable
+// proposal instead. There is no bypass here: the policy decides.
 // The `event` entity is event-sync-shaped, so an approved booking also mirrors to
 // a native Discord scheduled event with no Google-Calendar dependency.
 //
@@ -355,7 +386,7 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
   const workspaceId = cfg.workspaceId ?? calTool.workspaceId ?? null;
 
   // Redeem the webhook signing secret from the vault (never logged).
-  const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+  const secret = await redeemWebhookSecret(cfg.secretVaultRef, ownerUserId);
   if (!secret) {
     logger.error({ toolId: calTool.id }, "cal.com webhook: secret unresolved");
     return c.json({ error: "Webhook not configured" }, 500);
@@ -371,7 +402,11 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  let envelope: { triggerEvent?: string; payload?: CalBookingPayload } | null;
+  let envelope: {
+    triggerEvent?: string;
+    createdAt?: string;
+    payload?: CalBookingPayload;
+  } | null;
   try {
     envelope = JSON.parse(rawBody);
   } catch {
@@ -396,11 +431,23 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
   // `markSeen` is only set once the work actually landed, so an unapplied
   // reschedule/cancel (event not materialized yet) is NOT recorded as handled.
   let markSeen = false;
+  // What became of a BOOKING_CREATED: applied at once, or filed for review.
+  let landed: "applied" | "proposed" | undefined;
   try {
     if (trigger === "BOOKING_CREATED") {
       // Capture acts, through the membership of the tool's person.
       const captureAgentId = await getCaptureAgentUserId();
-      const { entities: graphEntities, relations } = mapBookingToGraph(payload);
+      // The booking's attribution-event is timed at the booking's creation:
+      // the payload's own `createdAt` when it has one, else the envelope's
+      // (Cal.com stamps it when the booking fires), else now.
+      const { entities: graphEntities, relations } = await bookingGraphFor(
+        payload,
+        {
+          userId: ownerUserId,
+          workspaceId,
+          receivedAt: envelope?.createdAt?.trim() || new Date().toISOString(),
+        }
+      );
       // The RAW door: the verified body is staged as a capture source owned by
       // the tool's HUMAN owner BEFORE anything is filed. `markSeen` stops Cal.com
       // retrying, so a body we could not store must NOT be marked handled — the
@@ -419,7 +466,7 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
           `cal.com webhook: raw body NOT stored (${rawStaged.errors.join("; ")})`
         );
       }
-      await submitCaptureGraph({
+      const filed = await submitCaptureGraph({
         sourceDocumentIds: rawStaged.sourceDocumentIds,
         userId: ownerUserId,
         ...(captureAgentId ? { agentUserId: captureAgentId } : {}),
@@ -449,10 +496,13 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
           // tool. It also OVERRIDES the content hash, so a re-delivery with an
           // edited payload returns the prior proposal rather than filing a new
           // one — acceptable for a booking (uid+trigger identifies the event),
-          // but only once the key cannot collide across tools.
-          idempotencyKey: `calcom:${calTool.id}:${seenKey}`,
+          // but only once the key cannot collide across tools. The backfill
+          // files under the SAME key, so neither lane can land a booking (or
+          // its attribution-event) twice.
+          idempotencyKey: calBookingIdempotencyKey(calTool.id, uid, trigger),
         },
       });
+      landed = filed?.applied === true ? "applied" : "proposed";
       markSeen = true;
     } else if (trigger === "BOOKING_RESCHEDULED") {
       const startDate = (payload.startTime ?? payload.start)?.trim();
@@ -496,7 +546,7 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
   // Mark seen via the shared race-safe single-leaf writer (see markWebhookSeen).
   await markWebhookSeen(calTool.id, "calcom", seenKey);
 
-  return c.json({ received: true }, 200);
+  return c.json({ received: true, ...(landed ? { landed } : {}) }, 200);
 });
 
 // ── Fireflies inbound webhook — meeting transcripts → channel/message ─────────
@@ -568,7 +618,7 @@ webhooksInboundRouter.post("/fireflies/:token", async (c) => {
   // Signature (defense-in-depth): only when a signing secret is provisioned. Verify
   // the SHA-256 HMAC in `x-hub-signature` (`sha256=<hex>`) against the vault secret.
   if (cfg.secretVaultRef) {
-    const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+    const secret = await redeemWebhookSecret(cfg.secretVaultRef, ownerUserId);
     if (!secret) {
       logger.error(
         { toolId: ffTool.id },
@@ -713,7 +763,7 @@ webhooksInboundRouter.post("/mailgun/:token", async (c) => {
   const workspaceId = cfg.workspaceId ?? mgTool.workspaceId ?? null;
 
   // Redeem the webhook signing key from the vault (never logged).
-  const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+  const secret = await redeemWebhookSecret(cfg.secretVaultRef, ownerUserId);
   if (!secret) {
     logger.error({ toolId: mgTool.id }, "mailgun webhook: secret unresolved");
     return c.json({ error: "Webhook not configured" }, 500);

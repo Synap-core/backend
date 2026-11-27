@@ -1327,9 +1327,14 @@ export const sessionHandlers: McpHandlerMap = {
     // Population lens (`services/focus-sessions/session-kind.ts`). MCP schemas
     // are ADVISORY — nothing validates args server-side — so an off-enum value
     // is answered with the vocabulary rather than silently matching zero rows.
-    // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
-    // listing sessions wants the runs and write receipts it just opened.
-    const kindArg = (args.kind as string | undefined) ?? "all";
+    // NO kind named = every kind EXCEPT the sessions an automation opened
+    // (decision 90897bca, 27 Nov 2026: "AIs that check the latest sessions get
+    // no automation sessions until they ask for automations"), like the Hub
+    // REST door; unlike tRPC's `work`, because the runs an agent starts on a
+    // playbook read `run` and it wants them, and the write receipts too.
+    // Asking for automations = naming a kind, an `automationId` or a subject.
+    const kindNamed = args.kind as string | undefined;
+    const kindArg = kindNamed ?? "all";
     if (
       kindArg !== "all" &&
       !(SESSION_KINDS as readonly string[]).includes(kindArg)
@@ -1354,7 +1359,8 @@ export const sessionHandlers: McpHandlerMap = {
     //     (decision C v1, `rosterReadFor`), now with the key's grant ANDed by
     //     `sessionReadableWhere` like every other session read;
     //   - the agent-door defaults: every lens (`lens: "all"` — no triage
-    //     narrow, an agent looks for the drafts it just opened) and kind `all`;
+    //     narrow, an agent looks for the drafts it just opened) and, with no
+    //     kind named, every kind but the sessions an automation opened;
     //   - the URL lens auto-injects workspaceId/projectId — honoured as
     //     lenses, never as an authorization boundary.
     // `subjectEntityId` now reads the ONE subject predicate the Hub door
@@ -1384,6 +1390,12 @@ export const sessionHandlers: McpHandlerMap = {
         ? { kind: "entities", entityIds: [subjectEntityId] }
         : undefined,
       roster: false,
+      // Asking for automations: a kind, an automation, or one thing's
+      // sessions (its workers' runs are automation-opened and bounded).
+      withoutAutomationSessions:
+        kindNamed === undefined &&
+        !idArg(args.automationId) &&
+        !subjectEntityId,
     });
     // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
     // one row past it tells whether another page exists. `id` breaks ties so
@@ -1485,8 +1497,11 @@ export const sessionHandlers: McpHandlerMap = {
         error: `windowHours must be an integer from 1 to ${WORK_GRAPH_MAX_WINDOW_HOURS}.`,
       });
     }
-    // Agent-door defaults, as synap_list_sessions: every kind, every lens.
-    const kindArg = (args.kind as string | undefined) ?? "all";
+    // Agent-door defaults, as synap_list_sessions: every lens, and with no
+    // kind named every kind except the sessions an automation opened
+    // (`buildWorkGraph`'s default window, decision 90897bca).
+    const kindNamed = args.kind as string | undefined;
+    const kindArg = kindNamed ?? "all";
     if (
       kindArg !== "all" &&
       !(SESSION_KINDS as readonly string[]).includes(kindArg)
@@ -1545,7 +1560,10 @@ export const sessionHandlers: McpHandlerMap = {
         projectLens: lensOf(args.projectId),
       },
       windowHours,
-      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      kind:
+        kindNamed === undefined
+          ? undefined
+          : (kindArg as (typeof SESSION_KINDS)[number] | "all"),
       lens: lensArg,
       // An agent door reads owner-only (decision C v1, `rosterReadFor`).
       roster: false,

@@ -129,9 +129,12 @@ describe("the shared row projection attaches both lenses", () => {
 /**
  * The two defaults are DELIBERATELY different, and the asymmetry is the kind of
  * thing a tidy-up silently "fixes". Pinned at the source so flipping either one
- * is a decision somebody makes on purpose.
+ * is a decision somebody makes on purpose. The agent doors' default (decision
+ * 90897bca, 27 Nov 2026) is every kind but the sessions an automation opened,
+ * NOT `work`: a session an agent starts on a playbook reads `run`. Its rows are
+ * proven on PGlite in `services/focus-sessions/agent-doors-no-automation`.
  */
-describe("the human door defaults to work, the agent doors default to all", () => {
+describe("the human door defaults to work, the agent doors to every kind but automation sessions", () => {
   it("tRPC focusSessions.list defaults kind to `work`", () => {
     const src = readFileSync(
       join(API_SRC, "routers/focus-sessions.ts"),
@@ -142,19 +145,25 @@ describe("the human door defaults to work, the agent doors default to all", () =
     );
   });
 
-  it("Hub REST list defaults kind to `all`", () => {
+  it("Hub REST list: no kind named = `all` without the automation sessions", () => {
     const src = readFileSync(
       join(API_SRC, "routers/hub-protocol/rest/focus-sessions.ts"),
       "utf8"
     );
-    expect(src).toContain('c.req.query("kind") ?? "all"');
+    expect(src).toContain('const kindRaw = kindParam ?? "all";');
+    expect(src).toMatch(
+      /withoutAutomationSessions:\s*kindParam === undefined && !automationId && !subject,/
+    );
   });
 
-  it("MCP synap_list_sessions defaults kind to `all`", () => {
+  it("MCP synap_list_sessions: no kind named = `all` without the automation sessions", () => {
     const src = readFileSync(
       join(API_SRC, "routers/mcp/handlers/session.ts"),
       "utf8"
     );
-    expect(src).toContain('(args.kind as string | undefined) ?? "all"');
+    expect(src).toContain('const kindArg = kindNamed ?? "all";');
+    expect(src).toMatch(
+      /withoutAutomationSessions:\s*kindNamed === undefined &&\s*!idArg\(args\.automationId\) &&\s*!subjectEntityId,/
+    );
   });
 });

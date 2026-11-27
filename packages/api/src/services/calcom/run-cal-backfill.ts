@@ -3,10 +3,14 @@
  *
  * Runs on a schedule (jobs `cal-backfill-cron` → `registerCalBackfillRunner` IoC
  * slot). Lists upcoming Cal.com bookings via the `cal_list_bookings` capability
- * and turns any NOT-yet-seen booking into the same composite `capture/graph`
- * proposal the webhook builds — so a booking missed during pod downtime / webhook
- * misconfig still lands. Dedup is SHARED with the webhook: the `${uid}:BOOKING_CREATED`
- * seen-map under `metadata.calcom.webhook.seen`, so neither path double-captures.
+ * and turns any NOT-yet-seen booking into the same composite capture graph the
+ * webhook builds (`bookingGraphFor`: the lead, the call and its attribution-
+ * event), filed the same governed way — so a booking missed during pod
+ * downtime / webhook misconfig still lands. Dedup is SHARED with the webhook
+ * twice over: the `${uid}:BOOKING_CREATED` seen-map under
+ * `metadata.calcom.webhook.seen`, and the capture idempotency key
+ * (`calBookingIdempotencyKey`), so neither path double-captures even when the
+ * seen-map write after a filing was lost.
  *
  * No-ops unless the cal_com tool has `metadata.calcom.backfill.enabled`. Lives in
  * @synap/api because `cal_list_bookings` (executeCapability) + submitCaptureGraph
@@ -25,10 +29,8 @@ import {
   capErrorMessage,
   resolveNoticeChannelId,
 } from "../connection-health/notify-connector-unhealthy.js";
-import {
-  mapBookingToGraph,
-  type CalBookingPayload,
-} from "./map-booking-to-graph.js";
+import type { CalBookingPayload } from "./map-booking-to-graph.js";
+import { bookingGraphFor, calBookingIdempotencyKey } from "./booking-graph.js";
 import { resolveTool } from "../tools/resolve-tool.js";
 
 const logger = createLogger({ module: "cal-backfill" });
@@ -129,7 +131,12 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
       continue;
     }
     try {
-      const { entities: graphEntities, relations } = mapBookingToGraph(booking);
+      // The list carries the booking's own `createdAt`; a booking without
+      // one is timed now (the kind requires a timestamp).
+      const { entities: graphEntities, relations } = await bookingGraphFor(
+        booking,
+        { userId: owner, workspaceId, receivedAt: new Date().toISOString() }
+      );
       // The RAW door, parity with the webhook lane: the booking is staged as a
       // capture source (owned by the tool's human owner) BEFORE filing. A
       // booking whose raw could not be stored is NOT marked seen — the throw
@@ -167,6 +174,9 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
           rawText: JSON.stringify(booking),
           mimeType: "application/json",
           label: `Cal.com booking (backfill) — ${booking.title ?? uid}`,
+          // The webhook's key: a booking it already filed returns that
+          // proposal here instead of a second booking + attribution-event.
+          idempotencyKey: calBookingIdempotencyKey(calTool.id, uid),
         },
       });
       newKeys[key] = new Date().toISOString();

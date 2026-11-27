@@ -153,3 +153,156 @@ describe("mapBookingToGraph — degenerate payloads", () => {
     expect(event.properties?.calendarLink).toBeUndefined();
   });
 });
+
+// ── The booking's attribution-event (founder, 26 Nov 2026) ───────────────────
+// Driven from the REAL webhook shape: Cal.com puts the booker's answers in
+// `payload.responses` as `{ label, value, isHidden }` (CalEventResponses,
+// packages/types/Calendar.d.ts); a hidden question named `utm_source` is how
+// a booking page carries a UTM. The bookings list (v2, the backfill) answers
+// with plain values in `bookingFieldsResponses`.
+describe("mapBookingToGraph — attribution-event", () => {
+  const RECEIVED = "2026-11-26T10:00:05.000Z";
+  const withUtm: CalBookingPayload = {
+    ...base,
+    createdAt: "2026-11-26T10:00:00.000Z",
+    eventTypeId: 42,
+    bookingId: 7,
+    responses: {
+      name: { label: "your_name", value: "Jelle Bets", isHidden: false },
+      email: { label: "email_address", value: "jelle@acme-corp.io" },
+      utm_source: { label: "utm_source", value: "linkedin", isHidden: true },
+      utm_medium: { label: "utm_medium", value: "social", isHidden: true },
+      utm_campaign: { label: "utm_campaign", value: "launch", isHidden: true },
+      utm_content: { label: "utm_content", value: "post-3", isHidden: true },
+      referrer: { label: "referrer", value: "https://www.linkedin.com/" },
+    },
+  };
+
+  function attributionOf(payload: CalBookingPayload) {
+    const graph = mapBookingToGraph(payload, {
+      attribution: { receivedAt: RECEIVED },
+    });
+    const attribution = graph.entities.find(
+      (e) => e.profileSlug === "attribution-event"
+    );
+    return { graph, attribution };
+  }
+
+  it("writes ONE attribution-event, eventtype booking, from the booker's hidden UTM answers", () => {
+    const { graph, attribution } = attributionOf(withUtm);
+    expect(
+      graph.entities.filter((e) => e.profileSlug === "attribution-event")
+    ).toHaveLength(1);
+    expect(attribution!.properties).toEqual({
+      source: "linkedin",
+      medium: "social",
+      campaign: "launch",
+      timestamp: "2026-11-26T10:00:00.000Z",
+      eventtype: "booking",
+      referrer: "https://www.linkedin.com/",
+      utmparams: {
+        utm_source: "linkedin",
+        utm_medium: "social",
+        utm_campaign: "launch",
+        utm_content: "post-3",
+      },
+      metadata: {
+        provider: "cal.com",
+        calBookingUid: "bk_123",
+        eventTypeId: 42,
+        bookingId: 7,
+      },
+    });
+  });
+
+  it("links the attribution-event to the person", () => {
+    const { graph, attribution } = attributionOf(withUtm);
+    expect(graph.relations).toContainEqual({
+      sourceRef: attribution!.ref,
+      targetRef: "person",
+      type: "relates_to",
+    });
+  });
+
+  it("falls back to cal.com / booking / (none) with no UTM, and to the receipt time with no createdAt", () => {
+    const { attribution } = attributionOf(base);
+    expect(attribution!.properties).toEqual({
+      source: "cal.com",
+      medium: "booking",
+      campaign: "(none)",
+      timestamp: RECEIVED,
+      eventtype: "booking",
+      metadata: { provider: "cal.com", calBookingUid: "bk_123" },
+    });
+  });
+
+  it("falls back field by field: a lone utm_source keeps medium and campaign defaults", () => {
+    const { attribution } = attributionOf({
+      ...base,
+      responses: { utm_source: { label: "utm_source", value: "newsletter" } },
+    });
+    expect(attribution!.properties).toMatchObject({
+      source: "newsletter",
+      medium: "booking",
+      campaign: "(none)",
+      utmparams: { utm_source: "newsletter" },
+    });
+  });
+
+  it("reads the bookings list's flat answers, then booking metadata", () => {
+    const { attribution } = attributionOf({
+      ...base,
+      bookingFieldsResponses: { utm_source: "x.com", utm_medium: "" },
+      metadata: { utm_medium: "organic", utm_source: "ignored" },
+    });
+    expect(attribution!.properties).toMatchObject({
+      source: "x.com",
+      medium: "organic",
+      campaign: "(none)",
+    });
+  });
+
+  it("reads a UTM object on the payload (bare or utm_ keys), below the booker's answers and above metadata", () => {
+    const { attribution } = attributionOf({
+      ...base,
+      responses: { utm_source: { label: "utm_source", value: "linkedin" } },
+      tracking: { source: "ignored", medium: "cpc", utm_campaign: "q4" },
+      metadata: { utm_medium: "ignored", utm_term: "crm" },
+    });
+    expect(attribution!.properties).toMatchObject({
+      source: "linkedin",
+      medium: "cpc",
+      campaign: "q4",
+      utmparams: {
+        utm_source: "linkedin",
+        utm_medium: "cpc",
+        utm_campaign: "q4",
+        utm_term: "crm",
+      },
+    });
+  });
+
+  it("an empty answer is no UTM (a blank hidden field is not a source)", () => {
+    const { attribution } = attributionOf({
+      ...base,
+      responses: { utm_source: { label: "utm_source", value: "  " } },
+    });
+    expect(attribution!.properties?.source).toBe("cal.com");
+    expect(attribution!.properties).not.toHaveProperty("utmparams");
+  });
+
+  it("titles it by the booking uid, so two bookings never share a title (the duplicate door matches exact titles)", () => {
+    const a = attributionOf(withUtm).attribution!;
+    const b = attributionOf({ ...withUtm, uid: "bk_456" }).attribution!;
+    expect(a.title).toContain("bk_123");
+    expect(a.title).not.toBe(b.title);
+  });
+
+  it("without the option the graph is unchanged: no attribution-event, no extra edge", () => {
+    const plain = mapBookingToGraph(withUtm);
+    expect(
+      plain.entities.some((e) => e.profileSlug === "attribution-event")
+    ).toBe(false);
+    expect(plain.relations.some((r) => r.type === "relates_to")).toBe(false);
+  });
+});

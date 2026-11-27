@@ -3868,7 +3868,7 @@ export const tools = {
             playbookId: {
               type: "string",
               description:
-                "Optional: only runs of this playbook DEFINITION. Pair with kind 'run' or 'all' — flow-linked rows are runs, so under the default nothing would match.",
+                "Optional: only runs of this playbook DEFINITION. The default leaves out the runs an automation started; kind 'run' or 'all' includes them.",
             },
             automationId: {
               type: "string",
@@ -3882,7 +3882,7 @@ export const tools = {
               // unaskable. "all" is a filter sentinel, not a kind.
               enum: [...SESSION_KINDS, "all"],
               description:
-                "Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way.",
+                "Which population. Omitted (default) = every kind EXCEPT the sessions an automation opened; name a kind, automationId or subjectEntityId to get those. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' = no filter, automation sessions included. Every row carries its own `kind` either way.",
             },
             limit: {
               type: "number",
@@ -3949,7 +3949,7 @@ export const tools = {
               // DERIVED from the ONE vocabulary, as synap_list_sessions.
               enum: [...SESSION_KINDS, "all"],
               description:
-                "Population of the window; 'all' (default). Far ends are any kind.",
+                "Population of the window. Omitted (default) = every kind EXCEPT the sessions an automation opened (kept with subjectEntityId); 'all' = no filter, automation sessions included. Far ends are any kind.",
             },
             lens: {
               type: "string",

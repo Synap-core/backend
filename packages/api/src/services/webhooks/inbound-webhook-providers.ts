@@ -18,6 +18,12 @@
  * `metadata[metadataKey].webhook` before it accepts a delivery (a token alone
  * still answers 404). The door reports the ones missing; it never invents them.
  *
+ * `signingSecret` says whether the route verifies a signing secret it reads
+ * from `webhook.secretVaultRef` (required: it refuses without one; optional:
+ * it verifies only when one is set; none: it reads no secret). The mint door
+ * stores a secret a person gives it in the vault and writes that reference
+ * only for a provider whose route reads it.
+ *
  * `setupStep` is the one manual step on the provider's side, when we have
  * checked it against the provider's own UI. Postiz: its public API has no
  * webhook endpoint (docs.postiz.com/public-api/openapi.json), so the person
@@ -32,6 +38,8 @@ export interface InboundWebhookProviderSpec {
   metadataKey: string;
   /** Keys the route also requires under that `webhook` object. */
   requiredConfig: readonly string[];
+  /** Whether the route verifies a signing secret read from `secretVaultRef`. */
+  signingSecret: "required" | "optional" | "none";
   /** The manual step on the provider's side, or null when unchecked. */
   setupStep: string | null;
 }
@@ -41,24 +49,28 @@ export const INBOUND_WEBHOOK_PROVIDERS = {
     toolName: "cal_com",
     metadataKey: "calcom",
     requiredConfig: ["secretVaultRef"],
+    signingSecret: "required",
     setupStep: null,
   },
   fireflies: {
     toolName: "fireflies",
     metadataKey: "fireflies",
     requiredConfig: [],
+    signingSecret: "optional",
     setupStep: null,
   },
   mailgun: {
     toolName: "mailgun",
     metadataKey: "mailgun",
     requiredConfig: ["secretVaultRef"],
+    signingSecret: "required",
     setupStep: null,
   },
   postiz: {
     toolName: "postiz",
     metadataKey: "postiz",
     requiredConfig: [],
+    signingSecret: "none",
     setupStep:
       "In Postiz, open Settings → Webhooks → Add a webhook, paste this URL, choose All integrations, and save.",
   },
