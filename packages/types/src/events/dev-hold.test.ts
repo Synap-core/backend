@@ -39,6 +39,25 @@ const job = (min: number, status: string, name = "dev-feed-h") => ({
   timestamp: at(min),
   data: { repo: BE, sha: "a".repeat(40), status, workflow: `devbox ${name}` },
 });
+/** A CI run of PR 47, as the producer posts it (`pod-observation.mjs`). */
+const ci = (
+  min: number,
+  status: string,
+  verdict: string | null,
+  over: Record<string, unknown> = {}
+): DevLoopEventRowLike => ({
+  type: T.ciFinished,
+  timestamp: at(min),
+  data: {
+    repo: BE,
+    sha: "b".repeat(40),
+    status,
+    pr: 47,
+    workflow: "CI",
+    ...(verdict ? { requiredChecks: { verdict } } : {}),
+    ...over,
+  },
+});
 
 describe("holdDevRefMet", () => {
   it("pr: met once it merged into main (any time); closed only with to: closed", () => {
@@ -60,6 +79,95 @@ describe("holdDevRefMet", () => {
   it("pr: a merge into another branch (a stacked PR) is not the merge waited on", () => {
     const stacked = prRow(T.prMerged, 5, { intoDefault: false });
     expect(holdDevRefMet(PR, {}, SINCE, [stacked])).toBe(false);
+  });
+
+  it("pr checks_failed / checks_green: the newest CI run after the pause, by its required-checks verdict", () => {
+    const red = ci(5, "failure", "red");
+    const green = ci(9, "success", "green");
+    const FAILED = { to: "checks_failed" };
+    const GREEN = { to: "checks_green" };
+    expect(holdDevRefMet(PR, FAILED, SINCE, [red])).toBe(true);
+    expect(holdDevRefMet(PR, GREEN, SINCE, [red])).toBe(false);
+    expect(holdDevRefMet(PR, GREEN, SINCE, [green])).toBe(true);
+    expect(holdDevRefMet(PR, FAILED, SINCE, [green])).toBe(false);
+    // A rerun ends later: its verdict wins, in either order of the rows.
+    expect(holdDevRefMet(PR, FAILED, SINCE, [green, red])).toBe(false);
+    expect(holdDevRefMet(PR, GREEN, SINCE, [green, red])).toBe(true);
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [ci(12, "failure", "red"), green])
+    ).toBe(true);
+    // A run that ended before the pause says nothing about the push it waits on.
+    expect(holdDevRefMet(PR, FAILED, SINCE, [ci(-5, "failure", "red")])).toBe(
+      false
+    );
+    // Pending, no CI, or no verdict computed: not yet.
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [ci(5, "failure", "pending")])
+    ).toBe(false);
+    expect(holdDevRefMet(PR, FAILED, SINCE, [ci(5, "failure", "no_ci")])).toBe(
+      false
+    );
+    expect(holdDevRefMet(PR, FAILED, SINCE, [ci(5, "failure", null)])).toBe(
+      false
+    );
+    // A newest run with no verdict hides the older red: it may have passed.
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [red, ci(7, "success", null)])
+    ).toBe(false);
+  });
+
+  it("pr checks: a draft, another PR, a devbox job, another workflow or a cancelled run never counts", () => {
+    const FAILED = { to: "checks_failed" };
+    // A draft's CI is red by design ("Suites not run (draft)").
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [
+        ci(5, "failure", "red", { draft: true }),
+      ])
+    ).toBe(false);
+    // The older ready run's red stays the newest that counts.
+    expect(
+      holdDevRefMet(PR, { to: "checks_green" }, SINCE, [
+        ci(3, "failure", "red"),
+        ci(5, "success", "green", { draft: true }),
+      ])
+    ).toBe(false);
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [ci(5, "failure", "red", { pr: 48 })])
+    ).toBe(false);
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [
+        ci(5, "failure", "red", { repo: "Synap-core/app-bases" }),
+      ])
+    ).toBe(false);
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [
+        ci(5, "failure", "red", { workflow: "devbox be-file" }),
+      ])
+    ).toBe(false);
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [
+        ci(5, "failure", "red", { workflow: "Depends-On" }),
+      ])
+    ).toBe(false);
+    expect(holdDevRefMet(PR, FAILED, SINCE, [ci(5, "cancelled", "red")])).toBe(
+      false
+    );
+    // The repo's case does not matter (GitHub compares it without).
+    expect(
+      holdDevRefMet(PR, FAILED, SINCE, [
+        ci(5, "failure", "red", { repo: "SYNAP-CORE/Backend" }),
+      ])
+    ).toBe(true);
+  });
+
+  it("pr merged / closed never read the checks", () => {
+    const opened = prRow(T.prOpened, -60);
+    const red = ci(5, "failure", "red");
+    const green = ci(6, "success", "green");
+    expect(holdDevRefMet(PR, {}, SINCE, [opened, red, green])).toBe(false);
+    expect(holdDevRefMet(PR, { to: "closed" }, SINCE, [opened, red])).toBe(
+      false
+    );
   });
 
   it("main: the newest snapshot OBSERVED after the pause says ok", () => {
@@ -109,6 +217,14 @@ describe("holdDevFactOf", () => {
     expect(holdDevFactOf(T.ciFinished, job(0, "success").data)).toBe(
       "job:dev-feed-h"
     );
+    // A PR's CI run: a hold on that PR's checks verdict may be met.
+    expect(holdDevFactOf(T.ciFinished, ci(0, "failure", "red").data)).toBe(
+      "pr:synap-core/backend#47"
+    );
+    // A devbox job tied to a PR still names its job.
+    expect(
+      holdDevFactOf(T.ciFinished, { ...job(0, "failure").data, pr: 47 })
+    ).toBe("job:dev-feed-h");
   });
 
   it("null for a fact no hold can wait on", () => {
@@ -121,6 +237,13 @@ describe("holdDevFactOf", () => {
         status: "success",
         workflow: "CI",
       })
+    ).toBeNull();
+    // Another workflow (Depends-On, the merge bot) is not the PR's checks.
+    expect(
+      holdDevFactOf(
+        T.ciFinished,
+        ci(0, "success", "green", { workflow: "Depends-On" }).data
+      )
     ).toBeNull();
   });
 });

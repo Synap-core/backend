@@ -463,6 +463,54 @@ describe("a dev fact (until.moves = pr: / main: / job:)", () => {
     expect(await statusOf("focus_sessions", onJob)).toBe("active");
     expect(await statusOf("focus_sessions", onMain)).toBe("active");
   });
+
+  it("a PR hold on its checks resumes on the owner's CI verdict after the pause; a merge hold never reads the checks", async () => {
+    const onRed = await pausedOn(`pr:${BE}#71`, "checks_failed");
+    const onGreen = await pausedOn(`pr:${BE}#72`, "checks_green");
+    const onMerge = await pausedOn(`pr:${BE}#73`);
+    const ci = (
+      user: string,
+      pr: number,
+      status: string,
+      verdict: string,
+      at?: Date
+    ) =>
+      devFact(
+        user,
+        "ci.finished",
+        {
+          repo: BE,
+          sha: "c".repeat(40),
+          status,
+          pr,
+          workflow: "CI",
+          requiredChecks: { verdict },
+        },
+        at
+      );
+    // A red before the pause, another person's red, and a red on the merge
+    // hold's PR: nothing moves.
+    await ci("u1", 71, "failure", "red", new Date(Date.now() - DAY));
+    await ci("u2", 71, "failure", "red");
+    await ci("u1", 73, "failure", "red");
+    expect(
+      (await handleHoldResume({ devFact: `pr:synap-core/backend#71` })).resumed
+    ).toBe(0);
+
+    // The owner's red after the pause: the fact's job resumes it.
+    await ci("u1", 71, "failure", "red", new Date(Date.now() + 2_000));
+    expect(
+      (await handleHoldResume({ devFact: `pr:synap-core/backend#71` })).resumed
+    ).toBe(1);
+    expect(await statusOf("focus_sessions", onRed)).toBe("active");
+
+    // The hourly sweep finds the green one; the merge hold still waits.
+    await ci("u1", 72, "success", "green", new Date(Date.now() + 3_000));
+    await ci("u1", 73, "success", "green", new Date(Date.now() + 3_000));
+    expect((await handleHoldResume({}, new Date())).resumed).toBe(1);
+    expect(await statusOf("focus_sessions", onGreen)).toBe("active");
+    expect(await statusOf("focus_sessions", onMerge)).toBe("paused");
+  });
 });
 
 // Plan 07f8a997 "Agents wait on anything", W1 part C: an agent asks, pauses

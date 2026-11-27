@@ -384,6 +384,16 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     expect(pauseOn({ moves: "job:dev-feed-h", to: "failed" })).toMatchObject({
       ok: true,
     });
+    for (const to of ["checks_failed", "checks_green"]) {
+      expect(pauseOn({ moves: "pr:Synap-core/backend#47", to })).toMatchObject({
+        ok: true,
+      });
+      // A job's verdict is `passed` / `failed`: the PR's checks words are not its.
+      expect(pauseOn({ moves: "job:dev-feed-h", to })).toMatchObject({
+        ok: false,
+        code: "HOLD_INVALID",
+      });
+    }
     expect(
       pauseOn({ moves: "pr:Synap-core/backend#47", to: "done" })
     ).toMatchObject({
