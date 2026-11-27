@@ -197,6 +197,7 @@ export {
   frameReplyTo,
   isFrameHello,
   postToFrame,
+  resetFrameChannel,
   type CellBridgePort,
   type FrameHelloEventLike,
 } from "./frame-channel.js";

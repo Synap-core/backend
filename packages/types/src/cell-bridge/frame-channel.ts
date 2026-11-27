@@ -142,6 +142,18 @@ export function postToFrame(frame: CellBridgeTarget, message: unknown): void {
   else enqueue(state, message);
 }
 
+/**
+ * A new document is about to replace the one in `frame` (the host set a new
+ * `srcdoc` on the same iframe): forget the old document's port and what was
+ * waiting for it, so the host's next pushes wait for the NEW document's hello
+ * instead of going down a port that dies with the old one. Call it in the
+ * same task as the DOM change (a layout effect), before the new document can
+ * say hello. A new iframe element has a new window and needs no reset.
+ */
+export function resetFrameChannel(frame: CellBridgeTarget): void {
+  channels.delete(frame);
+}
+
 /** How many times the frame says hello before it gives up on a host. */
 const HELLO_TRIES = 20;
 /** Between two hellos while no host answered. */

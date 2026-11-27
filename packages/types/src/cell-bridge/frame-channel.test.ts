@@ -12,6 +12,7 @@ import {
   createCellBridgeHost,
   createCellFrameHost,
   postToFrame,
+  resetFrameChannel,
   type CellBridgeEventLike,
   type CellBridgeTarget,
 } from "./index.js";
@@ -237,6 +238,28 @@ describe("postToFrame: a host's own pushes", () => {
       n: "now",
     });
     expect(iframe.document.onWindow).toEqual([]);
+  });
+});
+
+describe("resetFrameChannel: a new srcdoc in the same iframe", () => {
+  it("the next pushes wait for the new document's hello, never take the old document's port", () => {
+    const iframe = fakeIframe();
+    const host = createCellBridgeHost({
+      frameWindow: () => iframe.contentWindow,
+      read: async () => null,
+    });
+    const old = iframe.document;
+    void host(hello(iframe));
+    // The host sets a new srcdoc: the old document is on its way out.
+    resetFrameChannel(iframe.contentWindow);
+    const next = fakeDocument("next");
+    iframe.navigate(next);
+    // Its load can come before its hello: the init waits.
+    postToFrame(iframe.contentWindow, { type: "synap:init" });
+    expect(answers(old.onPort)).toEqual([]);
+    void host(hello(iframe));
+    expect(answers(next.onPort)).toEqual([{ type: "synap:init" }]);
+    expect(next.onWindow).toEqual([]);
   });
 });
 
