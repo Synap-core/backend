@@ -114,10 +114,15 @@ refused before anything runs, and the refusal is recorded.
 | pod      | `synap update --release <main-<sha7>\|vX.Y.Z\|fast\|stable>`: CI-built, signed, by digest |
 | dev host | `synap update --from-source`: tagged `synap-dev/*:<sha>`, never pushed                    |
 
-To get a change onto a pod, land it on `main`. The nightly publishes the newest
-all-green main commit as `main-<sha7>` (channel fast); "Run workflow" on
-`docker-publish.yml` publishes main's head at once (after the `production`
-approval). Then, on the pod: `synap update --release main-<sha7>`. The release
+To get a change onto a pod, land it on `main`. CI publishes every main commit
+whose post-merge run is all green as `main-<sha7>` (channel fast), about 30 min
+after the merge; the nightly publishes the newest such commit if none did, and
+"Run workflow" on `docker-publish.yml` publishes main's head (after the
+`production` approval). Then, on the pod: `synap update --release main-<sha7>`.
+`synap update --from-source` of a clean checkout whose commit has such a
+release applies that release instead of building (pull first,
+`SYNAP_SOURCE_PULL_FIRST=0` to always build); without one it says so and
+builds, each image bounded by `SYNAP_BUILD_TIMEOUT_SEC` (default 2400). The release
 manifest is signed by CI's own identity (keyless cosign), and the pod refuses
 an unsigned one, so an image built on the devbox and pushed to GHCR by hand
 cannot become a release a pod accepts. Build on the devbox to test a change;

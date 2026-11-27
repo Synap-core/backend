@@ -507,6 +507,46 @@ process.stdout.write(JSON.stringify(wrap(list[Math.min(i, list.length - 1)])));
     }
   });
 
+  // Decision ce5fb987: every main commit whose post-merge run is all green gets
+  // its own fast release (docker-publish.yml, workflow_run), so a pod pulls the
+  // commit it deploys instead of building it. A red or still-running run is
+  // not a failure of that workflow: no build, exit 0.
+  it("per commit (nightly-fast-pick.sh --commit) builds an all-green commit and skips a red one without failing", () => {
+    const green = "1".repeat(40);
+    const red = "2".repeat(40);
+    const runs = {
+      [green]: [[wireRun(1, "completed")]],
+      [red]: [[wireRun(2, "completed")]],
+    };
+    const suites = {
+      1: [wireGreen()],
+      2: [
+        REQUIRED_CHECKS.map((n: string) =>
+          wireCheck(n, n === "API e2e" ? "failure" : "success")
+        ),
+      ],
+    };
+    const pick = (sha: string) =>
+      gh(runs, suites, [], {
+        command: [
+          "bash",
+          join(REPO, "deploy/release/nightly-fast-pick.sh"),
+          "--commit",
+          sha,
+          "Synap-core/backend",
+        ],
+      });
+    const g = pick(green);
+    expect(g.status).toBe(0);
+    expect(g.out).toContain(`sha=${green}`);
+    expect(g.out).toContain("build=true");
+    const r = pick(red);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(`sha=${red}`);
+    expect(r.out).toContain("build=false");
+    expect(r.out).not.toContain("build=true");
+  });
+
   it("refuses a short sha (the reads would name the wrong commit)", () => {
     const r = spawnSync(
       process.execPath,
