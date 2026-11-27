@@ -9,7 +9,11 @@
  *
  *  - `pr:`   the PR's newest fact is `merged` (default) or `closed` (`to`). A
  *            merge the producer said went into ANOTHER branch than the
- *            default (a stacked PR) is not the merge a waiter means.
+ *            default (a stacked PR) is not the merge a waiter means. With
+ *            `to: checks_failed | checks_green`: the newest CI `ci.finished`
+ *            of the PR that ended after the pause began, not for a draft,
+ *            carries the producer's required-checks verdict `red` | `green`
+ *            (`pending` / `no_ci` / none: not yet).
  *  - `main:` the newest `dev.repo_snapshot` of the repo OBSERVED after the
  *            pause began says `health: ok`. An older one says nothing: main
  *            may have turned red since.
@@ -28,11 +32,14 @@ import {
   type HoldDevRef,
 } from "../lifecycle/hold.js";
 import {
+  ciRunCountsAsChecks,
   ciVerdictOf,
   DEV_LOOP_EVENT_TYPES,
   devboxJobOf,
   devboxJobWorkflow,
   pullRequestUrl,
+  requiredChecksSchema,
+  samePullRequest,
 } from "./dev-loop.js";
 import { record } from "./fact-record.js";
 import { foldPullRequestState, type DevLoopEventRowLike } from "./pr-state.js";
@@ -64,7 +71,59 @@ export function holdDevFactOf(type: string, data: unknown): string | null {
   const job =
     type === DEV_LOOP_EVENT_TYPES.ciFinished ? devboxJobOf(d.workflow) : null;
   if (job) return holdDevMovesRef({ kind: "job", name: job });
+  // A PR's CI run ended: a hold on its checks verdict may be met.
+  if (
+    type === DEV_LOOP_EVENT_TYPES.ciFinished &&
+    repo &&
+    typeof d.pr === "number" &&
+    ciRunCountsAsChecks(d.workflow)
+  ) {
+    return holdDevMovesRef({ kind: "pr", repo, number: d.pr });
+  }
   return null;
+}
+
+/** The `until.to` of a `pr:` hold that waits on the PR's checks, with the verdict each means. */
+const PR_CHECKS_VERDICT = {
+  checks_failed: "red",
+  checks_green: "green",
+} as const;
+
+/** Does a `pr:` hold with this `until.to` wait on the PR's checks (its CI runs), not its merge or close? */
+export function holdWaitsOnPrChecks(
+  to: string | null | undefined
+): to is keyof typeof PR_CHECKS_VERDICT {
+  return to === "checks_failed" || to === "checks_green";
+}
+
+/**
+ * The required-checks verdict of the newest CI run of `ref` that ended after
+ * `sinceMs`: a run of the PR (`pr`), of CI (not a devbox job, not another
+ * workflow: `ciRunCountsAsChecks`), not for a draft (red by design), and with
+ * a verdict (`ciVerdictOf`: a cancelled or skipped run settles nothing). A
+ * rerun ends later, so its verdict wins. Null when that run carries none.
+ */
+function prChecksVerdict(
+  ref: { repo: string; number: number },
+  sinceMs: number,
+  rows: readonly DevLoopEventRowLike[]
+): string | null {
+  const run = newest(
+    rows,
+    (row, data) =>
+      row.type === DEV_LOOP_EVENT_TYPES.ciFinished &&
+      typeof data.repo === "string" &&
+      samePullRequest(ref, { repo: data.repo, number: ref.number }) &&
+      data.pr === ref.number &&
+      ciRunCountsAsChecks(data.workflow) &&
+      devboxJobOf(data.workflow) === null &&
+      data.draft !== true &&
+      ciVerdictOf(data.status as string) !== undefined &&
+      new Date(row.timestamp).getTime() > sinceMs,
+    (row) => new Date(row.timestamp).getTime()
+  );
+  const checks = requiredChecksSchema.safeParse(run?.data.requiredChecks);
+  return checks.success ? checks.data.verdict : null;
 }
 
 /**
@@ -119,6 +178,11 @@ export function holdDevRefMet(
   const sinceMs = Date.parse(since);
   switch (ref.kind) {
     case "pr": {
+      if (holdWaitsOnPrChecks(until.to)) {
+        return (
+          prChecksVerdict(ref, sinceMs, rows) === PR_CHECKS_VERDICT[until.to]
+        );
+      }
       const facts = foldPullRequestState(ref, rows);
       if (!facts) return false;
       const want = until.to ?? "merged";
