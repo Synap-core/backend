@@ -164,7 +164,7 @@ export interface SessionListQuery {
    * the agent doors' default population when the caller names no `kind`
    * (decision 90897bca, 27 Nov 2026) — the MCP and Hub list and work-graph
    * doors. A kind named explicitly (`all` included) keeps them. Rendered as
-   * the predicate of the partial index 0460, so the read skips those rows.
+   * the predicate of the partial index 0462, so the read skips those rows.
    */
   withoutAutomationSessions?: boolean;
 }

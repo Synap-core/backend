@@ -1,4 +1,4 @@
--- 0460: a person's sessions newest first, without the automation rows.
+-- 0462: a person's sessions newest first, without the automation rows.
 --
 -- Decision 90897bca (founder, 27 Nov 2026): agents reading the latest
 -- sessions get no automation sessions until they ask for them. The agent

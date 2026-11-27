@@ -111,7 +111,7 @@ export function startedByAutomation(metadata: unknown): boolean {
  *
  * Constants are RAW, never bind parameters, and the text is the predicate of
  * the partial index `idx_focus_sessions_user_started_not_automation`
- * (migration 0460): the planner uses a partial index only when the query's
+ * (migration 0462): the planner uses a partial index only when the query's
  * WHERE carries the index predicate itself, and a `$1` in place of
  * `'automation'` is not provably the same expression under a generic plan.
  * Change both together (`session-kind.not-automation-index.pglite.test.ts`).

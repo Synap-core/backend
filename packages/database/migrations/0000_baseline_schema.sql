@@ -5644,7 +5644,7 @@ CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_idx"
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_id
   ON focus_sessions ((metadata->>'automationId'))
   WHERE (metadata->>'automationId') IS NOT NULL;
--- 0460: a person's sessions newest first, without the automation rows (the
+-- 0462: a person's sessions newest first, without the automation rows (the
 -- agent doors' default population, `notAutomationSessionWhere`).
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_user_started_not_automation"
   ON "focus_sessions" ("user_id", "started_at" DESC, "id" DESC)

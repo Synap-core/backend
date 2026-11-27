@@ -1,6 +1,6 @@
 /**
  * `notAutomationSessionWhere` (the agent doors' default population, decision
- * 90897bca) and the partial index 0460 that serves it, on a real Postgres
+ * 90897bca) and the partial index 0462 that serves it, on a real Postgres
  * planner (PGlite).
  *
  * 1. THE PREDICATE, executed against the TypeScript derivation: over every
@@ -12,7 +12,7 @@
  *    carries its predicate. The query here is the clause the doors render
  *    (`PgDialect` over the real function), so this proves the rendered text
  *    and the migration's text are the same expression to the planner: with
- *    0460 the newest page is one descent of the index (no Sort, no automation
+ *    0462 the newest page is one descent of the index (no Sort, no automation
  *    row read); before it, every one of the person's rows is read and sorted.
  *    The predicate renders with NO bind parameter (only the user id is one): a
  *    `$1` for `'automation'` is planned as a constant here (a custom plan) but
@@ -43,10 +43,10 @@ import { pgliteTableDdl } from "../../__tests__/pglite-ddl.js";
 import { FIXTURES } from "./__tests__/session-kind.fixtures.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const M0460 = readFileSync(
+const M0462 = readFileSync(
   resolve(
     HERE,
-    "../../../../database/migrations/0460_focus_sessions_not_automation_index.sql"
+    "../../../../database/migrations/0462_focus_sessions_not_automation_index.sql"
   ),
   "utf8"
 );
@@ -97,7 +97,7 @@ const PERSON_ROWS = 200;
 
 beforeAll(async () => {
   await pg.exec(pgliteTableDdl(focusSessions as unknown as PgTable));
-  // The index every list read used before 0460.
+  // The index every list read used before 0462.
   await pg.exec(
     `CREATE INDEX idx_focus_sessions_user_id ON focus_sessions (user_id);`
   );
@@ -156,7 +156,7 @@ describe("notAutomationSessionWhere — the rows it keeps", () => {
   });
 });
 
-describe("migration 0460 — the default page through the partial index", () => {
+describe("migration 0462 — the default page through the partial index", () => {
   it("before: every row of the person is read and sorted", async () => {
     const before = await plan(BUSY);
     expect(before).not.toMatch(new RegExp(INDEX));
@@ -167,8 +167,8 @@ describe("migration 0460 — the default page through the partial index", () => 
   });
 
   it("after: one descent of the index, no automation row read; re-running is a no-op", async () => {
-    await pg.exec(M0460);
-    await pg.exec(M0460); // idempotent
+    await pg.exec(M0462);
+    await pg.exec(M0462); // idempotent
     await pg.exec("ANALYZE focus_sessions;");
     const after = await plan(BUSY);
     expect(after).toMatch(new RegExp(`Index (Only )?Scan using ${INDEX}`));
@@ -189,7 +189,7 @@ describe("migration 0460 — the default page through the partial index", () => 
     );
     expect(declared).toBeDefined();
     const where = dialect.sqlToQuery(declared!.config.where as SQL).sql;
-    const created = M0460.match(/\n\s+WHERE (.+);\s*$/)?.[1];
+    const created = M0462.match(/\n\s+WHERE (.+);\s*$/)?.[1];
     expect(created).toBeTruthy();
     expect(where.trim()).toBe(created!.trim());
   });

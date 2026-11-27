@@ -386,7 +386,7 @@ export const focusSessions = pgTable(
       .where(
         sql`one_live_per_subject AND status IN ('active', 'paused', 'forming', 'stale')`
       ),
-    // A person's sessions newest first without the automation rows (0460):
+    // A person's sessions newest first without the automation rows (0462):
     // the agent doors' default population (`notAutomationSessionWhere` in
     // services/focus-sessions/session-kind.ts renders this exact predicate).
     userStartedNotAutomationIdx: index(
