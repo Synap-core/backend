@@ -361,6 +361,7 @@ const CASCADE_STEP_RE =
 
 const ANSI_RE =
   // CSI sequences (colours, cursor) and OSC sequences (titles, links).
+  // eslint-disable-next-line no-control-regex -- escape sequences are what it removes
   /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 export function stripAnsi(text) {
   return String(text).replace(ANSI_RE, "");
@@ -372,6 +373,7 @@ export function stripAnsi(text) {
  * characters and the BOM. Log text is UNTRUSTED (anyone who can push a
  * branch writes it), so none of these leave GitHub.
  */
+// eslint-disable-next-line no-control-regex -- control characters are what it removes
 const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 const INVISIBLE_RE =
   /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
@@ -386,11 +388,14 @@ export function cleanLine(text) {
 
 /** A job or step name, safe to show: one line, whitespace collapsed, capped. */
 export function cleanName(text) {
-  return stripAnsi(text)
-    .replace(INVISIBLE_RE, "")
-    .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
-    .trim()
-    .slice(0, MAX_NAME);
+  return (
+    stripAnsi(text)
+      .replace(INVISIBLE_RE, "")
+      // eslint-disable-next-line no-control-regex -- control characters are what it collapses
+      .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
+      .trim()
+      .slice(0, MAX_NAME)
+  );
 }
 
 /**
