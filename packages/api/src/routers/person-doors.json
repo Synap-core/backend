@@ -79,7 +79,6 @@
     "propertyDefs.changeLifecycleOptions",
     "propertyDefs.delete",
     "propertyDefs.proposeRetire",
-    "proposals.approveSession",
     "proposals.submit",
     "proposals.withdraw",
     "relations.backfill",
