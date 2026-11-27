@@ -67,27 +67,67 @@ void _modelEntryCoverage;
  * including self-hosted ones. The guard against a hostile `baseUrl` is the
  * governance gate + the narrow `providers.write` scope at the door, NOT a
  * closed-set allowlist here.
+ *
+ * NO DEFAULTS HERE, on purpose. They used to live on this schema
+ * (`models: []`, `tags: []`, `metadata: {}`, `enabled: true`, `priority: 10`,
+ * `apiKeyEnvVar`), so a parse of an EDIT that did not send a field produced the
+ * default, and the update wrote it over the stored row: pod admin's provider
+ * form sends no `models`, so every edit of a provider wiped its model list.
+ * A field the caller did not send is now ABSENT after the parse: an update
+ * writes only what was sent ({@link providerPatch}), and only a NEW provider
+ * takes the defaults ({@link newProviderRow}).
  */
 export const ProviderUpsertSchema = z.object({
   providerId: z.string().min(1).max(64),
   name: z.string().min(1).max(128),
   baseUrl: z.string().url(),
-  apiKeyEnvVar: z.string().min(1).default("PROVIDER_API_KEY"),
+  apiKeyEnvVar: z.string().min(1).optional(),
   /** Plaintext API key — encrypted before storage, never returned. */
   apiKey: z.string().optional(),
-  enabled: z.boolean().default(true),
-  priority: z.number().int().min(0).default(10),
-  tags: z.array(z.string()).default([]),
-  models: z.array(ModelEntrySchema).default([]),
+  enabled: z.boolean().optional(),
+  priority: z.number().int().min(0).optional(),
+  tags: z.array(z.string()).optional(),
+  models: z.array(ModelEntrySchema).optional(),
   rateLimit: z
     .object({ rpm: z.number(), rpd: z.number().optional() })
     .optional(),
   extraBody: z.record(z.string(), z.unknown()).optional(),
   systemPromptPrefix: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type ProviderUpsertInput = z.infer<typeof ProviderUpsertSchema>;
+
+/** The row fields of an upsert (the plaintext key is handled apart). */
+export type ProviderFields = Omit<ProviderUpsertInput, "apiKey">;
+
+/**
+ * What an UPDATE of an existing provider writes: exactly the fields the caller
+ * sent. A field it did not send keeps its stored value (an edit that names no
+ * `models` keeps the provider's models). Shared by every writer of an existing
+ * row: the tRPC door, the Hub REST door and the approve-executor.
+ */
+export function providerPatch(fields: ProviderFields): Partial<ProviderFields> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined)
+  ) as Partial<ProviderFields>;
+}
+
+/** What a NEW provider is inserted with: what the caller sent, else the defaults. */
+export function newProviderRow(fields: ProviderFields) {
+  return {
+    ...providerPatch(fields),
+    providerId: fields.providerId,
+    name: fields.name,
+    baseUrl: fields.baseUrl,
+    apiKeyEnvVar: fields.apiKeyEnvVar ?? "PROVIDER_API_KEY",
+    enabled: fields.enabled ?? true,
+    priority: fields.priority ?? 10,
+    tags: fields.tags ?? [],
+    models: fields.models ?? [],
+    metadata: fields.metadata ?? {},
+  };
+}
 
 /**
  * What a governed provider write stores in `proposals.data`, and what the

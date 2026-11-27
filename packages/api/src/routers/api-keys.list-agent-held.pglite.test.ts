@@ -286,3 +286,32 @@ describe("apiKeys.adminListAll({ workspaceId }) — only keys confined to that s
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
+
+describe("apiKeys.adminListAll — what each key may touch", () => {
+  // Rules out: the Keys page marking "Active" a key that may touch nothing.
+  // Deny by default (P5): an active key with no live grant reaches nothing, and
+  // the Keys page reads adminListAll, which carried no grant before.
+  it("carries access + live grants: never granted, granted, every grant ended", async () => {
+    const NONE = randomUUID();
+    const LIVE = randomUUID();
+    const ENDED = randomUUID();
+    for (const id of [NONE, LIVE, ENDED]) await addKey(id, HUMAN, null);
+    const grant = (keyId: string, revoked: boolean) =>
+      h.client!.query(
+        `insert into grants (api_key_id, principal_user_id, on_behalf_of, permissions, created_by, revoked_at)
+         values ($1, $2, $2, $3, $2, $4)`,
+        [keyId, HUMAN, ["entity.read"], revoked ? new Date() : null]
+      );
+    await grant(LIVE, false);
+    await grant(ENDED, true);
+
+    const keys = await caller("pod-admin-1").adminListAll();
+    const of = (id: string) => keys.find((k) => k.id === id)!;
+    expect(of(NONE)).toMatchObject({ access: "ungranted", grants: [] });
+    expect(of(LIVE).access).toBe("granted");
+    expect(of(LIVE).grants.map((g) => g.permissions)).toEqual([
+      ["entity.read"],
+    ]);
+    expect(of(ENDED)).toMatchObject({ access: "ended", grants: [] });
+  });
+});

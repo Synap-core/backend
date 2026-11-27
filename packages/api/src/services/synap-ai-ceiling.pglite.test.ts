@@ -45,6 +45,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   return mocked;
 });
 
+// `synapAi.status` is called through its router below: the tRPC middlewares that write audit rows are not this file's.
+vi.mock("../middleware/read-only-guard.js", async () => {
+  const { t } = await import("../init-trpc.js");
+  return { readOnlyGuardMiddleware: t.middleware(({ next }) => next()) };
+});
+vi.mock("../middleware/audit-log.js", async () => {
+  const { t } = await import("../init-trpc.js");
+  return { auditLogMiddleware: t.middleware(({ next }) => next()) };
+});
+
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
@@ -57,7 +67,10 @@ import {
   SYNAP_AI_CLIENT_ID,
   SYNAP_AI_KEY_INSTANCE,
   synapAiGate,
+  synapAiStatus,
 } from "./synap-ai-ceiling.js";
+import { synapAiRouter } from "../routers/synap-ai.js";
+import type { Context } from "../types/context.js";
 
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
@@ -450,6 +463,111 @@ describe("synapAiGate: may an app's chat turn run for this person", () => {
     ]);
     const r = await synapAiGate(OPERATOR, POD);
     expect(r).toMatchObject({ open: false, body: { code: "SYNAP_AI_PAUSED" } });
+  });
+});
+
+describe("synapAiStatus: where the person's Synap AI stands (synapAi.status)", () => {
+  it("no grant: not connected, not paused, no grants; the key the person will set it on exists", async () => {
+    await reset();
+    const s = await synapAiStatus(OPERATOR);
+    expect(s).toMatchObject({
+      connected: false,
+      paused: false,
+      agentUserId: SYNAP_AI,
+      grants: [],
+    });
+    const held = (await q(
+      `select id from api_keys where user_id = $1 and instance_id = $2 and is_active`,
+      [SYNAP_AI, SYNAP_AI_KEY_INSTANCE]
+    )) as { rows: { id: string }[] };
+    expect(held.rows.map((r) => r.id)).toEqual([s.keyId]);
+  });
+
+  it("one live grant: connected, and the grant arrives as it was set", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key, {
+      permissions: ["entity.read", "document.read"],
+      workspaceIds: [WS_A],
+    });
+    expect(await synapAiStatus(OPERATOR)).toEqual({
+      connected: true,
+      paused: false,
+      keyId: key,
+      agentUserId: SYNAP_AI,
+      grants: [
+        {
+          permissions: ["entity.read", "document.read"],
+          workspaceIds: [WS_A],
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+    });
+  });
+
+  it("paused: says paused, and still says what it may do (the grant is kept, only the pause stops it)", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key);
+    await q(`update users set agent_paused_at = now() where id = $1`, [
+      SYNAP_AI,
+    ]);
+    const s = await synapAiStatus(OPERATOR);
+    expect(s).toMatchObject({ connected: true, paused: true, keyId: key });
+    expect(s.grants).toHaveLength(1);
+  });
+
+  it("paused with no grant: paused, not connected", async () => {
+    await reset();
+    await q(`update users set agent_paused_at = now() where id = $1`, [
+      SYNAP_AI,
+    ]);
+    expect(await synapAiStatus(OPERATOR)).toMatchObject({
+      connected: false,
+      paused: true,
+      grants: [],
+    });
+  });
+
+  it("a failed read throws: never a 'not connected' nobody measured", async () => {
+    await reset();
+    const real = holder.db;
+    holder.db = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("database unavailable");
+        },
+      }
+    );
+    try {
+      await expect(synapAiStatus(OPERATOR)).rejects.toThrow(
+        "database unavailable"
+      );
+    } finally {
+      holder.db = real;
+    }
+  });
+
+  it("synapAi.status answers for the signed-in person only (person-scoped)", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key);
+    const status = (userId: string) =>
+      synapAiRouter
+        .createCaller({ authenticated: true, userId } as unknown as Context)
+        .status();
+    expect(await status(OPERATOR)).toMatchObject({
+      connected: true,
+      agentUserId: SYNAP_AI,
+    });
+    // Another person reads THEIR Synap AI (not connected), never the operator's grants.
+    expect(await status(STRANGER)).toMatchObject({
+      connected: false,
+      agentUserId: STRANGERS_AI,
+      grants: [],
+    });
   });
 });
 

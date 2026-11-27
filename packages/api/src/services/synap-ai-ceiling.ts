@@ -69,6 +69,19 @@ export async function resolveSynapAiCeiling(
     return { status: "not-applicable" };
   if (agent.pausedAt) return { status: "refused", reason: "paused" };
 
+  const scopes = await liveSynapAiScopes(agentUserId);
+  if (scopes.length === 0) return { status: "none" };
+  return { status: "ok", grant: { scopes, clientId: SYNAP_AI_CLIENT_ID } };
+}
+
+/**
+ * The live grants on the agent's pod-held key (service / instance `synap-ai`, active, not revoked, not expired), each
+ * with at least one permission: what the person set on the Keys page. The ONE read of them, for the ceiling and the
+ * status alike. A failed read throws.
+ */
+async function liveSynapAiScopes(
+  agentUserId: string
+): Promise<KeyGrant["scopes"]> {
   const now = new Date();
   const rows = await db
     .select({
@@ -92,20 +105,14 @@ export async function resolveSynapAiCeiling(
         or(isNull(grantRows.expiresAt), gt(grantRows.expiresAt, now))
       )
     );
-  const scopes = rows.filter((r) => r.permissions.length > 0);
-  if (scopes.length === 0) return { status: "none" };
-  return {
-    status: "ok",
-    grant: {
-      scopes: scopes.map((r) => ({
-        permissions: [...r.permissions],
-        workspaceIds: r.workspaceIds,
-        projectIds: r.projectIds,
-        entityIds: r.entityIds,
-      })),
-      clientId: SYNAP_AI_CLIENT_ID,
-    },
-  };
+  return rows
+    .filter((r) => r.permissions.length > 0)
+    .map((r) => ({
+      permissions: [...r.permissions],
+      workspaceIds: r.workspaceIds,
+      projectIds: r.projectIds,
+      entityIds: r.entityIds,
+    }));
 }
 
 /** What the agent AND the app both permit: one scope per overlap, never wider than either. No overlap = may touch nothing. */
@@ -210,6 +217,46 @@ export async function ensureSynapAiKey(
     return { agentUserId, keyId: winner.id };
   }
   return { agentUserId, keyId: key.id };
+}
+
+/** Where a person's Synap AI stands, as their console shows it (`synapAi.status`). */
+export interface SynapAiStatus {
+  /** It has at least one live grant: the person set what it may read and do. */
+  connected: boolean;
+  /** The person paused it: it does nothing for anyone, whatever its grants. */
+  paused: boolean;
+  /** The pod-held key its grants are set on (the Keys page row). */
+  keyId: string;
+  /** The person's personal agent, which IS Synap AI. */
+  agentUserId: string;
+  /** Its live grants, one scope each (empty when not connected). */
+  grants: KeyGrant["scopes"];
+}
+
+/**
+ * The person's Synap AI as it stands: connected (a live grant), paused, and the grants themselves. Built on the same two
+ * doors the chat gate uses (`ensureSynapAiKey`, then `resolveSynapAiCeiling`), so the console and the gate cannot disagree.
+ * Makes the key on first need, like the gate. Every failed read throws: never a "not connected" that was not measured.
+ */
+export async function synapAiStatus(
+  operatorUserId: string
+): Promise<SynapAiStatus> {
+  const { agentUserId, keyId } = await ensureSynapAiKey(operatorUserId);
+  const ceiling = await resolveSynapAiCeiling(operatorUserId, agentUserId);
+  if (ceiling.status === "not-applicable")
+    // `ensureSynapAiKey` just named this agent as the person's own: not finding it so is a broken pod, not "no AI".
+    throw new Error(
+      `Synap AI status: agent ${agentUserId} is not ${operatorUserId}'s personal agent`
+    );
+  const paused = ceiling.status === "refused";
+  // A paused agent keeps its grants (the ceiling stops at the pause); read them so the page still says what it may do.
+  const grants =
+    ceiling.status === "ok"
+      ? ceiling.grant.scopes
+      : paused
+        ? await liveSynapAiScopes(agentUserId)
+        : [];
+  return { connected: grants.length > 0, paused, keyId, agentUserId, grants };
 }
 
 export type SynapAiGate =

@@ -14,6 +14,7 @@ import {
   type UnifiedKey,
   keysOfHolderHref,
 } from "./key-model";
+import { en, fr } from "./copy";
 
 const key = (over: Partial<UnifiedKey>): UnifiedKey => ({
   id: "k1",
@@ -146,6 +147,68 @@ describe("keyStatus", () => {
     expect(
       keyStatus({ isActive: true, expiresAt: "2027-01-01T00:00:00Z" })
     ).toEqual({ kind: "healthy", label: "Active" });
+  });
+
+  // Deny by default (P5): an active key with no live grant may touch nothing.
+  // Rules out: "Active" read off isActive + expiry alone (the Synap AI key
+  // before the person sets its access said "Active").
+  it.each(["ungranted", "ended"] as const)(
+    "an active key whose access is %s says No access, a warning",
+    (access) => {
+      expect(keyStatus({ isActive: true, access })).toEqual({
+        kind: "stale",
+        label: en["status.noAccess"],
+      });
+      // It outranks "expiring soon": the key does nothing already.
+      expect(
+        keyStatus({ isActive: true, expiresAt: "2026-10-15T00:00:00Z", access })
+      ).toEqual({ kind: "stale", label: "No access" });
+    }
+  );
+
+  it("a granted key stays Active; revoked and expired still win over no access", () => {
+    expect(keyStatus({ isActive: true, access: "granted" })).toEqual({
+      kind: "healthy",
+      label: "Active",
+    });
+    expect(keyStatus({ isActive: false, access: "ungranted" }).label).toBe(
+      "Revoked"
+    );
+    expect(
+      keyStatus({
+        isActive: true,
+        expiresAt: "2026-10-11T00:00:00Z",
+        access: "ungranted",
+      }).label
+    ).toBe("Expired");
+  });
+
+  it("No access has its copy in both catalogs", () => {
+    expect(en["status.noAccess"]).toBe("No access");
+    expect(fr["status.noAccess"]).toBe("Aucun accès");
+  });
+});
+
+describe("queryKeys status filter: expiry only", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-12T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("a key with no access that expires soon is still in the expiring filter", () => {
+    const soon = key({
+      id: "soon",
+      expiresAt: "2026-10-15T00:00:00Z",
+      access: "ungranted",
+    });
+    expect(
+      queryKeys(
+        [soon],
+        { search: "", type: null, status: "expiring" },
+        "recent"
+      ).map((k) => k.id)
+    ).toEqual(["soon"]);
   });
 });
 

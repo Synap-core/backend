@@ -160,24 +160,6 @@ async function closeRunSessionViaDoor(
   }
 }
 
-/** Default (proprietary) Synap Intelligence service — always available when no custom service is configured. */
-const DEFAULT_INTELLIGENCE_SERVICE = {
-  id: "default",
-  serviceId: "default",
-  name: "Synap Intelligence",
-  capabilities: [
-    "chat",
-    "analysis",
-    "commands",
-    "proposals",
-    "threads",
-  ] as string[],
-  pricing: "free" as const,
-  version: "1.0",
-  webhookUrl: null as string | null,
-  lastHealthCheck: null as Date | null,
-};
-
 // ─── Health check helper ──────────────────────────────────────────────────────
 
 async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
@@ -817,10 +799,10 @@ export const capabilitiesRouter = router({
       },
     });
 
-    const hasDefault = dbServices.some((s) => s.serviceId === "default");
-    const services = hasDefault
-      ? dbServices
-      : [DEFAULT_INTELLIGENCE_SERVICE, ...dbServices];
+    // The registry as it is. A synthetic "Synap Intelligence" row used to be
+    // added here whenever no row had serviceId 'default', with no health
+    // behind it, so a pod with no intelligence service registered showed one
+    // anyway (and an empty registry could never be seen). Absent is absent.
 
     return {
       core: {
@@ -836,7 +818,7 @@ export const capabilitiesRouter = router({
         ],
       },
       plugins,
-      intelligenceServices: services.map((s) => ({
+      intelligenceServices: dbServices.map((s) => ({
         id: s.id,
         serviceId: s.serviceId,
         name: s.name,
@@ -845,8 +827,7 @@ export const capabilitiesRouter = router({
         version: s.version,
         webhookUrl: s.webhookUrl ?? null,
         lastHealthCheck: s.lastHealthCheck ?? null,
-        lastHealthStatus:
-          ("lastHealthStatus" in s ? s.lastHealthStatus : null) ?? null,
+        lastHealthStatus: s.lastHealthStatus ?? null,
       })),
     };
   }),
@@ -1923,11 +1904,9 @@ export const capabilitiesRouter = router({
   checkHealth: protectedProcedure
     .input(z.object({ serviceId: z.string() }))
     .mutation(async ({ input }) => {
-      // Built-in default service: cannot be pinged (same process)
-      if (input.serviceId === "default") {
-        return { serviceId: "default", isHealthy: true, checkedAt: new Date() };
-      }
-
+      // No short-circuit for 'default': it used to answer healthy without
+      // pinging anything. A 'default' row is pinged like any other; with no
+      // row there is nothing to ping, and that is not healthy.
       const svc = await db.query.intelligenceServices.findFirst({
         where: eq(intelligenceServices.serviceId, input.serviceId),
         columns: { id: true, webhookUrl: true },
@@ -2021,12 +2000,13 @@ export const capabilitiesRouter = router({
         where: eq(intelligenceServices.status, "active"),
       });
 
-      const hasDefaultCapability =
-        DEFAULT_INTELLIGENCE_SERVICE.capabilities.includes(input.capability);
-      const hasDbCapability = dbServices.some((s) =>
+      // Only a registered, active service makes a capability available (the
+      // synthetic default service that answered yes for chat, analysis,
+      // commands, proposals and threads on any pod is gone).
+      const available = dbServices.some((s) =>
         (s.capabilities as string[]).includes(input.capability)
       );
 
-      return { available: hasDefaultCapability || hasDbCapability };
+      return { available };
     }),
 });
