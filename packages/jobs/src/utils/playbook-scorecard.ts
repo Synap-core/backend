@@ -348,6 +348,65 @@ export async function loadRunsUsedParts(
 }
 
 /**
+ * Slack under the earliest `created_at` for the close-event time bound.
+ * `focus_sessions.created_at` is stamped by the DATABASE clock (`defaultNow()`)
+ * and the close event's `events.timestamp` by the API's (`logEvent`:
+ * `new Date()`), so the two can skew; a day absorbs any sane skew and costs at
+ * most one more weekly chunk.
+ */
+const CLOSE_EVENT_BOUND_SLACK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many close events each session emitted: ONE grouped read of `events`,
+ * TIME-BOUNDED. `events` is a TimescaleDB hypertable (weekly chunks, most
+ * compressed); a read with no `timestamp` bound opens every chunk — the
+ * correlated count this replaced planned in ~110 ms per call on a live pod,
+ * on the hot `synap_get_session` precedents read. The bound makes the planner
+ * exclude the chunks older than the sessions.
+ *
+ * WHY THE BOUND IS SAFE: a session's close event cannot precede its creation.
+ * The one close door (`complete-session.ts`) writes it through `logEvent`
+ * with `timestamp: new Date()` at close time, never backdated, and nothing
+ * rewrites `focus_sessions.created_at` after insert. A peer's sync replay
+ * carries both the session's `createdAt` and the event's `timestamp` from the
+ * origin pod, so they stay ordered. Not covered: a replayed session row
+ * WITHOUT `createdAt`, which the sync door stamps with the local now.
+ *
+ * A session with no close event maps to no entry (the caller reads 0). THROWS
+ * on a failed read.
+ */
+async function countCloseEvents(
+  database: typeof Db,
+  sessions: ReadonlyArray<{ id: string; createdAt: Date | string }>
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (sessions.length === 0) return out;
+  const earliest = Math.min(
+    ...sessions.map((s) => new Date(s.createdAt).getTime())
+  );
+  const since = new Date(earliest - CLOSE_EVENT_BOUND_SLACK_MS);
+  const rows = await database
+    .select({
+      subjectId: events.subjectId,
+      n: drizzleSql<number>`count(*)::int`,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.type, FOCUS_SESSION_CLOSED_EVENT_TYPE),
+        inArray(
+          events.subjectId,
+          sessions.map((s) => s.id)
+        ),
+        drizzleSql`${events.timestamp} >= ${since.toISOString()}`
+      )
+    )
+    .groupBy(events.subjectId);
+  for (const r of rows) out.set(r.subjectId, Number(r.n));
+  return out;
+}
+
+/**
  * The rows the projection reads: every session of `playbookId` owned by
  * `userId` (optionally only those closed after `closedAfter`), with its close-
  * event count, and every evaluation row of those sessions.
@@ -382,14 +441,8 @@ export async function loadPlaybookScorecardRows(
       status: focusSessions.status,
       criteria: focusSessions.criteria,
       expectedOutputs: focusSessions.expectedOutputs,
-      // Columns QUALIFIED by hand: inside a correlated subquery drizzle
-      // renders `${focusSessions.id}` as a bare "id", which binds to
-      // events.id and silently counts nothing.
-      closeEvents: drizzleSql<number>`(
-        SELECT count(*)::int FROM ${events} AS ev
-        WHERE ev.type = ${FOCUS_SESSION_CLOSED_EVENT_TYPE}
-          AND ev.subject_id = "focus_sessions"."id"::text
-      )`,
+      // The lower time bound of the close-event read below.
+      createdAt: focusSessions.createdAt,
       // The follow receipt the attach door stamps (`follow-playbook.ts`).
       // PRESENCE of the marker, not its shape: `#>>` yields a text value for a
       // JSON value of any type, and a row stamped by any future follow door
@@ -402,10 +455,11 @@ export async function loadPlaybookScorecardRows(
     .where(where)
     .orderBy(drizzleSql`${focusSessions.closedAt} desc nulls last`)
     .limit(params.limit ?? Number.MAX_SAFE_INTEGER);
-  const sessions = rows.map((r) => ({
+  const closeEvents = await countCloseEvents(database, rows);
+  const sessions = rows.map(({ createdAt: _createdAt, ...r }) => ({
     ...r,
     status: String(r.status),
-    closeEvents: Number(r.closeEvents ?? 0),
+    closeEvents: closeEvents.get(r.id) ?? 0,
     attached: r.followedVia != null,
   }));
   if (sessions.length === 0) return { sessions, evaluations: [] };
