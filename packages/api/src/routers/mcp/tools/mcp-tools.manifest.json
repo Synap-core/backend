@@ -2958,7 +2958,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus, once a day per agent (your next due-soon ask that day is a normal push, counted against the person's daily push budget); any other ask is a normal push. An answerBy already in the past is refused. `dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+      "description": "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus, once a day per agent (your next due-soon ask that day is a normal push, counted against the person's daily push budget); any other ask is a normal push. An answerBy already in the past is refused. `dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. Then read their answer with `synap_get_session` on the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3503,7 +3503,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "What happened to a goal, a session or a pull request, newest first — read-only. Name exactly ONE: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, its status moves with their `hold`, the dev facts of its PRs and devbox jobs: pr_opened / pr_merged / pr_closed, checks_finished; its decisions and asks; its chain: stage_moved, child_started, runner_seen, room_post (one line, never the body: open the room at refs.messageId)) or `pr` (`owner/name#n` or its url: its PR facts and CI runs). Each event: `id`, `kind`, `at` (when it HAPPENED), `recordedAt` only when the pod recorded it a second or more later (a backdated move, a late webhook), `actor` (named by the pod) and `refs` (doors: sessionId, proposalId, url, messageId, channelId, runnerId). `truncated` = older events exist. For what is new since your last look, wait on the session's changes instead (synap_wait_for_answer `events`).",
+      "description": "What happened to a goal, a session or a pull request, newest first — read-only. Name exactly ONE: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, its status moves with their `hold`, the dev facts of its PRs and devbox jobs: pr_opened / pr_merged / pr_closed, checks_finished; its decisions and asks; its chain: stage_moved, child_started, runner_seen, room_post (one line, never the body: open the room at refs.messageId)) or `pr` (`owner/name#n` or its url: its PR facts and CI runs). Each event: `id`, `kind`, `at` (when it HAPPENED), `recordedAt` only when the pod recorded it a second or more later (a backdated move, a late webhook), `actor` (named by the pod) and `refs` (doors: sessionId, proposalId, url, messageId, channelId, runnerId). `truncated` = older events exist.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -7966,7 +7966,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Replace a whiteboard's whole saved content with a tldraw store. Governed. To add, move or remove shapes use synap_place_on_board. To rename a view or change its config use synap_update_view.",
+      "description": "Replace a whiteboard's whole saved content with a tldraw store. Governed. To rename a view or change its config use synap_update_view.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -8075,7 +8075,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_place_on_board.",
+      "description": "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -9910,7 +9910,81 @@
       },
       "description": "Old name of synap_start_session with launch: true, kept so existing clients keep working: its inputs are synap_start_session's (playbookId = templateId, name = playbookName, subjectId = subjectEntityId), same answer. Call synap_start_session.",
       "inputSchema": {
-        "type": "object"
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
+            "type": "string"
+          },
+          "playbookId": {
+            "description": "Optional playbook UUID it follows from the start (omitted: bound on facts, see the description; null skips the suggestions). With launch: the playbook to run.",
+            "type": ["string", "null"]
+          },
+          "playbookName": {
+            "description": "With launch, instead of templateId: the playbook's unique name.",
+            "type": "string"
+          },
+          "name": {
+            "description": "With launch, instead of templateId: the playbook's unique name.",
+            "type": "string"
+          },
+          "params": {
+            "description": "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused.",
+            "type": "object"
+          },
+          "subjectId": {
+            "description": "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here.",
+            "type": "string"
+          },
+          "agentIds": {
+            "description": "Optional agent ids to hand this session to (find them, and the computer each runs on, with synap_list_agents). Naming another agent is a hand-off: it is refused when that agent cannot take the person's work (paused, not theirs), and may wait on the person's approval.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning": {
+            "description": "With launch: why, shown on the review.",
+            "type": "string"
+          },
+          "workspaceId": {
+            "description": "Pin the session to a space. Usually omit it (see the description).",
+            "type": "string"
+          },
+          "projectId": {
+            "description": "Project ID the session belongs to; needs no workspace membership.",
+            "type": "string"
+          },
+          "trackId": {
+            "description": "Optional track UUID (synap_list_tracks) — the lasting goal, inside a project, this session works toward. Implies its project; a different projectId is refused.",
+            "type": "string"
+          },
+          "parentSessionId": {
+            "description": "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited.",
+            "type": "string",
+            "format": "uuid"
+          },
+          "suspendedIntent": {
+            "description": "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent.",
+            "type": "string",
+            "maxLength": 400
+          },
+          "handToAgentId": {
+            "description": "With launch: the agent (synap_list_agents) that runs it; an agent may name only itself.",
+            "type": "string"
+          },
+          "runner": {
+            "description": "With launch: who runs it (system/synap/processes)."
+          },
+          "stageRunners": {
+            "description": "With launch: who works each stage, by key."
+          },
+          "startAnother": {
+            "description": "With launch: a second run beside a live one.",
+            "type": "boolean"
+          }
+        },
+        "required": []
       }
     },
     {
@@ -10359,6 +10433,62 @@
     },
     "synap_call_tool": {
       "group": "entry"
+    }
+  },
+  "groups": {
+    "names": [
+      "read",
+      "data",
+      "sessions",
+      "governance",
+      "schema",
+      "spaces",
+      "tracks",
+      "build",
+      "capabilities"
+    ],
+    "purposes": {
+      "read": "look things up beyond ask",
+      "data": "precise writes beyond capture",
+      "sessions": "the rest of the session lifecycle",
+      "governance": "proposals and trust rules",
+      "schema": "kinds, roles and who may see them",
+      "spaces": "spaces, projects and focus",
+      "tracks": "goals (tracks): multi-stage work over time",
+      "build": "views, cells, playbooks and skills",
+      "capabilities": "connected services, verbs and automations"
+    },
+    "refPrefix": "tools:",
+    "builderRef": "tools:builder",
+    "skillStems": {
+      "focus-sessions": ["sessions"],
+      "work-flow": ["sessions"],
+      "hand-off": ["sessions", "read"],
+      "writes": ["data"],
+      "capture": ["data"],
+      "multi-entity-capture": ["data"],
+      "linking": ["data", "read"],
+      "linking-principle": ["data", "read"],
+      "graph-gardening": ["data", "read"],
+      "reading": ["read"],
+      "diagnostics": ["read"],
+      "governance": ["governance"],
+      "governance-rules": ["governance"],
+      "from-intent": ["schema", "spaces"],
+      "workspace-design": ["schema", "spaces"],
+      "workspace-edges": ["spaces"],
+      "lenses": ["spaces"],
+      "scope": ["spaces"],
+      "automations": ["capabilities"],
+      "capabilities": ["capabilities"],
+      "escalation-ladder": ["capabilities", "schema"],
+      "showing": ["build"],
+      "document-embeds": ["build", "data"]
+    },
+    "skillPackages": {
+      "surfaces": ["build", "read"],
+      "synap-ui": ["build", "read"],
+      "synap-app": ["build", "read"]
     }
   },
   "instructions": "The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`synap_ask`).\n\n1. **Recall first.** `get_*` a known id, else `ask`.\n2. **Capture as you go.** A decision, learning, pain (`finding`), win (`proof-point`), fact or task: `capture` it when it happens; about the user: `remember_fact`.\n3. **Orient once.** `orient`: pending review, open sessions.\n4. **Work in a session.** `start_session` or resume (playbook `templateId`); goal (TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them (`Q-<id8>`); chat answer → `relay_answer`, words verbatim; PR = outcome `pr-<repo>-<n>` (`ref.url`); `evaluate_session`, close open asks, `complete_session`.\n5. **Never guess a project**: pin only what the user names (`set_*_focus`).\n6. **`proposed` is success**: keep going, never retry.\n7. **Discover before inventing**: `list_profiles` / `list_capabilities`; **extend**, never a twin.\n8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).\n\nDepth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`."

@@ -231,9 +231,9 @@ describe("tripwire: one definition per MCP tool", () => {
     expect(onConnector.length).toBeGreaterThan(100);
     expect(
       onConnector.flatMap((t) =>
-        dangling(
-          JSON.stringify({ d: t.description, s: t.inputSchema })
-        ).map((n) => `${t.name} names ${n}`)
+        dangling(JSON.stringify({ d: t.description, s: t.inputSchema })).map(
+          (n) => `${t.name} names ${n}`
+        )
       )
     ).toEqual([]);
   });
