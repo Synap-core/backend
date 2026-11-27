@@ -71,7 +71,10 @@ import {
   renameWorkspaceDoor,
 } from "./workspace-ops-doors.js";
 import { workspaceHandlers } from "../routers/mcp/handlers/workspace.js";
-import type { McpToolContext } from "../routers/mcp/handlers/shared.js";
+import type {
+  McpToolContext,
+  McpToolHandler,
+} from "../routers/mcp/handlers/shared.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -156,7 +159,9 @@ describe("workspace-ops doors → governed procedures", () => {
 
 describe("MCP tools call the doors", () => {
   const call = async (tool: string, args: Record<string, unknown>) => {
-    const res = await workspaceHandlers[tool]!({
+    const res = await (workspaceHandlers as Record<string, McpToolHandler>)[
+      tool
+    ]!({
       toolName: tool,
       args,
       userId: USER,

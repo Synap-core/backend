@@ -125,6 +125,7 @@ import type { ProposalExecutorArgs } from "../../routers/proposals/execution-reg
 import { registerInstallationExecutors } from "../../routers/proposals/executors/installations.js";
 import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
+import type { McpToolHandler } from "../../routers/mcp/handlers/shared.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEF = JSON.parse(
@@ -193,7 +194,9 @@ beforeAll(async () => {
 
 /** Call an MCP tool as the agent (Claude Code on the Mac) and read its JSON. */
 async function asAgent(tool: string, args: Record<string, unknown>) {
-  const res = await installationHandlers[tool]!({
+  const res = await (installationHandlers as Record<string, McpToolHandler>)[
+    tool
+  ]!({
     toolName: tool,
     args,
     userId: PERSON,

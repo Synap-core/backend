@@ -96,7 +96,11 @@ export const TOOL_HANDLERS = {
   ...fileHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
-} satisfies Required<McpHandlerMap>;
+  // `synap_load_skill` and `synap_call_tool` are answered by the door itself
+  // (`tools.execute`, `mcp/index.ts`), never dispatched here.
+} satisfies Required<
+  Omit<McpHandlerMap, "synap_load_skill" | "synap_call_tool">
+>;
 
 /**
  * The handler a tool name dispatches to (undefined: an unknown tool). Its

@@ -92,6 +92,7 @@ import {
 import { createHubProtocolCaller } from "../mcp/handlers/shared.js";
 import { buildHandlers } from "../mcp/handlers/build.js";
 import { readHandlers } from "../mcp/handlers/read.js";
+import type { McpToolContext } from "../mcp/handlers/shared.js";
 
 const USER = "user-w2b";
 const AGENT = "agent-w2b";
@@ -543,7 +544,10 @@ describe("channels.resolveOrCreateChannel gates only a NEW channel (W2b)", () =>
 describe("MCP doors keep working for an AI-preset agent key (W2b)", () => {
   const asAgentKey = <T>(fn: () => Promise<T>) =>
     runWithGrant(AI_PRESET as never, () => runWithActingAgent(AGENT, fn));
-  const mcpCtx = async (toolName: string, args: Record<string, unknown>) => {
+  const mcpCtx = async (
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<McpToolContext> => {
     const caller = await createHubProtocolCaller(
       USER,
       ["mcp.read", "mcp.write"],

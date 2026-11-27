@@ -320,7 +320,7 @@ export const readHandlers = {
     // "Who haven't I spoken to in a month": the last-interaction window. An
     // unparseable or inverted bound is an error, never an empty "nobody".
     const bound = (key: string): Date | undefined | null => {
-      const raw = args[key];
+      const raw = (args as Record<string, unknown>)[key];
       if (raw === undefined || raw === null || raw === "") return undefined;
       const d = new Date(String(raw));
       return Number.isNaN(d.getTime()) ? null : d;

@@ -1627,11 +1627,12 @@ export const sessionHandlers = {
       // empty patch there is a no-op at best and an empty proposal at worst.
       // `projectId` equal to the session's own is the URL lens, not a filing
       // (the service drops it for the same reason).
+      const given = args as Record<string, unknown>;
       const asked = Object.keys(args).filter(
         (k) =>
-          args[k] !== undefined &&
+          given[k] !== undefined &&
           !NOT_A_FIELD_UPDATE.has(k) &&
-          !(k === "projectId" && args[k] === own.projectId)
+          !(k === "projectId" && given[k] === own.projectId)
       );
       if (asked.length === 0) {
         return reply({
@@ -1721,7 +1722,7 @@ export const sessionHandlers = {
       ...(outcomeLists
         ? { criteria: outcomeLists.criteria }
         : args.criteria !== undefined
-          ? { criteria: args.criteria as SessionCriterion[] }
+          ? { criteria: args.criteria as unknown as SessionCriterion[] }
           : {}),
       // `forming` plans a started step back (P1); the service refuses it on
       // anything not started. Any other value is not a move this door makes.

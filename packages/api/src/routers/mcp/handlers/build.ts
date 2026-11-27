@@ -93,7 +93,6 @@ import {
   PLAYBOOK_STAGES_PAGE_MAX,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
-import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
 import {
   applyStageEdits,
   stagesRevision,
@@ -933,7 +932,6 @@ export const buildHandlers = {
   synap_create_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     // WRITE: confined/explicit lens or advisory focus only — never membership[0].
     const outcome = await createPlaybookDoor(playbookDoorIdentity(ctx), {
       workspaceId: requestedWorkspaceId,
@@ -1047,7 +1045,6 @@ export const buildHandlers = {
   synap_update_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
     // `subjectProfile` is ONE stored record the patch REPLACES (process keys
     // are carried over by `playbooks.update`), so a `statusProperty` alone

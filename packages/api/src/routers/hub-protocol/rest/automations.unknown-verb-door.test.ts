@@ -203,7 +203,7 @@ async function mcpCreate(verbId: string) {
       name: "Daily digest",
       triggerType: "manual",
       flowDefinition: flowCalling(verbId),
-      metadata: { dataContract: DATA_CONTRACT },
+      metadata: { dataContract: DATA_CONTRACT as never },
     },
     userId: USER,
     apiKeyScopes: ["mcp.write"],

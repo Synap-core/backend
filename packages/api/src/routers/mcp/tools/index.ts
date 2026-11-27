@@ -113,6 +113,7 @@ import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-ans
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
+  ON_END_RETIRED_MESSAGE,
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
@@ -4069,6 +4070,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_playbook",
       group: "build",
+      refusedArgs: { onEnd: ON_END_RETIRED_MESSAGE },
       annotations: {
         title: "Create process",
         readOnlyHint: false,
@@ -4137,6 +4139,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_playbook",
       group: "build",
+      refusedArgs: { onEnd: ON_END_RETIRED_MESSAGE },
       annotations: {
         title: "Update process",
         readOnlyHint: false,
