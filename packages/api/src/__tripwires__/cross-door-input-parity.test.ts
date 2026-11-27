@@ -1013,8 +1013,7 @@ function auditOf(service: string): Audit | undefined {
 describe("tripwire (T5): every service parameter is reachable at every door, or acknowledged", () => {
   // RULE 2 — a moved/renamed root or service file fails loudly.
   it("a template holding a template is ONE string (the scan does not flip code and text after it)", () => {
-    const src =
-      "`a ${xs.map((k) => `\\`${k}\\``).join(\", \")} b`; f({ x: 1 });";
+    const src = '`a ${xs.map((k) => `\\`${k}\\``).join(", ")} b`; f({ x: 1 });';
     const end = skipString(src, 0);
     expect(src.slice(end + 1)).toBe("; f({ x: 1 });");
   });

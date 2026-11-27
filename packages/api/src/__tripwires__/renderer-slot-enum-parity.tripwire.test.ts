@@ -94,8 +94,7 @@ describe("renderer slot/scope enum parity", () => {
     const props = wireTools().find(
       (t) => t.name === "synap_promote_cell_to_renderer"
     )?.inputSchema.properties as
-      | Record<string, { enum?: unknown[] }>
-      | undefined;
+      Record<string, { enum?: unknown[] }> | undefined;
     expect(props?.slot?.enum).toEqual([...RENDERER_SLOTS]);
     expect(props?.scope?.enum).toEqual([...RENDERER_SCOPES]);
   });

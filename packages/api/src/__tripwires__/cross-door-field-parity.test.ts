@@ -1424,8 +1424,7 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
   );
 
   it("a template holding a template is ONE string (the scan does not flip code and text after it)", () => {
-    const src =
-      "`a ${xs.map((k) => `\\`${k}\\``).join(\", \")} b`; f({ x: 1 });";
+    const src = '`a ${xs.map((k) => `\\`${k}\\``).join(", ")} b`; f({ x: 1 });';
     const end = skipString(src, 0);
     expect(src.slice(end + 1)).toBe("; f({ x: 1 });");
   });

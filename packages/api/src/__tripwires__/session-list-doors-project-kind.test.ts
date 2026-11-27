@@ -157,9 +157,7 @@ describe("the human door defaults to work, the agent doors default to all", () =
     const parsed = parseToolArgs("synap_list_sessions", {});
     expect(parsed.ok).toBe(true);
     expect(parsed.ok && "kind" in parsed.args).toBe(false);
-    expect(parseToolArgs("synap_list_sessions", { kind: "all" }).ok).toBe(
-      true
-    );
+    expect(parseToolArgs("synap_list_sessions", { kind: "all" }).ok).toBe(true);
     // …and the handler reads absent as `all`, in its own body.
     const src = readFileSync(
       join(API_SRC, "routers/mcp/handlers/session.ts"),
