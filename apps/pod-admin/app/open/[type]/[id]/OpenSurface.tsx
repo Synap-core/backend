@@ -56,10 +56,20 @@ interface SurfaceProps {
 export function OpenSurface({
   podHost,
   identity,
+  canGoHome,
   ...props
-}: SurfaceProps & { podHost?: string; identity?: string }) {
+}: SurfaceProps & {
+  podHost?: string;
+  identity?: string;
+  /** The reader is a member or an admin: the mark leads Home. */
+  canGoHome?: boolean;
+}) {
   return (
-    <ReceiverIdentityProvider podHost={podHost} identity={identity}>
+    <ReceiverIdentityProvider
+      podHost={podHost}
+      identity={identity}
+      canGoHome={canGoHome}
+    >
       <ConsoleRoleProvider role={props.viewerIsPodAdmin ? "admin" : "member"}>
         <OpenSurfaceBody {...props} />
       </ConsoleRoleProvider>

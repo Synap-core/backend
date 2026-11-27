@@ -12,11 +12,13 @@ import {
 export const en = {
   "writeMode.recommended": "(recommended)",
   "writeMode.showAll": "Show all {n}",
+  "brand.home": "Synap, go to Home",
 } as const;
 
 export const fr: Catalog<typeof en> = {
   "writeMode.recommended": "(recommandé)",
   "writeMode.showAll": "Voir les {n}",
+  "brand.home": "Synap, aller à l’accueil",
 };
 
 /** The app-level translator, in the ambient catalog locale. */

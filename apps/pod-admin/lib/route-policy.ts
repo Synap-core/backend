@@ -151,6 +151,19 @@ export function isMemberConsolePath(path: string): boolean {
   return MEMBER_CONSOLE_PATHS.has(path);
 }
 
+/**
+ * Whether a receiver page may offer this reader a door to Home: only when the
+ * pod ANSWERED the role probe (`podAdminRole`), with the two answers `proxy.ts`
+ * lets through to `/home` (a member console path). An unanswered probe offers
+ * nothing: a door the reader is bounced from is worse than none
+ * (`receiver-shell.tsx`). Decided on the server, never guessed on the client.
+ */
+export function opensHome(
+  role: "admin" | "member" | "unavailable" | null
+): boolean {
+  return (role === "admin" || role === "member") && isMemberConsolePath("/home");
+}
+
 export type RouteAccess = "public" | "signed-in" | "admin";
 
 export function routeAccess(path: string): RouteAccess {

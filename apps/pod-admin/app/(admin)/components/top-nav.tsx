@@ -3,8 +3,8 @@
 /**
  * `TopNav` — 44px Pod Console header. Three slots:
  *
- *   • Left   — (phone: nav menu button) · Synap mark · "Pod Console" · pod
- *              hostname
+ *   • Left   — (phone: nav menu button) · Synap mark + wordmark (the door
+ *              to Home) · pod hostname
  *   • Center — ⌘K Search trigger — opens the global SearchModal palette
  *   • Right  — user avatar menu (personal pages — Security, My connections,
  *              My computers, My vault — account links, sign out)
@@ -44,6 +44,8 @@ import { nudgeMarks } from "../../_lib/presence/ways-in/ways-in-model";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import { useConsoleRole } from "./side-nav-role";
+import { SynapLockup } from "../../_lib/brand/synap-mark";
+import { navHref } from "../../../lib/console-nav";
 
 const CATALOGS = { en, fr };
 type ShellKey = keyof typeof en;
@@ -139,20 +141,9 @@ export function TopNav({
             <Menu className="h-5 w-5" />
           </Button>
         )}
-        <span
-          aria-hidden
-          className="
-            glass-icon
-            flex h-6 w-6 items-center justify-center bg-primary
-          "
-        >
-          <span className="text-[10px] font-semibold text-primary-foreground">
-            S
-          </span>
-        </span>
-        <span className="text-[13px] font-medium tracking-tight text-foreground">
-          {t("brand")}
-        </span>
+        {/* The brand leads Home: every console reader (admin or member)
+            has one (backend#1312). */}
+        <SynapLockup href={navHref("home")} />
         {podHost && (
           <span className="hidden font-mono text-[11px] text-foreground/65 sm:inline">
             {podHost}
