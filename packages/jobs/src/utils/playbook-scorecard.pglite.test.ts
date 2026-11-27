@@ -1,6 +1,6 @@
 /**
  * The playbook scorecard on PGlite — the real SQL (owner floor, playbook
- * filter, close-event count subquery) feeding the real projection.
+ * filter, time-bounded close-event count) feeding the real projection.
  *
  * Every fixture session exists to DISCRIMINATE one rule; the comment on each
  * says which wrong rule it would expose.
@@ -274,5 +274,45 @@ describe("playbook scorecard on real SQL", () => {
     });
     expect(card.runs.closed).toBe(1);
     expect(card.criteria.map((c) => c.passRate)).toEqual([null, null]);
+  });
+
+  it("close events are counted PER SESSION, by one events read bounded below by the sessions' creation", async () => {
+    // Each session discriminates a mapping slip: twice (a count collapsed to
+    // "has one"), never (a missing entry read as undefined/NaN, not 0), once.
+    const pb = randomUUID();
+    const twice = await session({ playbookId: pb, closes: 2 });
+    const never = await session({
+      playbookId: pb,
+      status: "active",
+      closes: 0,
+    });
+    const once = await session({ playbookId: pb });
+    // A close event stamped BEFORE its session existed, which the close door
+    // cannot write (`logEvent` stamps the close time). An unbounded read
+    // counts it (2); the bounded read leaves it out (1). This row is what
+    // tells the bounded read apart from the unbounded one.
+    const stray = await session({ playbookId: pb });
+    await q(
+      `insert into events (type, subject_id, subject_type, data, user_id, source, timestamp)
+       values ('focus_session.closed.completed', $1, 'focus_session', '{}'::jsonb, 'user-1', 'api', '2000-01-01T00:00:00Z')`,
+      [stray]
+    );
+
+    const spy = vi.spyOn(h.client!, "query");
+    const { sessions } = await loadPlaybookScorecardRows(db, {
+      playbookIds: [pb],
+      userId: "user-1",
+    }).finally(() => spy.mockRestore());
+    expect(
+      Object.fromEntries(sessions.map((s) => [s.id, s.closeEvents]))
+    ).toEqual({ [twice]: 2, [never]: 0, [once]: 1, [stray]: 1 });
+
+    // The events read carries a lower `timestamp` bound: that bound is what
+    // lets TimescaleDB skip the chunks older than the sessions.
+    const eventsReads = spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => /from "events"/i.test(s));
+    expect(eventsReads.length).toBeGreaterThan(0);
+    for (const s of eventsReads) expect(s).toMatch(/"timestamp" >= /);
   });
 });
