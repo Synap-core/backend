@@ -578,16 +578,14 @@ describe("liftApprovedRequests — table", () => {
     );
     expect("reconsent" in r && r.reconsent.reason).toBe("widens");
     if (!("reconsent" in r)) return;
+    // `widens` is a capped, sorted sample: agent.read (pod-wide readable since
+    // 2026-11-27) now leads it, ahead of entity.read.
     expect(r.reconsent.widens).toContainEqual({
-      permission: "entity.read",
+      permission: "agent.read",
       where: { kind: "pod" },
     });
     // track.read is pod-wide readable since 2026-11-27 (decision 153b612c):
-    // it widens with the others, it is no longer dropped (narrowed).
-    expect(r.reconsent.widens).toContainEqual({
-      permission: "track.read",
-      where: { kind: "pod" },
-    });
+    // it is no longer dropped (narrowed) by an All spaces read.
     expect(r.reconsent.narrows).not.toContainEqual({
       permission: "track.read",
       where: { kind: "space", id: A },
