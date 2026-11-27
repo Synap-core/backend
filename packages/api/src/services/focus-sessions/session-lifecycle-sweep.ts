@@ -61,6 +61,7 @@ import {
   owedSlotWhere,
   focusSessionWaitsOnPersonWhere,
   stageGatePendingIn,
+  uuidFromTextSql,
   onlyOpenPullRequestsWhere,
   outstandingSlotExistsIn,
   personTouchedSubjectIds,
@@ -326,7 +327,7 @@ const sqlList = (values: readonly string[]) =>
 export function endedRunSessionWhere(): SQL {
   const automationEnded = drizzleSql`EXISTS (
     SELECT 1 FROM automation_runs ar
-    WHERE ar.id::text = ${focusSessions.metadata} ->> 'automationRunId'
+    WHERE ar.id = ${uuidFromTextSql(drizzleSql`${focusSessions.metadata} ->> 'automationRunId'`)}
       AND ar.status IN (${sqlList(AUTOMATION_RUN_ENDED)})
   )`;
   const playbookEnded = drizzleSql`(EXISTS (

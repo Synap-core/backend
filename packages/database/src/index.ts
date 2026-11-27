@@ -90,6 +90,7 @@ export * from "./utils/stage-run-waiting.js";
 export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/stage-gate-wait.js";
+export * from "./utils/uuid-from-text.js";
 export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
 export * from "./utils/worker-target-result.js";
