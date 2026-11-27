@@ -363,9 +363,10 @@ describe("recordCapabilityReport: [] is none, a missing list is unknown", () => 
   const start = recordCapabilityReport({}, "worker", ["run.tool"], t0);
 
   it("[] replaces the reporter's set with none", () => {
-    expect(
-      recordCapabilityReport(start, "worker", [], later).worker
-    ).toEqual({ capabilities: [], at: later.toISOString() });
+    expect(recordCapabilityReport(start, "worker", [], later).worker).toEqual({
+      capabilities: [],
+      at: later.toISOString(),
+    });
   });
 
   it("no list keeps the stored set and moves its time", () => {

@@ -10,10 +10,7 @@ import {
 } from "./index.js";
 import { vocabularyFr } from "./catalog.fr.js";
 import { OBJECT_KINDS } from "./object-kinds.js";
-import {
-  DEVICE_KINDS,
-  DEVICE_STATUSES,
-} from "../device-manifest/index.js";
+import { DEVICE_KINDS, DEVICE_STATUSES } from "../device-manifest/index.js";
 
 /**
  * "Device" (devices plan 767a5978, decision 78fc3fa1): the product word that
