@@ -8,11 +8,9 @@
  * hands the handler a minimal context) and the shared run door
  * `runPlaybookDoor` (Hub REST's too), which records what it was asked.
  *
- * Negative controls: drop `fixedArgs` from the alias (1 goes red: the call
- * is refused "goal is required", the run door never asked); map `subjectId`
- * to `subjectId` instead of `subjectEntityId` (the registry throws: start
- * session does not take it); remove the launch branch from start_session's
- * handler (1 goes red: createFocusSession is reached).
+ * Negative control (branch negctl/refactor/define-tool-f5): the alias without
+ * `fixedArgs` (`launch: true`) turns 1 and 2 red: the call is refused "goal is
+ * required" and the run door is never asked.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
