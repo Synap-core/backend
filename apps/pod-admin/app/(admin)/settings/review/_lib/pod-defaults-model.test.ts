@@ -3,8 +3,11 @@ import {
   dialState,
   floorDial,
   floorSave,
+  floorsStillAsking,
+  parameterValue,
   podDefaultsManageable,
   settingState,
+  settingsOf,
   parseSetting,
 } from "./pod-defaults-model";
 
@@ -65,8 +68,22 @@ const floorsRead = {
       { pattern: KINDS, enabled: true },
       { pattern: STRUCTURE, enabled: false },
     ],
-    settings: { [HOURS]: 24 },
-    settingLimits: { [HOURS]: { default: 24, min: 1, max: 168 } },
+    settings: [
+      {
+        key: HOURS,
+        value: 24,
+        min: 1,
+        max: 168,
+        parameterOf: "@own-organise",
+      },
+      {
+        key: "governance.project_evidence_min",
+        value: 5,
+        min: 0,
+        max: 50,
+        parameterOf: null,
+      },
+    ],
     canManage: true,
   },
 };
@@ -134,5 +151,53 @@ describe("a governance number", () => {
     expect(parseSetting("51", limits)).toBeNull();
     expect(parseSetting("2.5", limits)).toBeNull();
     expect(parseSetting("-1", limits)).toBeNull();
+  });
+});
+
+describe("where a governance number is drawn", () => {
+  it("under the switch it is a parameter of, or on its own", () => {
+    expect(settingsOf(floorsRead, "@own-organise").map((s) => s.key)).toEqual(
+      [HOURS]
+    );
+    expect(settingsOf(floorsRead, null).map((s) => s.key)).toEqual([
+      "governance.project_evidence_min",
+    ]);
+  });
+
+  it("the switch's sentence reads its value; unread, null (the sentence says recently)", () => {
+    expect(parameterValue(floorsRead, "@own-organise")).toBe(24);
+    expect(
+      parameterValue(
+        { isLoading: false, isError: true, data: undefined },
+        "@own-organise"
+      )
+    ).toBeNull();
+  });
+});
+
+describe("the floors that still always ask", () => {
+  const floors = [
+    { key: "admin" },
+    { key: "agent-schema", switchedBy: KINDS },
+    { key: "agent-builds-structure", switchedBy: STRUCTURE },
+    { key: "agent-structure" },
+  ];
+
+  it("leave out an entry once its switch is on, keep the rest", () => {
+    expect(floorsStillAsking(floors, floorsRead).map((f) => f.key)).toEqual([
+      "admin",
+      "agent-builds-structure",
+      "agent-structure",
+    ]);
+  });
+
+  it("while the switches are unread, every floor is listed", () => {
+    expect(
+      floorsStillAsking(floors, {
+        isLoading: false,
+        isError: true,
+        data: undefined,
+      })
+    ).toHaveLength(4);
   });
 });

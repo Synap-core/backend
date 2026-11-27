@@ -39,12 +39,22 @@ export function dialState(read: DialQuery, save: DialSave): DialState {
   };
 }
 
-/** Who may change the defaults: whichever dial answered (one failed read must not hide it). */
+/** Who may change the defaults: whichever read answered (one failed read must not hide it). */
 export function podDefaultsManageable(
-  ...reads: ReadonlyArray<DialQuery>
+  ...reads: ReadonlyArray<{ data?: { canManage: boolean } | undefined }>
 ): boolean | null {
   for (const r of reads) if (r.data) return r.data.canManage;
   return null;
+}
+
+/** One governance number as `governanceRules.podFloorDefaults` lists it. */
+export interface PodSetting {
+  key: string;
+  value: number;
+  min: number;
+  max: number;
+  /** The switch whose rule reads it, drawn under that switch; null = on its own. */
+  parameterOf: string | null;
 }
 
 /** `governanceRules.podFloorDefaults` as TanStack hands it over. */
@@ -54,10 +64,7 @@ export interface FloorsQuery {
   data?:
     | {
         families: ReadonlyArray<{ pattern: string; enabled: boolean }>;
-        settings: Readonly<Record<string, number>>;
-        settingLimits: Readonly<
-          Record<string, { default: number; min: number; max: number }>
-        >;
+        settings: ReadonlyArray<PodSetting>;
         canManage: boolean;
       }
     | undefined;
@@ -105,20 +112,52 @@ export type SettingState =
       canManage: boolean;
     };
 
-/** One governance number setting, read from the shared floors read. */
+/** One governance number, read from the shared floors read. */
 export function settingState(read: FloorsQuery, key: string): SettingState {
   if (read.isError) return { kind: "failed" };
   if (read.isLoading || !read.data) return { kind: "loading" };
-  const value = read.data.settings[key];
-  const limits = read.data.settingLimits[key];
-  if (value === undefined || !limits) return { kind: "failed" };
+  const setting = read.data.settings.find((s) => s.key === key);
+  if (!setting) return { kind: "failed" };
   return {
     kind: "ready",
-    value,
-    min: limits.min,
-    max: limits.max,
+    value: setting.value,
+    min: setting.min,
+    max: setting.max,
     canManage: read.data.canManage,
   };
+}
+
+/** The settings drawn under `pattern`'s switch, or on their own (`null`). */
+export function settingsOf(
+  read: FloorsQuery,
+  pattern: string | null
+): PodSetting[] {
+  return (read.data?.settings ?? []).filter(
+    (s) => s.parameterOf === pattern
+  );
+}
+
+/** The value of the setting `pattern`'s sentence names; null when it was not read. */
+export function parameterValue(
+  read: FloorsQuery,
+  pattern: string
+): number | null {
+  return settingsOf(read, pattern)[0]?.value ?? null;
+}
+
+/**
+ * The platform floors that still always ask: an entry a pod switch lifts is
+ * left out once that switch is on. While the switches are unread, every
+ * floor is listed (the honest reading of an unknown switch).
+ */
+export function floorsStillAsking<F extends { switchedBy?: string | null }>(
+  floors: readonly F[],
+  read: FloorsQuery
+): F[] {
+  const on = new Set(
+    (read.data?.families ?? []).filter((f) => f.enabled).map((f) => f.pattern)
+  );
+  return floors.filter((f) => !f.switchedBy || !on.has(f.switchedBy));
 }
 
 /** What was typed, as a value the pod would take (a whole number in range), else null. */

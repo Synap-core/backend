@@ -17,7 +17,14 @@
  */
 
 import {
+  createT,
+  type Catalog,
+  type Catalogs,
+} from "../i18n/translator.js";
+import type { Locale } from "../i18n/locale.js";
+import {
   buildObjectActionTitle,
+  humanizeToken,
   resolveActionLabel,
   resolveGovernanceRungLabel,
   resolveObjectNoun,
@@ -118,33 +125,158 @@ export const ROOT_SWITCH_PATTERNS = [
 ] as const;
 export type RootSwitchPattern = (typeof ROOT_SWITCH_PATTERNS)[number];
 
+export function isRootSwitchPattern(
+  pattern: string
+): pattern is RootSwitchPattern {
+  return (ROOT_SWITCH_PATTERNS as readonly string[]).includes(pattern);
+}
+
+/** Each switch's slot in {@link POD_SWITCH_WORDS}. */
+const SWITCH_SLOT = {
+  [REVERSIBLE_CLASS_PATTERN]: "reversible",
+  [OWN_ORGANISE_CLASS_PATTERN]: "ownOrganise",
+  [AGENT_DEFINES_KINDS_CLASS_PATTERN]: "definesKinds",
+  [AGENT_BUILDS_STRUCTURE_CLASS_PATTERN]: "buildsStructure",
+} as const satisfies Record<RootSwitchPattern, string>;
+
 /**
- * The pod's two class defaults in words: THE copy for the switch on the
- * desktop and on the phone ("How agents act"), and for the rule list's title
- * of the row each switch owns. ONE home, so the surfaces cannot word one rule
- * twice (FB1020 wave 2, S5 / S13). "In the last day" is the proof window
- * (`isOwnFreshWork`, 24 h), never "today".
+ * THE words of the pod's switches and of the governance numbers they read
+ * (`governanceRules.podFloorDefaults` settings, by key): one catalog for the
+ * desktop, the phone and pod admin, so no surface words one switch twice.
+ * Read through {@link podSwitchWords} and {@link podSettingWords}.
+ */
+const podSwitchWordsEn = {
+  "reversible.label": "Act directly on changes that can be undone",
+  "reversible.line":
+    "Agents create, edit and link without asking, each change listed with Undo. Deleting, sharing and anything sent outside always ask.",
+  "ownOrganise.label": "Tidy their own new work",
+  "ownOrganise.line":
+    "Agents file what they made {hours, plural, =24 {in the last day} one {in the last hour} other {in the last # hours}} into the project you named, and close their own tasks. Each is listed with Undo; anything you changed since still asks.",
+  "ownOrganise.lineUnread":
+    "Agents file what they made recently into the project you named, and close their own tasks. Each is listed with Undo; anything you changed since still asks.",
+  "definesKinds.label": "Define new kinds without always asking",
+  "definesKinds.line":
+    "Off, an agent always asks before it defines a kind or a role. On, your approval rules decide.",
+  "buildsStructure.label":
+    "Create playbooks, automations and spaces without always asking",
+  "buildsStructure.line":
+    "Off, an agent always asks before it creates a playbook, an automation or a space, or turns an automation on. On, your approval rules decide.",
+  "ownWorkHours.label": "How long their work counts as new",
+  "ownWorkHours.line":
+    "While “Tidy their own new work” is on, an agent tidies what it made within this time.",
+  "ownWorkHours.unit": "Hours",
+  "ownWorkHours.value": "{n, plural, one {# hour} other {# hours}}",
+  "evidenceMin.label":
+    "Records an agent’s project needs before your rules may approve it",
+  "evidenceMin.line":
+    "A project an agent proposes with fewer records than this always comes to you.",
+  "evidenceMin.unit": "Records",
+  "evidenceMin.value": "{n, plural, one {# record} other {# records}}",
+} as const;
+
+const podSwitchWordsFr: Catalog<typeof podSwitchWordsEn> = {
+  "reversible.label": "Agir directement sur ce qui peut être annulé",
+  "reversible.line":
+    "Elles créent, modifient et relient sans demander, chaque modification avec Annuler. Supprimer, partager et tout ce qui part à l’extérieur demande toujours.",
+  "ownOrganise.label": "Ranger leur propre travail récent",
+  "ownOrganise.line":
+    "Elles classent ce qu’elles ont créé {hours, plural, =24 {depuis un jour} one {depuis une heure} other {depuis # heures}} dans le projet que vous avez indiqué et ferment leurs propres tâches, chaque fois avec Annuler. Ce que vous avez modifié depuis demande toujours.",
+  "ownOrganise.lineUnread":
+    "Elles classent ce qu’elles ont créé récemment dans le projet que vous avez indiqué et ferment leurs propres tâches, chaque fois avec Annuler. Ce que vous avez modifié depuis demande toujours.",
+  "definesKinds.label": "Définir de nouveaux types sans toujours demander",
+  "definesKinds.line":
+    "Désactivé, une IA demande toujours avant de définir un type ou un rôle. Activé, vos règles d’approbation décident.",
+  "buildsStructure.label":
+    "Créer playbooks, automatisations et espaces sans toujours demander",
+  "buildsStructure.line":
+    "Désactivé, une IA demande toujours avant de créer un playbook, une automatisation ou un espace, ou d’activer une automatisation. Activé, vos règles d’approbation décident.",
+  "ownWorkHours.label": "Combien de temps leur travail reste récent",
+  "ownWorkHours.line":
+    "Tant que « Ranger leur propre travail récent » est activé, une IA range ce qu’elle a créé pendant ce délai.",
+  "ownWorkHours.unit": "Heures",
+  "ownWorkHours.value": "{n, plural, one {# heure} other {# heures}}",
+  "evidenceMin.label":
+    "Éléments qu’un projet d’IA doit réunir avant que vos règles puissent l’approuver",
+  "evidenceMin.line":
+    "Un projet proposé par une IA avec moins d’éléments vous est toujours soumis.",
+  "evidenceMin.unit": "Éléments",
+  "evidenceMin.value": "{n, plural, one {# élément} other {# éléments}}",
+};
+
+export const POD_SWITCH_WORDS: Catalogs<typeof podSwitchWordsEn> = {
+  en: podSwitchWordsEn,
+  fr: podSwitchWordsFr,
+};
+
+/**
+ * A switch in words. The own-organise line names its window from the pod's
+ * own-work hours; `null` (that read failed) says "recently", never a guess.
+ */
+export function podSwitchWords(
+  pattern: RootSwitchPattern,
+  opts: { locale?: Locale; ownWorkHours?: number | null } = {}
+): { label: string; line: string } {
+  const t = createT(opts.locale ?? "en", POD_SWITCH_WORDS);
+  const slot = SWITCH_SLOT[pattern];
+  if (slot === "ownOrganise") {
+    return {
+      label: t("ownOrganise.label"),
+      line:
+        opts.ownWorkHours == null
+          ? t("ownOrganise.lineUnread")
+          : t("ownOrganise.line", { hours: opts.ownWorkHours }),
+    };
+  }
+  return { label: t(`${slot}.label`), line: t(`${slot}.line`) };
+}
+
+/** Each governance number's slot, by its `config_settings` key. */
+const SETTING_SLOT: Readonly<Record<string, "ownWorkHours" | "evidenceMin">> =
+  {
+    "governance.own_work_fresh_hours": "ownWorkHours",
+    "governance.project_evidence_min": "evidenceMin",
+  };
+
+/** A governance number in words; a key with no words reads as its humanized token. */
+export function podSettingWords(
+  key: string,
+  locale: Locale = "en"
+): {
+  label: string;
+  line: string | null;
+  unit: string | null;
+  value: (n: number) => string;
+} {
+  const slot = Object.prototype.hasOwnProperty.call(SETTING_SLOT, key)
+    ? SETTING_SLOT[key]!
+    : null;
+  if (!slot) {
+    return {
+      label: humanizeToken(key.slice(key.lastIndexOf(".") + 1)),
+      line: null,
+      unit: null,
+      value: (n) => String(n),
+    };
+  }
+  const t = createT(locale, POD_SWITCH_WORDS);
+  return {
+    label: t(`${slot}.label`),
+    line: t(`${slot}.line`),
+    unit: t(`${slot}.unit`),
+    value: (n) => t(`${slot}.value`, { n }),
+  };
+}
+
+/**
+ * The switches in English with the pod's default window, for the surfaces
+ * that do not read the locale or the hours yet. New code reads
+ * {@link podSwitchWords}.
  */
 export const POD_DEFAULT_WORDS: Readonly<
-  Record<string, { label: string; line: string }>
-> = {
-  [REVERSIBLE_CLASS_PATTERN]: {
-    label: "Act directly on changes that can be undone",
-    line: "Agents create, edit and link without asking, each change listed with Undo. Deleting, sharing, new kinds or fields, structure and anything sent outside always ask.",
-  },
-  [OWN_ORGANISE_CLASS_PATTERN]: {
-    label: "Tidy their own new work",
-    line: "Agents file what they made in the last day into the project you named, and close their own tasks. Each is listed with Undo; anything you changed since still asks.",
-  },
-  [AGENT_DEFINES_KINDS_CLASS_PATTERN]: {
-    label: "Define new kinds without always asking",
-    line: "Off, an agent always asks before it defines a kind or a role. On, your other approval rules decide.",
-  },
-  [AGENT_BUILDS_STRUCTURE_CLASS_PATTERN]: {
-    label: "Create playbooks, automations and spaces without always asking",
-    line: "Off, an agent always asks before it creates a playbook, an automation or a space, or turns an automation on. On, your other approval rules decide.",
-  },
-};
+  Record<RootSwitchPattern, { label: string; line: string }>
+> = Object.fromEntries(
+  ROOT_SWITCH_PATTERNS.map((p) => [p, podSwitchWords(p, { ownWorkHours: 24 })])
+) as Record<RootSwitchPattern, { label: string; line: string }>;
 
 /**
  * A governance write MOTIF (`entity.update`, `note.delete`) in words, with the
@@ -240,10 +372,9 @@ export function governanceRuleTitle(rule: {
   }
   // The row a pod switch owns is titled with the switch's own words (S13), so
   // the list and the switch read as one rule.
-  const podDefault = rule.targetProfile
-    ? undefined
-    : POD_DEFAULT_WORDS[rule.targetPattern];
-  if (podDefault) return podDefault.label;
+  if (!rule.targetProfile && isRootSwitchPattern(rule.targetPattern)) {
+    return podSwitchWords(rule.targetPattern).label;
+  }
   // A rule narrowed to one kind names that kind, so an every-kind write reads
   // as its verb and the kind ("Update · Notes"), never "Update anything".
   if (rule.targetProfile) {
@@ -402,7 +533,7 @@ export function isRootSwitchRule(
     rule.principalKind === "any" &&
     rule.scopeKind === "pod" &&
     rule.targetKind === "action" &&
-    (ROOT_SWITCH_PATTERNS as readonly string[]).includes(rule.targetPattern)
+    isRootSwitchPattern(rule.targetPattern)
   );
 }
 

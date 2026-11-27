@@ -1,27 +1,33 @@
 "use client";
 
 /**
- * "How your AIs act" — the pod's defaults for every agent, switched through
- * their own doors (`governanceRules.setReversibleDefault`,
- * `setOwnOrganiseDefault`, and per floor family `setPodFloorDefault`, worded
- * by `POD_DEFAULT_WORDS`), the governance numbers (`setPodSetting`); each a
- * pod admin's act with its proof of presence. Under them the platform floors
- * that ask whatever the switches say (`governanceRules.platformDefaults`), said
- * once. Anyone signed in reads it; a member sees the switches locked and who
- * may change them (`canManage`).
+ * "How your AIs act" — the pod's switches for every agent, each through its
+ * own door (`governanceRules.setReversibleDefault`, `setOwnOrganiseDefault`,
+ * and per floor family `setPodFloorDefault`), worded by the one catalog
+ * (`podSwitchWords`, `@synap-core/types/governance-rules`); the governance
+ * numbers the read lists (`setPodSetting`), each under the switch it is a
+ * parameter of or on its own. Every write is a pod admin's act with its proof
+ * of presence. Under them the platform floors that still always ask
+ * (`governanceRules.platformDefaults`, less what a switch that is on lifts).
+ * Anyone signed in reads it; a member sees everything locked and who may
+ * change it (`canManage`).
  *
- * The desktop app's Settings › Trust rules draws the same two dials
- * (`TrustDefaultsSection`): one store, two surfaces that run the pod.
+ * The desktop app's Settings › Trust rules draws the same switches
+ * (`TrustDefaultsSection`): one store, one catalog, two surfaces.
  */
-import { useState } from "react";
+import Link from "next/link";
+import { useState, type ReactNode } from "react";
 import { Button, Input, Switch, addToast } from "@heroui/react";
 import {
-  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
-  AGENT_DEFINES_KINDS_CLASS_PATTERN,
-  POD_DEFAULT_WORDS,
+  OWN_ORGANISE_CLASS_PATTERN,
+  REVERSIBLE_CLASS_PATTERN,
+  podSettingWords,
+  podSwitchWords,
+  type RootSwitchPattern,
 } from "@synap-core/types/governance-rules";
 import { TRPCClientError } from "@trpc/client";
 import { trpc } from "../../../../../lib/trpc";
+import { navHref } from "../../../../../lib/console-nav";
 import { redirectToLoginIfUnauthorized } from "../../../../../lib/auth-redirect";
 import { SectionCard } from "../../../components/section-card";
 import { FormModal } from "../../../components/form-modal";
@@ -31,36 +37,29 @@ import {
   useSetPodSetting,
   useSetReversibleDefault,
 } from "../../../../_lib/presence/use-sensitive-actions";
-import { useT } from "../../../../../lib/i18n/locale-provider";
+import { useConsoleLocale, useT } from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import {
   dialState,
   floorDial,
   floorSave,
+  floorsStillAsking,
+  parameterValue,
+  parseSetting,
   podDefaultsManageable,
   settingState,
-  parseSetting,
+  settingsOf,
   type DialQuery,
   type DialSave,
+  type PodSetting,
   type SettingState,
 } from "./pod-defaults-model";
 
 const CATALOGS = { en, fr };
 
-/** The floor families a pod may switch, each worded by `POD_DEFAULT_WORDS`. */
-const FLOOR_FAMILIES = [
-  AGENT_DEFINES_KINDS_CLASS_PATTERN,
-  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
-] as const;
-
-/** The governance numbers a person sets here, and the words of each. */
-const SETTINGS = [
-  { key: "governance.own_work_fresh_hours", words: "ownWorkHours" },
-  { key: "governance.project_evidence_min", words: "evidenceMin" },
-] as const;
-
 export function PodDefaults() {
   const t = useT(CATALOGS);
+  const locale = useConsoleLocale();
   const utils = trpc.useUtils();
   const reversible = trpc.governanceRules.reversibleDefault.useQuery(
     undefined,
@@ -77,6 +76,11 @@ export function PodDefaults() {
     staleTime: 300_000,
   });
 
+  const words = (pattern: RootSwitchPattern) =>
+    podSwitchWords(pattern, {
+      locale,
+      ownWorkHours: parameterValue(switchable, OWN_ORGANISE_CLASS_PATTERN),
+    });
   const onSaved = (name: string) => (res: { enabled: boolean }) =>
     addToast({
       title: t(res.enabled ? "podDefaults.turnedOn" : "podDefaults.turnedOff", {
@@ -93,83 +97,102 @@ export function PodDefaults() {
       color: "danger",
     });
   };
-  // Both defaults carry the proof of presence (W3 slice 3): sensitive actions.
+  // Every switch carries the proof of presence (W3 slice 3): sensitive actions.
   const setReversible = useSetReversibleDefault({
     onSuccess: (res) => {
       void utils.governanceRules.reversibleDefault.invalidate();
       // Every agent's sentence reads the pod default.
       void utils.agentUsers.governance.invalidate();
-      onSaved(t("podDefaults.reversible.label"))(res);
+      onSaved(words(REVERSIBLE_CLASS_PATTERN).label)(res);
     },
     onError: onFailed,
   });
   const setOwnOrganise = useSetOwnOrganiseDefault({
     onSuccess: (res) => {
       void utils.governanceRules.ownOrganiseDefault.invalidate();
-      onSaved(t("podDefaults.ownOrganise.label"))(res);
+      onSaved(words(OWN_ORGANISE_CLASS_PATTERN).label)(res);
     },
     onError: onFailed,
   });
-
   const setFloor = useSetPodFloorDefault({
     onSuccess: (res, input) => {
       void utils.governanceRules.podFloorDefaults.invalidate();
-      onSaved(POD_DEFAULT_WORDS[input.pattern]?.label ?? input.pattern)(res);
+      // The agent matrix reads whether a floor yields.
+      void utils.governanceRules.matrix.invalidate();
+      onSaved(words(input.pattern).label)(res);
     },
     onError: onFailed,
   });
 
-  const canManage = podDefaultsManageable(
-    reversible,
-    ownOrganise,
-    floorDial(switchable, AGENT_DEFINES_KINDS_CLASS_PATTERN)
+  const canManage = podDefaultsManageable(reversible, ownOrganise, switchable);
+  const settingRows = (pattern: string | null) =>
+    settingsOf(switchable, pattern).map((s) => (
+      <SettingRow
+        key={s.key}
+        setting={s}
+        state={settingState(switchable, s.key)}
+        nested={pattern !== null}
+        onRetry={() => void switchable.refetch()}
+      />
+    ));
+  const rulesDoor = (
+    <Link
+      href={navHref("approvals")}
+      className="font-medium text-primary underline-offset-2 hover:underline"
+    >
+      {t("podDefaults.rulesDoor")}
+    </Link>
   );
   return (
     <SectionCard title={t("podDefaults.title")} hint={t("podDefaults.hint")}>
       <ul className="-mx-2 divide-y divide-foreground/[0.05]">
         <DialRow
-          label={t("podDefaults.reversible.label")}
-          line={t("podDefaults.reversible.line")}
+          words={words(REVERSIBLE_CLASS_PATTERN)}
           read={reversible}
           save={setReversible}
           onRetry={() => void reversible.refetch()}
           onChange={(enabled) => setReversible.mutate({ enabled })}
         />
         <DialRow
-          label={t("podDefaults.ownOrganise.label")}
-          line={t("podDefaults.ownOrganise.line")}
+          words={words(OWN_ORGANISE_CLASS_PATTERN)}
           read={ownOrganise}
           save={setOwnOrganise}
           onRetry={() => void ownOrganise.refetch()}
           onChange={(enabled) => setOwnOrganise.mutate({ enabled })}
-        />
-        {FLOOR_FAMILIES.map((pattern) => (
-          <DialRow
-            key={pattern}
-            label={POD_DEFAULT_WORDS[pattern]!.label}
-            line={POD_DEFAULT_WORDS[pattern]!.line}
-            read={floorDial(switchable, pattern)}
-            save={floorSave(setFloor, pattern)}
-            onRetry={() => void switchable.refetch()}
-            onChange={(enabled) => setFloor.mutate({ pattern, enabled })}
-          />
-        ))}
-      </ul>
-      <p className="mt-3 text-[12px] font-medium text-foreground/80">
-        {t("podDefaults.numbers")}
-      </p>
-      <ul className="-mx-2 divide-y divide-foreground/[0.05]">
-        {SETTINGS.map((s) => (
-          <SettingRow
-            key={s.key}
-            settingKey={s.key}
-            label={t(`podDefaults.${s.words}.label`)}
-            line={t(`podDefaults.${s.words}.line`)}
-            say={(n) => t(`podDefaults.${s.words}.value`, { n })}
-            state={settingState(switchable, s.key)}
-            onRetry={() => void switchable.refetch()}
-          />
-        ))}
+        >
+          {settingRows(OWN_ORGANISE_CLASS_PATTERN)}
+        </DialRow>
+        {switchable.data ? (
+          switchable.data.families.map((family) => (
+            <DialRow
+              key={family.pattern}
+              words={words(family.pattern)}
+              door={rulesDoor}
+              read={floorDial(switchable, family.pattern)}
+              save={floorSave(setFloor, family.pattern)}
+              onRetry={() => void switchable.refetch()}
+              onChange={(enabled) =>
+                setFloor.mutate({ pattern: family.pattern, enabled })
+              }
+            />
+          ))
+        ) : switchable.isError ? (
+          <li className="flex min-h-14 items-center gap-2 px-3 py-2 text-[12px] text-status-down">
+            {t("podDefaults.switchesFailed")}
+            <button
+              type="button"
+              className="min-h-10 font-medium text-primary underline-offset-2 hover:underline"
+              onClick={() => void switchable.refetch()}
+            >
+              {t("retry")}
+            </button>
+          </li>
+        ) : (
+          <li className="px-3 py-2">
+            <div className="h-10 rounded bg-foreground/[0.04] shimmer-pulse" />
+          </li>
+        )}
+        {settingRows(null)}
       </ul>
       {canManage === false && (
         <p className="mt-2 text-[12px] text-foreground/65">
@@ -194,9 +217,11 @@ export function PodDefaults() {
           </p>
         ) : floors.data ? (
           <ul className="flex flex-col gap-0.5 text-[12px] text-foreground/65">
-            {floors.data.alwaysPropose.map((f) => (
-              <li key={f.key}>{f.label}</li>
-            ))}
+            {floorsStillAsking(floors.data.alwaysPropose, switchable).map(
+              (f) => (
+                <li key={f.key}>{f.label}</li>
+              )
+            )}
           </ul>
         ) : (
           <div className="h-10 rounded bg-foreground/[0.04] shimmer-pulse" />
@@ -207,94 +232,101 @@ export function PodDefaults() {
 }
 
 /**
- * One default as a row. A failed READ is the failed mark with its retry, never
- * a calm OFF switch (an empty result and a failed read are different facts).
+ * One switch as a row; what it reads (`children`) sits under it. A failed READ
+ * is the failed mark with its retry, never a calm OFF switch (an empty result
+ * and a failed read are different facts).
  */
 function DialRow({
-  label,
-  line,
+  words,
+  door,
   read,
   save,
   onRetry,
   onChange,
+  children,
 }: {
-  label: string;
-  line: string;
+  words: { label: string; line: string };
+  /** Where what the switch hands over to is (the approval rules). */
+  door?: ReactNode;
   read: DialQuery;
   save: DialSave;
   onRetry: () => void;
   onChange: (enabled: boolean) => void;
+  children?: ReactNode;
 }) {
   const t = useT(CATALOGS);
   const state = dialState(read, save);
   return (
-    <li className="flex min-h-14 items-center gap-3 px-3 py-2">
-      <span className="min-w-0 flex-1">
-        <span className="block text-[13px] font-medium text-foreground">
-          {label}
-        </span>
-        <span className="block text-[12px] text-foreground/65">{line}</span>
-      </span>
-      {state.kind === "failed" ? (
-        <span className="flex shrink-0 items-center gap-2 text-[12px] text-status-down">
-          {t("podDefaults.failed")}
-          <button
-            type="button"
-            className="min-h-10 font-medium text-primary underline-offset-2 hover:underline"
-            onClick={onRetry}
-          >
-            {t("retry")}
-          </button>
-        </span>
-      ) : state.kind === "loading" ? (
-        <div className="h-6 w-11 shrink-0 rounded-full bg-foreground/10 shimmer-pulse" />
-      ) : (
-        <>
-          <span className="hidden text-[12px] text-foreground/65 sm:inline">
-            {state.on ? t("podDefaults.on") : t("podDefaults.off")}
+    <li className="flex flex-col">
+      <div className="flex min-h-14 items-center gap-3 px-3 py-2">
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-medium text-foreground">
+            {words.label}
           </span>
-          <Switch
-            size="sm"
-            isSelected={state.on}
-            isDisabled={!state.canManage || state.saving}
-            onValueChange={onChange}
-            aria-label={label}
-          />
-        </>
-      )}
+          <span className="block text-[12px] text-foreground/65">
+            {words.line} {door}
+          </span>
+        </span>
+        {state.kind === "failed" ? (
+          <span className="flex shrink-0 items-center gap-2 text-[12px] text-status-down">
+            {t("podDefaults.failed")}
+            <button
+              type="button"
+              className="min-h-10 font-medium text-primary underline-offset-2 hover:underline"
+              onClick={onRetry}
+            >
+              {t("retry")}
+            </button>
+          </span>
+        ) : state.kind === "loading" ? (
+          <div className="h-6 w-11 shrink-0 rounded-full bg-foreground/10 shimmer-pulse" />
+        ) : (
+          <>
+            <span className="hidden text-[12px] text-foreground/65 sm:inline">
+              {state.on ? t("podDefaults.on") : t("podDefaults.off")}
+            </span>
+            <Switch
+              size="sm"
+              isSelected={state.on}
+              isDisabled={!state.canManage || state.saving}
+              onValueChange={onChange}
+              aria-label={words.label}
+            />
+          </>
+        )}
+      </div>
+      {children}
     </li>
   );
 }
 
 /**
- * One governance number as a row: its value, and Change for a pod admin (a
- * small form, the range said under the field). A failed read is the failed
- * mark with its retry, never a guessed default.
+ * One governance number: its value, and Change for a pod admin (a small form,
+ * the row's explanation and the range said in it). Nested under the switch it
+ * is a parameter of. A failed read is the failed mark with its retry, never a
+ * guessed default.
  */
 function SettingRow({
-  settingKey,
-  label,
-  line,
-  say,
+  setting,
   state,
+  nested,
   onRetry,
 }: {
-  settingKey: (typeof SETTINGS)[number]["key"];
-  label: string;
-  line: string;
-  say: (n: number) => string;
+  setting: PodSetting;
   state: SettingState;
+  nested: boolean;
   onRetry: () => void;
 }) {
   const t = useT(CATALOGS);
+  const locale = useConsoleLocale();
+  const words = podSettingWords(setting.key, locale);
   const [editing, setEditing] = useState(false);
   return (
-    <li className="flex min-h-14 items-center gap-3 px-3 py-2">
-      <span className="min-w-0 flex-1">
-        <span className="block text-[13px] font-medium text-foreground">
-          {label}
-        </span>
-        <span className="block text-[12px] text-foreground/65">{line}</span>
+    <div
+      className={`flex min-h-12 items-center gap-3 py-2 pr-3 ${nested ? "pl-8" : "pl-3"}`}
+    >
+      <span className="min-w-0 flex-1 text-[12.5px] text-foreground/80">
+        {words.label}
       </span>
       {state.kind === "failed" ? (
         <span className="flex shrink-0 items-center gap-2 text-[12px] text-status-down">
@@ -312,14 +344,14 @@ function SettingRow({
       ) : (
         <>
           <span className="shrink-0 text-[12.5px] font-medium tabular-nums text-foreground">
-            {say(state.value)}
+            {words.value(state.value)}
           </span>
           {state.canManage && (
             <Button
               size="sm"
               variant="flat"
               radius="md"
-              aria-label={t("podDefaults.changeNamed", { name: label })}
+              aria-label={t("podDefaults.changeNamed", { name: words.label })}
               onPress={() => setEditing(true)}
             >
               {t("podDefaults.change")}
@@ -327,26 +359,26 @@ function SettingRow({
           )}
           {editing && (
             <SettingModal
-              settingKey={settingKey}
-              label={label}
+              settingKey={setting.key}
+              words={words}
               state={state}
               onClose={() => setEditing(false)}
             />
           )}
         </>
       )}
-    </li>
+    </div>
   );
 }
 
 function SettingModal({
   settingKey,
-  label,
+  words,
   state,
   onClose,
 }: {
-  settingKey: (typeof SETTINGS)[number]["key"];
-  label: string;
+  settingKey: string;
+  words: ReturnType<typeof podSettingWords>;
   state: Extract<SettingState, { kind: "ready" }>;
   onClose: () => void;
 }) {
@@ -354,11 +386,12 @@ function SettingModal({
   const utils = trpc.useUtils();
   const [draft, setDraft] = useState(String(state.value));
   const [error, setError] = useState<string | null>(null);
+  const range = t("podDefaults.range", { min: state.min, max: state.max });
   const save = useSetPodSetting({
     onSuccess: () => {
       void utils.governanceRules.podFloorDefaults.invalidate();
       addToast({
-        title: t("podDefaults.saved", { name: label }),
+        title: t("podDefaults.saved", { name: words.label }),
         color: "success",
       });
       onClose();
@@ -366,16 +399,18 @@ function SettingModal({
     onError: (err) => {
       if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
         return;
+      // The pod's own words name its setting key: say the range instead.
       setError(
-        err instanceof Error ? err.message : t("podDefaults.notChanged")
+        err instanceof TRPCClientError && err.data?.code === "BAD_REQUEST"
+          ? range
+          : t("podDefaults.notChanged")
       );
     },
   });
   const n = parseSetting(draft, state);
-  const range = t("podDefaults.range", { min: state.min, max: state.max });
   return (
     <FormModal
-      title={label}
+      title={words.label}
       submitLabel={t("podDefaults.save")}
       isPending={save.isPending}
       canSubmit={n !== null && n !== state.value}
@@ -383,23 +418,34 @@ function SettingModal({
       onClose={onClose}
       onSubmit={() => {
         setError(null);
-        if (n !== null) save.mutate({ key: settingKey, value: n });
+        if (n !== null)
+          save.mutate({ key: settingKey as SettingKey, value: n });
       }}
     >
+      {words.line && (
+        <p className="text-[12.5px] leading-relaxed text-foreground/65">
+          {words.line}
+        </p>
+      )}
       <Input
         autoFocus
         type="number"
         size="sm"
-        label={label}
+        label={words.unit ?? undefined}
+        aria-label={words.unit ?? words.label}
         className="max-w-40"
         min={state.min}
         max={state.max}
         value={draft}
         onValueChange={setDraft}
         isInvalid={n === null}
-        errorMessage={range}
         description={range}
       />
     </FormModal>
   );
 }
+
+/** The keys `setPodSetting` takes (the read's keys are that closed set). */
+type SettingKey = Parameters<
+  ReturnType<typeof useSetPodSetting>["mutate"]
+>[0]["key"];

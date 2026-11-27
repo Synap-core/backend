@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveGovernanceRungLabel } from "../vocabulary/index.js";
+import { catalogProblems } from "../i18n/translator.js";
 import {
   AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
   AGENT_DEFINES_KINDS_CLASS_PATTERN,
@@ -27,6 +28,9 @@ import {
   ruleTitle,
   verdictLabel,
   writePatternTitle,
+  POD_SWITCH_WORDS,
+  podSettingWords,
+  podSwitchWords,
 } from "./index.js";
 
 function rule(
@@ -292,5 +296,50 @@ describe("finding b0bb38d4: a write on every kind names its object", () => {
   it("a write on one kind keeps that kind's noun", () => {
     expect(writePatternTitle("note.create")).not.toContain("anything");
     expect(writePatternTitle("note.create")).toMatch(/note/i);
+  });
+});
+
+describe("POD_SWITCH_WORDS — one catalog for every switch, en and fr", () => {
+  it("is a whole catalog: every key in French, every message well formed", () => {
+    expect(catalogProblems(POD_SWITCH_WORDS)).toEqual([]);
+  });
+
+  it("every switch has a label and a line in each locale", () => {
+    for (const pattern of ROOT_SWITCH_PATTERNS) {
+      for (const locale of ["en", "fr"] as const) {
+        const words = podSwitchWords(pattern, { locale, ownWorkHours: 24 });
+        expect(words.label.length, `${pattern} ${locale}`).toBeGreaterThan(0);
+        expect(words.line.length, `${pattern} ${locale}`).toBeGreaterThan(0);
+      }
+    }
+    expect(podSwitchWords(REVERSIBLE_CLASS_PATTERN, { locale: "fr" }).label).not.toBe(
+      podSwitchWords(REVERSIBLE_CLASS_PATTERN).label
+    );
+  });
+
+  it("the tidy line names the pod's window; an unread one says recently, never a guessed day", () => {
+    const line = (h: number | null) =>
+      podSwitchWords(OWN_ORGANISE_CLASS_PATTERN, { ownWorkHours: h }).line;
+    expect(line(24)).toMatch(/in the last day/);
+    expect(line(48)).toMatch(/in the last 48 hours/);
+    expect(line(1)).toMatch(/in the last hour/);
+    expect(line(null)).toMatch(/recently/);
+    expect(line(null)).not.toMatch(/day|hour/);
+  });
+
+  it("the undo-able switch no longer claims kinds and structure always ask", () => {
+    expect(podSwitchWords(REVERSIBLE_CLASS_PATTERN).line).not.toMatch(
+      /kinds|structure/
+    );
+  });
+
+  it("a governance number has its words; one with none reads as its token, humanized", () => {
+    const hours = podSettingWords("governance.own_work_fresh_hours");
+    expect(hours.value(2)).toBe("2 hours");
+    expect(hours.unit).toBe("Hours");
+    const unknown = podSettingWords("governance.some_new_limit");
+    expect(unknown.label).toBe("Some new limit");
+    expect(unknown.line).toBeNull();
+    expect(unknown.value(3)).toBe("3");
   });
 });

@@ -53,6 +53,11 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import * as schema from "@synap/database/schema";
+import {
+  AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
+  AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
+  floorClassOf,
+} from "@synap/governance-policy";
 import { governanceRulesRouter } from "./governance-rules.js";
 import { draftMatrixWiden } from "../services/governance/widen-cell.js";
 import type { Context } from "../types/context.js";
@@ -190,5 +195,58 @@ describe("the floor switches, through the person's own doors", () => {
     expect((await refusal(draftMatrixWiden(probe, ALICE))).message).toMatch(
       /cannot be undone/
     );
+  });
+});
+
+describe("the governance numbers, through their door", () => {
+  const HOURS = "governance.own_work_fresh_hours" as const;
+
+  it("an out-of-range value is a BAD_REQUEST, never a 500; an in-range one is stored", async () => {
+    const err = await refusal(
+      caller(ALICE).setPodSetting({ key: HOURS, value: 169 })
+    );
+    expect(err.code).toBe("BAD_REQUEST");
+    await expect(
+      caller(ALICE).setPodSetting({ key: HOURS, value: 48 })
+    ).resolves.toEqual({ value: 48 });
+  });
+
+  it("the read lists each setting with its value, range and switch", async () => {
+    const read = await caller(ALICE).podFloorDefaults();
+    const hours = read.settings.find((s) => s.key === HOURS);
+    expect(hours).toMatchObject({
+      min: 1,
+      max: 168,
+      parameterOf: "@own-organise",
+    });
+    expect(typeof hours?.value).toBe("number");
+    expect(read.settings.map((s) => s.key)).toContain(
+      "governance.project_evidence_min"
+    );
+  });
+});
+
+describe("the platform floors name the switch that lifts them", () => {
+  it("every switchable write sits in an entry its switch lifts; the rest name none", async () => {
+    const { alwaysPropose } = await caller(ALICE).platformDefaults();
+    for (const entry of alwaysPropose) {
+      for (const action of entry.actions) {
+        const family = floorClassOf(action);
+        if (entry.key.startsWith("agent-")) {
+          expect(entry.switchedBy ?? null, `${entry.key} ${action}`).toBe(
+            family
+          );
+        }
+      }
+    }
+    const lifted = alwaysPropose
+      .filter((e) => e.switchedBy)
+      .flatMap((e) => e.actions);
+    for (const key of [
+      ...AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
+      ...AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
+    ]) {
+      expect(lifted, key).toContain(key);
+    }
   });
 });

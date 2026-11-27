@@ -33,12 +33,6 @@ export const en = {
   "podDefaults.title": "How your AIs act",
   "podDefaults.hint":
     "The pod’s default for every AI. An AI’s own page can make it ask more, never less.",
-  "podDefaults.reversible.label": "Act directly on what can be undone",
-  "podDefaults.reversible.line":
-    "They create, edit and link without asking, each change with Undo.",
-  "podDefaults.ownOrganise.label": "Tidy their own new work",
-  "podDefaults.ownOrganise.line":
-    "They file what they made in the last day into the project you named and close their own tasks, each with Undo. Anything you changed since still asks.",
   "podDefaults.failed": "Couldn’t read this setting.",
   "podDefaults.notChanged": "Couldn’t change this setting",
   "podDefaults.notChangedHint": "Nothing changed. Try again.",
@@ -47,19 +41,10 @@ export const en = {
   "podDefaults.turnedOn": "On: {name}",
   "podDefaults.turnedOff": "Off: {name}",
   "podDefaults.adminOnly": "Only a pod admin can change these.",
-  "podDefaults.floors": "These always ask, whatever you choose",
+  "podDefaults.floors": "These always ask",
+  "podDefaults.rulesDoor": "Your approval rules",
+  "podDefaults.switchesFailed": "Couldn’t read the other switches.",
   "podDefaults.floorsFailed": "Couldn’t read what always asks.",
-  "podDefaults.numbers": "Limits the approval rules read",
-  "podDefaults.ownWorkHours.label": "How long new work stays theirs to tidy",
-  "podDefaults.ownWorkHours.line":
-    "For this long after an agent made something, it may file or close it without asking.",
-  "podDefaults.ownWorkHours.value": "{n, plural, one {# hour} other {# hours}}",
-  "podDefaults.evidenceMin.label":
-    "Records an agent needs to propose a project",
-  "podDefaults.evidenceMin.line":
-    "A project an agent proposes with fewer records than this is marked for you and never applies on its own.",
-  "podDefaults.evidenceMin.value":
-    "{n, plural, one {# record} other {# records}}",
   "podDefaults.change": "Change",
   "podDefaults.changeNamed": "Change: {name}",
   "podDefaults.save": "Save",
@@ -121,13 +106,6 @@ export const fr: Catalog<typeof en> = {
   "podDefaults.title": "Comment vos IA agissent",
   "podDefaults.hint":
     "Le réglage par défaut du pod pour toutes les IA. La page d’une IA peut la faire demander davantage, jamais moins.",
-  "podDefaults.reversible.label":
-    "Agir directement sur ce qui peut être annulé",
-  "podDefaults.reversible.line":
-    "Elles créent, modifient et relient sans demander, chaque modification avec Annuler.",
-  "podDefaults.ownOrganise.label": "Ranger leur propre travail récent",
-  "podDefaults.ownOrganise.line":
-    "Elles classent ce qu’elles ont créé depuis un jour dans le projet que vous avez indiqué et ferment leurs propres tâches, chaque fois avec Annuler. Ce que vous avez modifié depuis demande toujours.",
   "podDefaults.failed": "Impossible de lire ce réglage.",
   "podDefaults.notChanged": "Impossible de modifier ce réglage",
   "podDefaults.notChangedHint": "Rien n’a changé. Réessayez.",
@@ -136,21 +114,10 @@ export const fr: Catalog<typeof en> = {
   "podDefaults.turnedOn": "Activé\u00a0: {name}",
   "podDefaults.turnedOff": "Désactivé\u00a0: {name}",
   "podDefaults.adminOnly": "Seul un administrateur du pod peut les modifier.",
-  "podDefaults.floors": "Ceci demande toujours, quel que soit votre choix",
+  "podDefaults.floors": "Ceci demande toujours",
+  "podDefaults.rulesDoor": "Vos règles d’approbation",
+  "podDefaults.switchesFailed": "Impossible de lire les autres réglages.",
   "podDefaults.floorsFailed": "Impossible de lire ce qui demande toujours.",
-  "podDefaults.numbers": "Les limites que lisent les règles d’approbation",
-  "podDefaults.ownWorkHours.label":
-    "Combien de temps un travail récent reste à ranger",
-  "podDefaults.ownWorkHours.line":
-    "Pendant ce délai après qu’un agent a créé quelque chose, il peut le classer ou le clore sans demander.",
-  "podDefaults.ownWorkHours.value":
-    "{n, plural, one {# heure} other {# heures}}",
-  "podDefaults.evidenceMin.label":
-    "Éléments nécessaires pour qu’un agent propose un projet",
-  "podDefaults.evidenceMin.line":
-    "Un projet proposé par un agent avec moins d’éléments est signalé et ne s’applique jamais seul.",
-  "podDefaults.evidenceMin.value":
-    "{n, plural, one {# élément} other {# éléments}}",
   "podDefaults.change": "Modifier",
   "podDefaults.changeNamed": "Modifier\u00a0: {name}",
   "podDefaults.save": "Enregistrer",
