@@ -34,27 +34,39 @@ export async function holdResumeFollowUp(resumed: {
   /** Why it resumed (what moved), as the resume move records it. */
   reason?: string | null;
 }): Promise<void> {
-  if (resumed.subjectType === "track") {
-    await refreshGoalJudgements(resumed.subjectId);
-  } else if (
-    resumed.subjectType === "focus_session" &&
-    resumed.from === "stale"
-  ) {
-    await reviveStaleRuns(resumed.subjectId);
-  }
-  // A session whose step waited on tools (its install request was answered):
-  // the step is checked again (`recheckStageTools`, never throws).
-  if (resumed.subjectType === "focus_session") {
-    const { recheckStageTools } = await import("../playbooks/stage-runner.js");
-    await recheckStageTools(resumed.subjectId);
-  }
-  if (resumed.subjectType === "focus_session" && resumed.hold?.wake === true) {
-    await wakeHolderOnResume({
-      sessionId: resumed.subjectId,
-      hold: resumed.hold,
-      holdTransitionId: resumed.holdTransitionId ?? null,
-      reason: resumed.reason ?? null,
-    });
+  try {
+    if (resumed.subjectType === "track") {
+      await refreshGoalJudgements(resumed.subjectId);
+    } else if (
+      resumed.subjectType === "focus_session" &&
+      resumed.from === "stale"
+    ) {
+      await reviveStaleRuns(resumed.subjectId);
+    }
+    // A session whose step waited on tools (its install request was answered):
+    // the step is checked again (`recheckStageTools`, never throws).
+    if (resumed.subjectType === "focus_session") {
+      const { recheckStageTools } =
+        await import("../playbooks/stage-runner.js");
+      await recheckStageTools(resumed.subjectId);
+    }
+  } finally {
+    // Last, so the agent wakes to a session whose runs and step are already
+    // back; and in `finally`, because the resume has already happened: a
+    // follow-up above that throws makes the job retry, and the retry finds
+    // nothing held, so a wake skipped here would be lost for good. The wake
+    // itself never throws (`wakeHolderOnResume`); the error above still does.
+    if (
+      resumed.subjectType === "focus_session" &&
+      resumed.hold?.wake === true
+    ) {
+      await wakeHolderOnResume({
+        sessionId: resumed.subjectId,
+        hold: resumed.hold,
+        holdTransitionId: resumed.holdTransitionId ?? null,
+        reason: resumed.reason ?? null,
+      });
+    }
   }
 }
 

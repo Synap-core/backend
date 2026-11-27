@@ -144,7 +144,13 @@ async function takeHolderWake(
   return row?.status === "active" ? "rate_limited" : "not_active";
 }
 
-/** Any agent on the roster at all: a `pull` one is woken by the room note. */
+/**
+ * Any agent on the roster at all. Called only when `resolveWakeTarget` found
+ * none it can reach, so by the reach rule (`resolveAgentReach`: an agent user
+ * the pod can run has a type and no key of its own, a bound one is dispatch)
+ * each agent here is `pull`: it works through its own door, and the room note
+ * is what reaches it.
+ */
 async function hasRosterAgent(agentIds: readonly string[]): Promise<boolean> {
   if (agentIds.length === 0) return false;
   const [row] = await db

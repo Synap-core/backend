@@ -43,6 +43,8 @@ const h = vi.hoisted(() => {
     triggers: [] as Array<Record<string, unknown>>,
     /** What the IS turn door answers (false = it could not queue the turn). */
     triggerAnswer: true,
+    /** The stage runner's tool re-check throws (an earlier follow-up fails). */
+    recheckThrows: false,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -117,7 +119,9 @@ vi.mock("../../../utils/channel-visibility.js", async (importOriginal) => {
   };
 });
 vi.mock("../../playbooks/stage-runner.js", () => ({
-  recheckStageTools: async () => undefined,
+  recheckStageTools: async () => {
+    if (h.recheckThrows) throw new Error("tool re-check failed");
+  },
 }));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
@@ -241,6 +245,7 @@ beforeAll(async () => {
 beforeEach(() => {
   h.triggers = [];
   h.triggerAnswer = true;
+  h.recheckThrows = false;
 });
 
 describe("a hold that asked to wake its agent, resumed by a move", () => {
@@ -319,6 +324,24 @@ describe("a hold that asked to wake its agent, resumed by a move", () => {
     // The wake was tried, once, and is not reported as done.
     expect(h.triggers).toHaveLength(1);
     expect(await roomOf(channelId)).toHaveLength(1);
+  });
+});
+
+describe("an earlier resume follow-up that throws", () => {
+  it("still wakes the agent once: the resume already happened and a retry finds nothing held", async () => {
+    h.recheckThrows = true;
+    const thing = randomUUID();
+    const { sessionId } = await session();
+    await pauseUntilMoved(sessionId, thing, true);
+
+    // The follow-up's own error still fails the job (pg-boss retries it)...
+    await expect(moved(thing)).rejects.toThrow("tool re-check failed");
+    expect(await statusOf(sessionId)).toBe("active");
+    // ...but the agent was woken, and the retry wakes nobody again.
+    expect(h.triggers).toHaveLength(1);
+    h.recheckThrows = false;
+    expect(await moved(thing)).toMatchObject({ resumed: 0 });
+    expect(h.triggers).toHaveLength(1);
   });
 });
 
