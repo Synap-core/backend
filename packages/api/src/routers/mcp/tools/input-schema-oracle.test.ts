@@ -38,16 +38,9 @@ const TEXT_EDITS =
 const LAUNCH =
   "synap_run_playbook folded into synap_start_session `launch: true` (review B2 F5): its inputs, and goal no longer required";
 
-/**
- * `synap_run_playbook` is now an old name of `synap_start_session` with
- * `launch: true` (review B2 F5): it keeps its argument NAMES (a missing or an
- * added one is still a difference), each advertised with start_session's
- * schema of the input it maps to.
- */
-const ALIAS_OF_START = (path: string) =>
-  /^synap_run_playbook\.properties\.[^.]+\./.test(path);
-
 const ACCEPTED: Record<string, string> = {
+  "synap_run_playbook.properties":
+    "an old name mapped onto synap_start_session launch: true is not advertised: its arguments are mapped at parse time (review B2 F5, round 2)",
   ...Object.fromEntries(
     [
       "properties.launch",
@@ -150,10 +143,7 @@ describe("oracle: the zod inputs derive the JSON Schema the tools advertised", (
     const found = Object.entries(FROZEN).flatMap(([name, frozen]) =>
       differences(canon(frozen), canon(derived.get(name)), name)
     );
-    expect(found.filter((p) => !(p in ACCEPTED) && !ALIAS_OF_START(p))).toEqual(
-      []
-    );
-    expect(found.some(ALIAS_OF_START)).toBe(true);
+    expect(found.filter((p) => !(p in ACCEPTED))).toEqual([]);
     expect(Object.keys(ACCEPTED).filter((p) => !found.includes(p))).toEqual([]);
   });
 });

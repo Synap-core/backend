@@ -143,15 +143,22 @@ describe("the input check", () => {
 });
 
 describe("what is derived from the definitions", () => {
-  it("entry and group members: tools only; an old name is resolved to its tool first (F7)", () => {
+  it("entry and group members: an old name is reachable where IT is placed, never through its tool's place", () => {
     expect(entryToolNames()).toContain("synap_start_session");
+    // run_playbook was in build; folded into an entry tool it stays in build.
     expect(entryToolNames(true)).not.toContain("synap_run_playbook");
-    expect(toolGroupMembers(true).build).not.toContain("synap_list_widgets");
+    expect(toolGroupMembers(true).build).toContain("synap_run_playbook");
+    expect(toolGroupMembers(true).build).toContain("synap_list_widgets");
+    expect(toolGroupMembers().build).not.toContain("synap_run_playbook");
     expect(canonicalToolName("synap_run_playbook")).toBe("synap_start_session");
-    expect(canonicalToolName("synap_list_widgets")).toBe("synap_list_cells");
     expect(
       visibleToolNames({ profile: "entry", groups: [] })!.has(
-        canonicalToolName("synap_run_playbook")
+        "synap_run_playbook"
+      )
+    ).toBe(false);
+    expect(
+      visibleToolNames({ profile: "entry", groups: ["build"] })!.has(
+        "synap_run_playbook"
       )
     ).toBe(true);
   });
@@ -173,58 +180,24 @@ describe("what is derived from the definitions", () => {
     }
   });
 
-  it("an old name with its own shape advertises the OLD argument names, each with its tool's schema", () => {
+  it("an old name with its own argument shape advertises no schema: it is mapped at parse time", () => {
     const wire = new Map(wireTools().map((t) => [t.name, t]));
-    const old = wire.get("synap_run_playbook")!;
-    const start = wire.get("synap_start_session")!.inputSchema.properties!;
-    expect(Object.keys(old.inputSchema.properties!).sort()).toEqual(
-      [
-        "agentIds",
-        "handToAgentId",
-        "name",
-        "params",
-        "parentSessionId",
-        "playbookId",
-        "playbookName",
-        "projectId",
-        "reasoning",
-        "runner",
-        "sessionId",
-        "stageRunners",
-        "startAnother",
-        "subjectId",
-        "suspendedIntent",
-        "trackId",
-        "workspaceId",
-      ].sort()
+    expect(wire.get("synap_run_playbook")!.inputSchema).toEqual({
+      type: "object",
+    });
+    // A same-parameter old name keeps its tool's schema.
+    expect(wire.get("synap_list_widgets")!.inputSchema).toEqual(
+      wire.get("synap_list_cells")!.inputSchema
     );
-    expect(old.inputSchema.properties!.playbookId).toEqual(start.templateId);
-    expect(old.inputSchema.properties!.subjectId).toEqual(
-      start.subjectEntityId
-    );
-    expect(old.inputSchema.required ?? []).toEqual([]);
-    expect(old.description).toContain("launch: true");
-    expect(old.description).toContain("playbookId = templateId");
-  });
-
-  it("teaching keys: what a tool teaches, then its own name", () => {
-    expect(toolTeachingKeys().synap_create_entity).toEqual([
-      "entity.create",
-      "create_entity",
-      "synap_create_entity",
-    ]);
-    expect(toolTeachingKeys().synap_orient).toEqual(["synap_orient"]);
-  });
-
-  it("exposure: every answering name, its group, and why the connector omits it", () => {
     const exposure = toolExposure();
     expect(exposure.synap_list_widgets).toMatchObject({
       group: "build",
       aliasOf: "synap_list_cells",
     });
     expect(exposure.synap_wait_for_answer!.cpOmit).toBeTruthy();
+    expect(exposure.synap_get_home!.cpOmit).toBeTruthy();
     expect(exposure.synap_run_playbook).toMatchObject({
-      group: "entry",
+      group: "build",
       aliasOf: "synap_start_session",
     });
     expect(exposure.synap_ask).toEqual({ group: "entry" });

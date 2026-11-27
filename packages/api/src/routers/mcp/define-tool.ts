@@ -54,6 +54,11 @@ export interface ToolAlias {
   args?: Record<string, string>;
   /** Tool inputs the old name always means (e.g. `launch: true`). */
   fixedArgs?: Record<string, unknown>;
+  /**
+   * The group whose unlock lets `synap_call_tool` run the old name, when it
+   * is not its tool's: a fold never widens who reaches a door.
+   */
+  group?: McpToolGroupName;
 }
 
 /** A tool's input: one zod object, its keys the tool's arguments. */
@@ -276,19 +281,9 @@ function aliasWire(alias: ToolAlias, tool: RegisteredTool): Tool {
     description: map
       ? `Old name of ${def.name}${how.length > 0 ? ` with ${how.join(", ")}` : ""}, kept so existing clients keep working: its inputs are ${def.name}'s${renamed.length > 0 ? ` (${renamed.map(([from, to]) => `${from} = ${to}`).join(", ")})` : ""}, same answer. Call ${def.name}.`
       : `Old name of ${def.name}, kept so existing clients keep working: same parameters, same answer. Call ${def.name}.`,
-    ...(map
-      ? {
-          inputSchema: {
-            ...wire.inputSchema,
-            properties: Object.fromEntries(
-              Object.entries(map).map(([from, to]) => [from, props[to]])
-            ),
-            required: Object.entries(map)
-              .filter(([, to]) => wire.inputSchema.required?.includes(to))
-              .map(([from]) => from),
-          },
-        }
-      : {}),
+    // A mapped old name is not advertised: its arguments are mapped at parse
+    // time, and its schema would repeat its tool's for nothing.
+    ...(map ? { inputSchema: { type: "object" as const } } : {}),
   };
 }
 
@@ -368,9 +363,29 @@ export function wireTools(): Tool[] {
  * canonicalise it first, `canonicalToolName`).
  */
 export function entryToolNames(callable = false): string[] {
-  return [...reg().byName.values()]
-    .filter(({ def }) => def.group === "entry" && (callable || !def.hidden))
-    .map(({ def }) => def.name);
+  return [
+    ...[...reg().byName.values()]
+      .filter(({ def }) => def.group === "entry" && (callable || !def.hidden))
+      .map(({ def }) => def.name),
+    ...(callable ? aliasesPlaced("entry") : []),
+  ];
+}
+
+/** Where a name is reachable: a tool's group, an old name's own or its tool's. */
+export function toolPlacement(name: string): ToolPlacement | undefined {
+  const a = reg().aliases.get(name);
+  return a ? aliasPlacement(a) : reg().byName.get(name)?.def.group;
+}
+
+/** Where an old name is reachable: its own `group`, else its tool's. */
+function aliasPlacement(a: RegisteredAlias): ToolPlacement {
+  return a.alias.group ?? a.tool.def.group;
+}
+
+function aliasesPlaced(placement: ToolPlacement): string[] {
+  return [...reg().aliases.values()]
+    .filter((a) => aliasPlacement(a) === placement)
+    .map((a) => a.alias.name);
 }
 
 /**
@@ -386,6 +401,12 @@ export function toolGroupMembers(
     (out[def.group] ??= []).push(
       ...(callable || !def.hidden ? [def.name] : [])
     );
+  }
+  if (callable) {
+    for (const a of reg().aliases.values()) {
+      const placed = aliasPlacement(a);
+      if (placed !== "entry") (out[placed] ??= []).push(a.alias.name);
+    }
   }
   return out;
 }
@@ -445,7 +466,7 @@ export function toolExposure(): Record<string, Record<string, string>> {
       ],
       ...(d.aliases ?? []).map((a) => [
         a.name,
-        { group: d.group, aliasOf: d.name, reason: a.reason },
+        { group: a.group ?? d.group, aliasOf: d.name, reason: a.reason },
       ]),
     ])
   );

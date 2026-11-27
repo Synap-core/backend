@@ -2575,6 +2575,7 @@ export function toolDefinitions() {
       aliases: [
         {
           name: "synap_run_playbook",
+          group: "build",
           reason:
             "A launch is a start with launch: true (review B2 F5); the old name stays frozen on the connector as pod__run_playbook, with its argument names.",
           args: {
@@ -3563,6 +3564,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_home",
       group: "read",
+      cpOmit:
+        "Not on the connector before define-tool; adding it is a separate decision.",
       // Same doors as `GET /lifecycle/home` and `/lifecycle/moving` (HOMES).
       access: fence.HOMES,
       annotations: {
@@ -3661,6 +3664,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_inspect_surface",
       group: "build",
+      cpOmit:
+        "Not on the connector before define-tool; adding it is a separate decision.",
       // The surface inspect (`inspectSurface`, shared with
       // `GET /surfaces/inspect`): the cell type and the read log are read
       // outside the seams, so it declares what it reads.
@@ -6451,6 +6456,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_place_on_board",
       group: "build",
+      cpOmit:
+        "Not on the connector before define-tool; adding it is a separate decision.",
       // The board write (`placeOnBoard`): through the gate on the board's own
       // room floor; it returns ids only. Same as Hub POST
       // /whiteboards/:viewId/placements (GATED_ELSEWHERE in the tripwire).
