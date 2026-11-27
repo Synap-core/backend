@@ -9773,7 +9773,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
  *   entity|profile|workspace|project|track|playbook|session
  *                       --attaches-->          view | document | cell_instance
- *                                              (an ATTACHED surface, Surfaces P3)
+ *                                              (an ATTACHED surface)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -9924,7 +9924,7 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  | "extends"
 /**
  * <anchor> --attaches--> view | document | cell_instance. An ATTACHED
- * surface (Surfaces P3, founder decision 23 Nov 2026): 0..n extra screens on
+ * surface: 0..n extra screens on
  * ONE object, beside its kind's look (`renders`, kind-level, in
  * `renderer_bindings`) and its one body (`entities.document_id`). The anchor
  * is any of entity · profile · workspace · project · track · playbook ·
@@ -26470,12 +26470,7 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
-	/**
-	 * The stores that could not be read, with their error: NOT "no bindings".
-	 * Always set by this builder; optional on the type because the field joined
-	 * an existing door's output (an older pod omits it, and typed fixtures in
-	 * dependent repos predate it).
-	 */
+	/** Stores that could not be read: not "no bindings". */
 	unavailable?: {
 		error: string;
 		source: string;
