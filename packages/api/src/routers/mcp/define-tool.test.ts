@@ -100,9 +100,7 @@ describe("the input check", () => {
   });
 
   it("an old name with its own argument shape: taken in its names, handed over in the tool's", () => {
-    expect(canonicalToolName("synap_run_playbook")).toBe(
-      "synap_start_session"
-    );
+    expect(canonicalToolName("synap_run_playbook")).toBe("synap_start_session");
     const out = parseToolArgs("synap_run_playbook", {
       playbookId: "pb-1",
       subjectId: "ent-1",
@@ -131,9 +129,9 @@ describe("the input check", () => {
     expect(
       refusal("synap_run_playbook", { playbookId: "pb-1", startAnother: "yes" })
     ).toContain("startAnother");
-    expect(
-      refusal("synap_run_playbook", { playbookId: 42 })
-    ).toContain("playbookId");
+    expect(refusal("synap_run_playbook", { playbookId: 42 })).toContain(
+      "playbookId"
+    );
   });
 
   it("an unknown tool passes through: the dispatch says it is unknown", () => {

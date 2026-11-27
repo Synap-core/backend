@@ -343,7 +343,9 @@ export function entryToolNames(callable = false): string[] {
   return [...reg().byName.values()]
     .filter(({ def }) => def.group === "entry" && (callable || !def.hidden))
     .flatMap(({ def }) =>
-      callable ? [def.name, ...(def.aliases ?? []).map((a) => a.name)] : [def.name]
+      callable
+        ? [def.name, ...(def.aliases ?? []).map((a) => a.name)]
+        : [def.name]
     );
 }
 
@@ -612,7 +614,11 @@ function mapAliasArgs(
   name: string,
   given: Record<string, unknown>
 ):
-  | { ok: true; args: Record<string, unknown>; renamed?: Record<string, string> }
+  | {
+      ok: true;
+      args: Record<string, unknown>;
+      renamed?: Record<string, string>;
+    }
   | { ok: false; result: CallToolResult } {
   const entry = reg().aliases.get(name);
   const map = entry && aliasArgMap(entry.alias, entry.tool);

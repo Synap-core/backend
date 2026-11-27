@@ -150,9 +150,9 @@ describe("oracle: the zod inputs derive the JSON Schema the tools advertised", (
     const found = Object.entries(FROZEN).flatMap(([name, frozen]) =>
       differences(canon(frozen), canon(derived.get(name)), name)
     );
-    expect(
-      found.filter((p) => !(p in ACCEPTED) && !ALIAS_OF_START(p))
-    ).toEqual([]);
+    expect(found.filter((p) => !(p in ACCEPTED) && !ALIAS_OF_START(p))).toEqual(
+      []
+    );
     expect(found.some(ALIAS_OF_START)).toBe(true);
     expect(Object.keys(ACCEPTED).filter((p) => !found.includes(p))).toEqual([]);
   });
