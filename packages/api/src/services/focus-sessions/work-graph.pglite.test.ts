@@ -136,7 +136,11 @@ vi.mock("./work-graph-nodes.js", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { buildWorkGraph, WORK_GRAPH_CEILING } from "./work-graph.js";
+import {
+  buildWorkGraph,
+  toWorkGraphAppNode,
+  WORK_GRAPH_CEILING,
+} from "./work-graph.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -1123,5 +1127,81 @@ describe("buildWorkGraph — a pathway (B4)", () => {
     } finally {
       h.failThings = false;
     }
+  });
+});
+
+describe("buildWorkGraph — a step's readiness facts", () => {
+  const RDY = "user-readiness";
+  const T = {
+    planned: randomUUID(), // forming, plannedFor 2099-01
+    notDone: randomUUID(), // closed with required work open (closedNotDone)
+    done: randomUUID(), // closed with nothing recorded open
+    plain: randomUUID(), // active, no facts to say
+    old: randomUUID(), // cancelled; a blocker that was REPLACED
+    next: randomUUID(), // closed; replaces `old` (off-window: a far end)
+    waiter: randomUUID(), // forming, blocked by `old`
+  };
+
+  beforeAll(async () => {
+    await session(T.planned, RDY, "forming", { hoursAgo: 1 });
+    await q(`update focus_sessions set metadata = $1::jsonb where id = $2`, [
+      JSON.stringify({ plannedFor: "2099-01", dueBy: "not a date" }),
+      T.planned,
+    ]);
+    await session(T.notDone, RDY, "closed", { hoursAgo: 3, closedHoursAgo: 1 });
+    await q(
+      `update focus_sessions set verification_report = $1::jsonb where id = $2`,
+      [JSON.stringify({ closedNotDone: { reason: "x" } }), T.notDone]
+    );
+    await session(T.done, RDY, "closed", { hoursAgo: 3, closedHoursAgo: 1 });
+    await session(T.plain, RDY, "active", { hoursAgo: 1 });
+    await session(T.old, RDY, "cancelled", {
+      hoursAgo: 24 * 20,
+      closedHoursAgo: 24 * 19,
+    });
+    await session(T.next, RDY, "closed", {
+      hoursAgo: 24 * 18,
+      closedHoursAgo: 24 * 17,
+    });
+    await session(T.waiter, RDY, "forming", { hoursAgo: 1 });
+    await link(T.waiter, T.old, "blocked_by");
+    await link(T.next, T.old, "replaces");
+  });
+
+  it("carries plannedFor, dueBy and closedAs only when they say something", async () => {
+    const g = await graph(RDY);
+    const byId = new Map(g.nodes.map((n) => [n.id, n]));
+    // A valid plannedFor rides; an invalid dueBy is left out.
+    expect(byId.get(T.planned)?.plannedFor).toBe("2099-01");
+    expect(byId.get(T.planned)).not.toHaveProperty("dueBy");
+    expect(byId.get(T.planned)).not.toHaveProperty("closedAs");
+    // The close-anyway record is `not_done`; a plain close is `done`.
+    expect(byId.get(T.notDone)?.closedAs).toBe("not_done");
+    expect(byId.get(T.done)?.closedAs).toBe("done");
+    // A cancelled step ended not done.
+    expect(byId.get(T.old)?.closedAs).toBe("not_done");
+    expect(byId.get(T.plain)).not.toHaveProperty("closedAs");
+    expect(byId.get(T.plain)).not.toHaveProperty("plannedFor");
+  });
+
+  it("draws the replacement into a declared blocker, and brings the replacement as a far end", async () => {
+    const g = await graph(RDY);
+    expect(g.edges).toContainEqual({
+      kind: "replaces",
+      from: T.next,
+      to: T.old,
+    });
+    const next = g.nodes.find((n) => n.id === T.next);
+    expect(next).toBeDefined();
+    expect(next?.closedAs).toBe("done");
+    expect(g.sections.blockedBy).toEqual({ status: "ok" });
+  });
+
+  it("the tRPC wire keeps the three facts", async () => {
+    const g = await graph(RDY);
+    const wire = toWorkGraphAppNode(g.nodes.find((n) => n.id === T.planned)!);
+    expect(wire.plannedFor).toBe("2099-01");
+    const closed = toWorkGraphAppNode(g.nodes.find((n) => n.id === T.notDone)!);
+    expect(closed.closedAs).toBe("not_done");
   });
 });
