@@ -298,20 +298,24 @@ describe("playbook scorecard on real SQL", () => {
       [stray]
     );
 
+    // The SQL is copied out BEFORE the restore: `mockRestore` also clears
+    // `mock.calls`.
     const spy = vi.spyOn(h.client!, "query");
+    const seenSql: string[] = [];
     const { sessions } = await loadPlaybookScorecardRows(db, {
       playbookIds: [pb],
       userId: "user-1",
-    }).finally(() => spy.mockRestore());
+    }).finally(() => {
+      seenSql.push(...spy.mock.calls.map((c) => String(c[0])));
+      spy.mockRestore();
+    });
     expect(
       Object.fromEntries(sessions.map((s) => [s.id, s.closeEvents]))
     ).toEqual({ [twice]: 2, [never]: 0, [once]: 1, [stray]: 1 });
 
     // The events read carries a lower `timestamp` bound: that bound is what
     // lets TimescaleDB skip the chunks older than the sessions.
-    const eventsReads = spy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((s) => /from "events"/i.test(s));
+    const eventsReads = seenSql.filter((s) => /from "events"/i.test(s));
     expect(eventsReads.length).toBeGreaterThan(0);
     for (const s of eventsReads) expect(s).toMatch(/"timestamp" >= /);
   });
