@@ -589,7 +589,9 @@ describe('a NEW agent from /setup/agent starts with "AI — read & propose"', ()
     );
 
     for (const tool of ["synap_ask", "synap_orient", "synap_list_sessions"])
-      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(true);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(
+        true
+      );
 
     const write = (subjectType: string, action: string) =>
       grantWriteDenial(

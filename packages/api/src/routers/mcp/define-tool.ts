@@ -383,7 +383,9 @@ export function toolGroupMembers(
   const out = {} as Record<McpToolGroupName, string[]>;
   for (const { def } of reg().byName.values()) {
     if (def.group === "entry") continue;
-    (out[def.group] ??= []).push(...(callable || !def.hidden ? [def.name] : []));
+    (out[def.group] ??= []).push(
+      ...(callable || !def.hidden ? [def.name] : [])
+    );
   }
   return out;
 }

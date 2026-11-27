@@ -284,9 +284,13 @@ describe("synap_find object catalogs under a key's grant", () => {
 
   it("the door is reachable: a key the synap_find fence admits reads no project or goal it holds no read on", async () => {
     // The fence admits it (the door is live for this key)...
-    expect(mcpToolAllowed(toolDefinition("synap_find")?.access, FIND_DOOR_ONLY_KEY)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_find")?.access, FIND_DOOR_ONLY_KEY)
+    ).toBe(true);
     // ...and a pinned key never passes the aggregate fence at all.
-    expect(mcpToolAllowed(toolDefinition("synap_find")?.access, SPACE_A_KEY)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_find")?.access, SPACE_A_KEY)
+    ).toBe(false);
 
     const r = await runWithGrant(FIND_DOOR_ONLY_KEY, () => find());
     expect(matchIds(r.projects)).toEqual([]);

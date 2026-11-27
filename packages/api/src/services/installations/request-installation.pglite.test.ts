@@ -536,8 +536,12 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
       ],
       clientId: null,
     } as never;
-    expect(mcpToolAllowed(toolDefinition("synap_list_installations")?.access, AI)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_request_installation")?.access, AI)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_list_installations")?.access, AI)
+    ).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_request_installation")?.access, AI)
+    ).toBe(true);
     const out = await runWithGrant(AI, () =>
       asAgent("synap_list_installations", { capabilityKey: "media-ffmpeg" })
     );

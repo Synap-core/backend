@@ -158,9 +158,7 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
       });
     }
     expect(waiting.length).toBeGreaterThan(0);
-    expect(
-      waiting.filter((t) => toolUntimed(t) !== "long_poll")
-    ).toEqual([]);
+    expect(waiting.filter((t) => toolUntimed(t) !== "long_poll")).toEqual([]);
   });
 
   it("MCP: every tool that declares openWorldHint is never timed", () => {
@@ -170,9 +168,9 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
       (t) => toolDefinition(t)?.annotations?.openWorldHint === true
     );
     expect(openWorld).toContain("synap_run_capability");
-    expect(
-      openWorld.filter((t) => guardPolicy(toolUntimed(t)).timed)
-    ).toEqual([]);
+    expect(openWorld.filter((t) => guardPolicy(toolUntimed(t)).timed)).toEqual(
+      []
+    );
     const handler = readFileSync(join(MCP_DIR, "http-handler.ts"), "utf8");
     expect(handler).toMatch(/toolUntimed\(toolName\)/);
   });

@@ -610,17 +610,25 @@ describe("grant fence: a scoped key reads a board only when its grant reads view
   it("Hub route and MCP tool share one declaration", () => {
     const path = `/whiteboards/${VIEW}/scene`;
     expect(restDoorAllowed("GET", path, grantOf(ALL, null))).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_read_board")?.access, grantOf(ALL, null))).toBe(
-      true
-    );
+    expect(
+      mcpToolAllowed(
+        toolDefinition("synap_read_board")?.access,
+        grantOf(ALL, null)
+      )
+    ).toBe(true);
     // Pinned to a space: the reader is not narrowed by a grant, so refused.
     expect(restDoorAllowed("GET", path, grantOf(ALL, [WS]))).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_read_board")?.access, grantOf(ALL, [WS]))).toBe(
-      false
-    );
+    expect(
+      mcpToolAllowed(
+        toolDefinition("synap_read_board")?.access,
+        grantOf(ALL, [WS])
+      )
+    ).toBe(false);
     // Missing a subject the scene reads: refused.
     const noEntity = grantOf(["view.read", "document.read"], null);
     expect(restDoorAllowed("GET", path, noEntity)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_read_board")?.access, noEntity)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_read_board")?.access, noEntity)
+    ).toBe(false);
   });
 });

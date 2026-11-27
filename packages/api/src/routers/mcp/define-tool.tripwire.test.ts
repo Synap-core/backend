@@ -84,9 +84,7 @@ export function handWrittenToolTables(
   for (const m of src.matchAll(TOOL_LIST))
     if (names(m[0]).filter(isTool).length >= 2)
       out.push({ shape: "list", hit: m[0] });
-  const keys = [...src.matchAll(TOOL_KEY)]
-    .map((m) => m[1]!)
-    .filter(isTool);
+  const keys = [...src.matchAll(TOOL_KEY)].map((m) => m[1]!).filter(isTool);
   if (keys.length >= 2)
     out.push({ shape: "keyed", hit: `${keys.length} keys: ${keys[0]}, …` });
   return out.map((h) => ({

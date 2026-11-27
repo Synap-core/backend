@@ -251,7 +251,13 @@ const MEMORY_RECALL = READS("entity", "preference");
  * every one of them while the same key could call the MCP tools.
  */
 /** The lens map: MCP `synap_orient` and Hub `GET /orient` both call `discover()`. */
-export const ORIENT = READS("entity", "project", "session", "proposal", "track");
+export const ORIENT = READS(
+  "entity",
+  "project",
+  "session",
+  "proposal",
+  "track"
+);
 /** The kinds and roles: both call tRPC `profiles.listProfiles`. */
 export const LIST_PROFILES = READS("entity");
 /** A space's automations: both call tRPC `automations.listAutomations`. */

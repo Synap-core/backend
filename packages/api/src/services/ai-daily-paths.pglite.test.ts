@@ -202,7 +202,9 @@ describe("the key minted for a new AI carries the preset (non-vacuity)", () => {
 describe("a new AI CAN do its daily work", () => {
   it("reads through the aggregate MCP doors: ask, orient, find", () => {
     for (const tool of ["synap_ask", "synap_orient", "synap_find"])
-      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(true);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(
+        true
+      );
   });
 
   // Each pair is the door's own gate call:
@@ -227,7 +229,9 @@ describe("a new AI CAN do its daily work", () => {
   );
 
   it("posts in its session room: a write tool, past the read fence (no grant rung on a room post)", () => {
-    expect(mcpToolAllowed(toolDefinition("synap_post_message")?.access, grant)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_post_message")?.access, grant)
+    ).toBe(true);
   });
 
   it("waits on its own proposal: GET /proposals/:id passes, the same door as MCP", () => {
@@ -235,7 +239,9 @@ describe("a new AI CAN do its daily work", () => {
     // while `synap_get_proposal` read the same row (finding 9a415c59).
     const path = `/proposals/${randomUUID()}`;
     expect(restDoorAllowed("GET", path, grant)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_get_proposal")?.access, grant)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_proposal")?.access, grant)
+    ).toBe(true);
   });
 
   it("rejects (withdraws) its OWN proposal", async () => {

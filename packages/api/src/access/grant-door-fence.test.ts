@@ -506,14 +506,26 @@ describe("self-introspection doors", () => {
 
 describe("mcpToolAllowed", () => {
   it("read tools only when seamed; classified write tools always", () => {
-    expect(mcpToolAllowed(toolDefinition("synap_get_entities")?.access, DOC_ONLY)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, DOC_ONLY)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_create_entity")?.access, DOC_ONLY)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_entities")?.access, DOC_ONLY)
+    ).toBe(true);
+    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, DOC_ONLY)).toBe(
+      false
+    );
+    expect(
+      mcpToolAllowed(toolDefinition("synap_create_entity")?.access, DOC_ONLY)
+    ).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)
+    ).toBe(false);
   });
   it("an unclassified non-read tool is refused (closed by default, R1)", () => {
-    expect(mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)
+    ).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_not_classified")?.access, AI)
+    ).toBe(false);
   });
   it("a write tool that returns rows passes its read door", () => {
     const PINNED_AI = key({
@@ -524,17 +536,27 @@ describe("mcpToolAllowed", () => {
     // The same rule as its REST twin GET /focus-sessions/:id/answers/wait.
     const S = "11111111-1111-4111-8111-111111111111";
     for (const grant of [AI, PINNED_AI, DOC_ONLY]) {
-      expect(mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, grant)).toBe(
+      expect(
+        mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, grant)
+      ).toBe(
         restDoorAllowed("GET", `/focus-sessions/${S}/answers/wait`, grant)
       );
     }
-    expect(mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, AI)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, PINNED_AI)).toBe(
-      false
-    );
-    expect(mcpToolAllowed(toolDefinition("synap_get_channel")?.access, AI)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_get_channel")?.access, PINNED_AI)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_get_channel")?.access, DOC_ONLY)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, AI)
+    ).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_wait_for_answer")?.access, PINNED_AI)
+    ).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_channel")?.access, AI)
+    ).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_channel")?.access, PINNED_AI)
+    ).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_channel")?.access, DOC_ONLY)
+    ).toBe(false);
   });
   it.each([
     "synap_ask",
@@ -547,7 +569,9 @@ describe("mcpToolAllowed", () => {
   });
   it("an aggregate door needs EVERY subject it reads, unnarrowed", () => {
     // document.read alone does not read the entities ask returns.
-    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, DOC_ONLY)).toBe(false);
+    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, DOC_ONLY)).toBe(
+      false
+    );
     // Every subject, but only one kind of entity: ask cannot narrow to it.
     const oneKind = key({
       permissions: [
@@ -559,30 +583,44 @@ describe("mcpToolAllowed", () => {
         "project.read",
       ],
     });
-    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, oneKind)).toBe(false);
+    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, oneKind)).toBe(
+      false
+    );
     // Every subject, but narrowed to one workspace: refused.
     const ai = GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
       .grant.permissions;
     expect(
-      mcpToolAllowed(toolDefinition("synap_ask")?.access,
+      mcpToolAllowed(
+        toolDefinition("synap_ask")?.access,
         key({ permissions: ai, workspaceIds: ["w1"] })
       )
     ).toBe(false);
     // The same scope beside an unnarrowed one passes (any ONE scope suffices).
     expect(
-      mcpToolAllowed(toolDefinition("synap_ask")?.access,
+      mcpToolAllowed(
+        toolDefinition("synap_ask")?.access,
         key({ permissions: ai, workspaceIds: ["w1"] }, { permissions: ai })
       )
     ).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_diagnose")?.access, AI)).toBe(false);
+    expect(mcpToolAllowed(toolDefinition("synap_diagnose")?.access, AI)).toBe(
+      false
+    );
   });
   it("a deny-all key passes no declared door, even one that reads no subject", () => {
     const denyAll = key({ permissions: [] });
-    expect(mcpToolAllowed(toolDefinition("synap_load_skill")?.access, denyAll)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, denyAll)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_load_skill")?.access, denyAll)
+    ).toBe(false);
+    expect(mcpToolAllowed(toolDefinition("synap_ask")?.access, denyAll)).toBe(
+      false
+    );
     expect(restDoorAllowed("POST", "/knowledge/ask", denyAll)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_load_skill")?.access, DOC_ONLY)).toBe(true);
-    expect(mcpToolAllowed(toolDefinition("synap_load_skill")?.access, AI)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_load_skill")?.access, DOC_ONLY)
+    ).toBe(true);
+    expect(mcpToolAllowed(toolDefinition("synap_load_skill")?.access, AI)).toBe(
+      true
+    );
   });
   it("hub POST reads follow the same declaration", () => {
     expect(restDoorAllowed("POST", "/knowledge/ask", AI)).toBe(true);
@@ -964,7 +1002,10 @@ describe("the release door (finding 4d14ce47): an app reads Ship, narrowed", () 
       ok
     );
     expect(
-      mcpToolAllowed(toolDefinition("synap_get_work_release")?.access, app(...permissions))
+      mcpToolAllowed(
+        toolDefinition("synap_get_work_release")?.access,
+        app(...permissions)
+      )
     ).toBe(ok);
   });
 
@@ -1345,15 +1386,12 @@ describe("Raycast's REST twins of MCP read tools: one rule per reader", () => {
     expect(restDoorAllowed("GET", `${path}/`, COMPUTER)).toBe(true);
   });
 
-  it.each(TWINS)(
-    "GET %s answers every key as MCP %s does",
-    (path, tool) => {
-      for (const g of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY, AI])
-        expect(restDoorAllowed("GET", path, g)).toBe(
-          mcpToolAllowed(toolDefinition(tool)?.access, g)
-        );
-    }
-  );
+  it.each(TWINS)("GET %s answers every key as MCP %s does", (path, tool) => {
+    for (const g of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY, AI])
+      expect(restDoorAllowed("GET", path, g)).toBe(
+        mcpToolAllowed(toolDefinition(tool)?.access, g)
+      );
+  });
 
   it.each(TWINS)(
     "GET %s stays refused to a pinned, deny-all or partial key",
@@ -1444,9 +1482,12 @@ describe("the needs-you door: an app reads what needs the person, narrowed", () 
   );
 
   it("MCP synap_needs_you keeps its rule: every subject, unbounded", () => {
-    expect(mcpToolAllowed(toolDefinition("synap_needs_you")?.access, app("session.read"))).toBe(
-      false
-    );
+    expect(
+      mcpToolAllowed(
+        toolDefinition("synap_needs_you")?.access,
+        app("session.read")
+      )
+    ).toBe(false);
     const all = key({
       permissions: [
         "session.read",
@@ -1455,7 +1496,9 @@ describe("the needs-you door: an app reads what needs the person, narrowed", () 
         "entity.read",
       ],
     });
-    expect(mcpToolAllowed(toolDefinition("synap_needs_you")?.access, all)).toBe(true);
+    expect(mcpToolAllowed(toolDefinition("synap_needs_you")?.access, all)).toBe(
+      true
+    );
     expect(restDoorAllowed("GET", "/needs-you", all)).toBe(true);
   });
 
@@ -1507,8 +1550,12 @@ describe("the work graph and timeline doors: an app reads them under its grant (
 
   it("MCP keeps the whole rule: a session-only key is refused there", () => {
     const narrow = podWide("session.read");
-    expect(mcpToolAllowed(toolDefinition("synap_get_work_graph")?.access, narrow)).toBe(false);
-    expect(mcpToolAllowed(toolDefinition("synap_get_timeline")?.access, narrow)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_work_graph")?.access, narrow)
+    ).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_timeline")?.access, narrow)
+    ).toBe(false);
   });
 
   it("whole for a person, a full key, a key reading every subject unbounded", () => {
@@ -1625,13 +1672,19 @@ describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", 
 
   it("an aggregate READS door refuses a project pin as it refuses a space pin", () => {
     for (const tool of ["synap_list_sessions", "synap_list_proposals"]) {
-      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_SPACE)).toBe(false);
-      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_PROJECT)).toBe(false);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_SPACE)).toBe(
+        false
+      );
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_PROJECT)).toBe(
+        false
+      );
     }
     // The seamed MCP lists pass both.
     for (const tool of ["synap_list_tracks", "synap_list_views"]) {
       expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_SPACE)).toBe(true);
-      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_PROJECT)).toBe(true);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, IN_PROJECT)).toBe(
+        true
+      );
     }
   });
 

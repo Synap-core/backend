@@ -810,7 +810,14 @@ export function toolDefinitions() {
       name: "synap_ask",
       group: "entry",
       // Aggregate doors: the subjects they read.
-      access: fence.READS("entity", "document", "relation", "proposal", "preference", "project"),
+      access: fence.READS(
+        "entity",
+        "document",
+        "relation",
+        "proposal",
+        "preference",
+        "project"
+      ),
       // It may run a model without declaring `openWorldHint`.
       untimed: "model",
       narrow:
@@ -1295,8 +1302,7 @@ export function toolDefinitions() {
       name: "synap_list_profiles",
       group: "read",
       access: fence.LIST_PROFILES,
-      narrow:
-        "Lower `limit` and page with `offset` (use `nextOffset`).",
+      narrow: "Lower `limit` and page with `offset` (use `nextOffset`).",
       brief: {
         governance: null, // read-only discovery, no checkPermissionOrPropose door
         postureSlug: null,
@@ -1334,8 +1340,7 @@ export function toolDefinitions() {
       name: "synap_get_relations",
       group: "read",
       access: fence.SEAMED,
-      narrow:
-        "Lower `limit` (the newest relations come first).",
+      narrow: "Lower `limit` (the newest relations come first).",
       teaches: ["graph.relations"],
       annotations: {
         title: "Get relations",
@@ -1407,7 +1412,14 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_graph",
       group: "read",
-      access: fence.READS("entity", "relation", "link", "document", "session", "project"),
+      access: fence.READS(
+        "entity",
+        "relation",
+        "link",
+        "document",
+        "session",
+        "project"
+      ),
       narrow:
         "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
       teaches: ["graph.relations"],
@@ -2594,14 +2606,12 @@ export function toolDefinitions() {
         openWorldHint: true,
       },
       description:
-        "Start a focus session: goal-bound work. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, its space comes from its playbook, subject, parent session, project or your focus. Decompose with parentSessionId (children) and blockedBy*Ids (ordering), never a chain in the goal; a blocking prerequisite is a child with suspendedIntent. An open session with the same goal here comes back 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`); another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title (`binding` says which). Without templateId, `playbooks` ranks candidates (suggestions); follow or release one later with synap_update_session followPlaybookId; templateId: null skips the ranking. `offers` (suggestions) lists open goals, close sessions to continue, or homes. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus). DECLARE at least one criterion, or an outcome with `verify`, else the start is refused (NO_CRITERIA, nothing created): 2-5 binary, observable statements; `outcomes` for what it will produce. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to; only the playbook inputs count, its goal and criteria are the playbook's. Outcomes, none to retry: \"draft\" (the person's draft until they accept; tell them), \"proposed\" (SUCCESS, pass on reviewUrl), \"blocked\" (nothing ran: `unenabledSkills`; again once `enableProposals` are approved), \"running\", \"already_running\" (`session` is the live run; startAnother only if asked), \"generated\" (pass on generated.reviewUrl), \"skipped\" (read `message`).",
+        'Start a focus session: goal-bound work. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, its space comes from its playbook, subject, parent session, project or your focus. Decompose with parentSessionId (children) and blockedBy*Ids (ordering), never a chain in the goal; a blocking prerequisite is a child with suspendedIntent. An open session with the same goal here comes back \'deduped\': continue it. DEFAULTS: your writes are grouped into this conversation\'s session (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`); another conversation\'s session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject\'s kind; else the parent\'s; else the main-red playbook for a `main red:` title (`binding` says which). Without templateId, `playbooks` ranks candidates (suggestions); follow or release one later with synap_update_session followPlaybookId; templateId: null skips the ranking. `offers` (suggestions) lists open goals, close sessions to continue, or homes. With a subject, the session\'s step IS the subject\'s status: move the thing (synap_update_entity + expectedStatus). DECLARE at least one criterion, or an outcome with `verify`, else the start is refused (NO_CRITERIA, nothing created): 2-5 binary, observable statements; `outcomes` for what it will produce. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to; only the playbook inputs count, its goal and criteria are the playbook\'s. Outcomes, none to retry: "draft" (the person\'s draft until they accept; tell them), "proposed" (SUCCESS, pass on reviewUrl), "blocked" (nothing ran: `unenabledSkills`; again once `enableProposals` are approved), "running", "already_running" (`session` is the live run; startAnother only if asked), "generated" (pass on generated.reviewUrl), "skipped" (read `message`).',
       input: z.object({
         launch: z
           .boolean()
           .optional()
-          .describe(
-            "true: RUN the playbook (see the description)."
-          ),
+          .describe("true: RUN the playbook (see the description)."),
         forceCreate: z
           .boolean()
           .optional()
@@ -2706,9 +2716,7 @@ export function toolDefinitions() {
         startAnother: z
           .boolean()
           .optional()
-          .describe(
-            "With launch: a second run beside a live one."
-          ),
+          .describe("With launch: a second run beside a live one."),
         reasoning: z
           .string()
           .optional()
@@ -3221,7 +3229,13 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_session",
       group: "entry",
-      access: fence.READS("session", "channel", "proposal", "document", "entity"),
+      access: fence.READS(
+        "session",
+        "channel",
+        "proposal",
+        "document",
+        "entity"
+      ),
       narrow:
         "Call again with detail:'lean' (the outcomes, what is owed, the next move, the last room posts).",
       annotations: {
@@ -3693,8 +3707,7 @@ export function toolDefinitions() {
       name: "synap_list_sessions",
       group: "sessions",
       access: fence.READS("session", "project"),
-      narrow:
-        "Lower `limit` and page with `offset`.",
+      narrow: "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List focus sessions",
         readOnlyHint: true,
@@ -3898,8 +3911,7 @@ export function toolDefinitions() {
       group: "sessions",
       // The roster of agents (+ their computers and dispatch tool) for hand-off.
       access: fence.READS("agent", "tool"),
-      narrow:
-        "Lower `limit` and page with `offset`.",
+      narrow: "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List agents and computers",
         readOnlyHint: true,
@@ -5102,8 +5114,7 @@ export function toolDefinitions() {
       name: "synap_list_workspaces",
       group: "spaces",
       access: fence.READS("entity", "project"),
-      narrow:
-        "Lower `limit` and page with `offset`.",
+      narrow: "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List spaces",
         readOnlyHint: true,
@@ -6314,7 +6325,15 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_export_project_pack",
       group: "spaces",
-      access: fence.READS("project", "entity", "document", "relation", "playbook", "view", "track"),
+      access: fence.READS(
+        "project",
+        "entity",
+        "document",
+        "relation",
+        "playbook",
+        "view",
+        "track"
+      ),
       annotations: {
         title: "Export project as suite pack",
         readOnlyHint: true,
@@ -6574,8 +6593,7 @@ export function toolDefinitions() {
       name: "synap_list_cells",
       group: "build",
       access: fence.READS("widget", "view"),
-      narrow:
-        "Lower `limit` and page with `offset` (use `nextOffset`).",
+      narrow: "Lower `limit` and page with `offset` (use `nextOffset`).",
       aliases: [
         {
           name: "synap_list_widgets",
@@ -7715,7 +7733,9 @@ export function toolDefinitions() {
       // (`routers/mcp/index.ts`), so a fenced key is judged on the tool it
       // names, never this name. Refused here so that if the name ever did
       // reach the fence, it would stay closed.
-      access: fence.REFUSED("A dispatcher: the fence judges the tool it names, never this name."),
+      access: fence.REFUSED(
+        "A dispatcher: the fence judges the tool it names, never this name."
+      ),
       annotations: {
         title: "Call a tool",
         // It may run any write: a client approves it as one.
