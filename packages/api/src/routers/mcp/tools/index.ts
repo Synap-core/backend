@@ -809,15 +809,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_ask",
       group: "entry",
-      // Aggregate doors: the subjects they read.
-      access: fence.READS(
-        "entity",
-        "document",
-        "relation",
-        "proposal",
-        "preference",
-        "project"
-      ),
+      access: fence.WRITE,
       // It may run a model without declaring `openWorldHint`.
       untimed: "model",
       narrow:

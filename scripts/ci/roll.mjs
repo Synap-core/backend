@@ -49,7 +49,7 @@ export const SIBLINGS = [
     dir: "synap-control-plane-api",
     repo: "Synap-core/control-plane-api",
     mirrors: [],
-    noMirror:
+    _negctl:
       "Read, never mirrored: backend tests read it at the pin (its pod-tool catalog, package schema, content kinds, reserved app ids); the door tool names derive from each tool's definition (cpOmit), so nothing here is generated from it.",
   },
 ];

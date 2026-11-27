@@ -59,7 +59,6 @@ const HANDLERS_DIR = join(MCP_DIR, "handlers");
  */
 const DISPATCHED_INLINE_IN_TOOLS_INDEX = new Set([
   "synap_load_skill",
-  "synap_call_tool",
 ]);
 
 /** Every defined tool (aliases dispatch through their tool's handler). */

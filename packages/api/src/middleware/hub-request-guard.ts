@@ -214,6 +214,8 @@ export function classifyHubRestRequest(
   return null;
 }
 
+export const MCP_MODEL_TOOLS = new Set(["synap_ask", "synap_capture"]);
+
 // ── In-flight counters ────────────────────────────────────────────────────
 
 const inFlight = new Map<string, number>();
