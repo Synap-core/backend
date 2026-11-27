@@ -6430,7 +6430,7 @@ export function toolDefinitions() {
         destructiveHint: false,
         openWorldHint: false,
       },
-      description: `Replace a whiteboard's whole saved content with a tldraw store. Governed. To add, move or remove shapes use synap_place_on_board. To rename a view or change its config use synap_update_view.`,
+      description: `Replace a whiteboard's whole saved content with a tldraw store. Governed. To rename a view or change its config use synap_update_view.`,
       input: z.object({
         viewId: z.string().describe("View UUID to update"),
         store: z
@@ -6531,7 +6531,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_place_on_board.",
+        "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success.",
       input: z.object({
         viewId: z.string().describe("View UUID to edit"),
         name: z.string().optional().describe("New name (1-100 chars)."),

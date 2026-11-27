@@ -189,6 +189,21 @@ export const SKILL_STEMS_THAT_UNLOCK = Object.keys(SKILL_STEM_GROUPS);
 /** The skill packages whose every chapter unlocks a group (test seam: every key is a real package). */
 export const SKILL_PACKAGES_THAT_UNLOCK = Object.keys(SKILL_PACKAGE_GROUPS);
 
+/**
+ * The group vocabulary and the skill-unlock map, as the manifest publishes
+ * them (`groups`): the control plane reads them there, never this file.
+ */
+export function toolGroupVocabulary() {
+  return {
+    names: TOOL_GROUP_NAMES,
+    purposes: TOOL_GROUP_PURPOSES,
+    refPrefix: TOOL_GROUP_REF_PREFIX,
+    builderRef: BUILDER_REF,
+    skillStems: SKILL_STEM_GROUPS,
+    skillPackages: SKILL_PACKAGE_GROUPS,
+  };
+}
+
 export interface KeyToolAccess {
   profile: ApiKeyToolProfile | null;
   /** Groups unlocked on the key (`api_keys.tool_groups`). */

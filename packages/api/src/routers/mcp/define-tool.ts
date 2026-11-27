@@ -281,9 +281,21 @@ function aliasWire(alias: ToolAlias, tool: RegisteredTool): Tool {
     description: map
       ? `Old name of ${def.name}${how.length > 0 ? ` with ${how.join(", ")}` : ""}, kept so existing clients keep working: its inputs are ${def.name}'s${renamed.length > 0 ? ` (${renamed.map(([from, to]) => `${from} = ${to}`).join(", ")})` : ""}, same answer. Call ${def.name}.`
       : `Old name of ${def.name}, kept so existing clients keep working: same parameters, same answer. Call ${def.name}.`,
-    // A mapped old name is not advertised: its arguments are mapped at parse
-    // time, and its schema would repeat its tool's for nothing.
-    ...(map ? { inputSchema: { type: "object" as const } } : {}),
+    // The old argument names, each with its tool's schema: the manifest is the
+    // control plane's contract for the frozen name, even though it is unlisted.
+    ...(map
+      ? {
+          inputSchema: {
+            ...wire.inputSchema,
+            properties: Object.fromEntries(
+              Object.entries(map).map(([from, to]) => [from, props[to]])
+            ),
+            required: Object.entries(map)
+              .filter(([, to]) => wire.inputSchema.required?.includes(to))
+              .map(([from]) => from),
+          },
+        }
+      : {}),
   };
 }
 

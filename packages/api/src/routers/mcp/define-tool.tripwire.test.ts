@@ -31,6 +31,9 @@ import {
   definedToolNames,
   isDefinedTool,
   isPodToolName,
+  toolDefinition,
+  toolNameOnDoor,
+  wireTools,
 } from "./define-tool.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -204,6 +207,34 @@ describe("tripwire: one definition per MCP tool", () => {
         (a) => !hits.some((h) => h.shape === a.shape && a.file.test(h.file))
       ).map((a) => `${a.file} (${a.shape})`),
       "An ALLOWED entry matches nothing any more: delete it."
+    ).toEqual([]);
+  });
+
+  it("no text a connector tool carries names a tool the connector omits (cpOmit)", () => {
+    // What the control plane's gen-pod-tools refuses (dangling references),
+    // refused here first: an agent on the connector would be sent to a door
+    // it does not have.
+    const dangling = (text: string) =>
+      [...new Set(text.match(/\bsynap_[a-z_]+\b/g) ?? [])].filter(
+        (n) =>
+          toolDefinition(n) !== undefined &&
+          toolNameOnDoor(n, "cp-connector") === null
+      );
+    // SELF-CHECK: it sees an omitted tool named in prose, and lets a listed one pass.
+    expect(dangling("then call synap_wait_for_answer")).toEqual([
+      "synap_wait_for_answer",
+    ]);
+    expect(dangling("then call synap_get_session")).toEqual([]);
+    const onConnector = wireTools().filter(
+      (t) => toolNameOnDoor(t.name, "cp-connector") !== null
+    );
+    expect(onConnector.length).toBeGreaterThan(100);
+    expect(
+      onConnector.flatMap((t) =>
+        dangling(
+          JSON.stringify({ d: t.description, s: t.inputSchema })
+        ).map((n) => `${t.name} names ${n}`)
+      )
     ).toEqual([]);
   });
 });

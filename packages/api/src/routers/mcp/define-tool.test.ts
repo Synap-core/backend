@@ -180,11 +180,14 @@ describe("what is derived from the definitions", () => {
     }
   });
 
-  it("an old name with its own argument shape advertises no schema: it is mapped at parse time", () => {
+  it("an old name with its own argument shape advertises the OLD argument names, each with its tool's schema (the manifest is the connector's contract)", () => {
     const wire = new Map(wireTools().map((t) => [t.name, t]));
-    expect(wire.get("synap_run_playbook")!.inputSchema).toEqual({
-      type: "object",
-    });
+    const old = wire.get("synap_run_playbook")!.inputSchema.properties!;
+    const start = wire.get("synap_start_session")!.inputSchema.properties!;
+    expect(old.playbookId).toEqual(start.templateId);
+    expect(old.subjectId).toEqual(start.subjectEntityId);
+    expect(old.workspaceId).toEqual(start.workspaceId);
+    expect(old).not.toHaveProperty("templateId");
     // A same-parameter old name keeps its tool's schema.
     expect(wire.get("synap_list_widgets")!.inputSchema).toEqual(
       wire.get("synap_list_cells")!.inputSchema

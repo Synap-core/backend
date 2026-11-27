@@ -31,6 +31,7 @@ import { dirname, resolve } from "node:path";
 import prettier from "prettier";
 import { tools } from "./index.js";
 import { toolExposure } from "../define-tool.js";
+import { toolGroupVocabulary } from "../tool-profiles.js";
 import { SYNAP_INSTRUCTIONS } from "../index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,7 @@ async function main() {
     // it, from its definition: the control plane derives its surface from
     // this instead of curating it by hand.
     exposure: toolExposure(),
+    groups: toolGroupVocabulary(),
     instructions: SYNAP_INSTRUCTIONS,
   };
   const raw = JSON.stringify(manifest, null, 2) + "\n";
