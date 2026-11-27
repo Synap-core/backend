@@ -58,6 +58,7 @@ import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type { DeviceKind, DeviceStatus } from "../device-manifest/index.js";
 import type { ProcessNeed } from "../processes/read.js";
 import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
 import type {
@@ -2607,6 +2608,43 @@ export const STEP_RUNNER_KIND_LABELS = {
 export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
 
 /**
+ * What a device IS, in a person's words (`DEVICE_KINDS`,
+ * `@synap-core/types/device-manifest`): the Devices page's kind mark and
+ * filter. Keyed by EVERY kind: a kind added without its words stops the
+ * build. The `device` noun is `OBJECT_KINDS.device`'s.
+ */
+export const DEVICE_KIND_LABELS = {
+  computer: "Computer",
+  vm: "Virtual machine",
+  container: "Container",
+  cloud_server: "Cloud server",
+  storage: "Storage",
+  phone: "Phone",
+  printer: "Printer",
+  camera: "Camera",
+  sensor: "Sensor",
+  other: "Other",
+} as const satisfies Readonly<Record<DeviceKind, string>>;
+
+/** The device kind rows, exactly typed: the keys of the `deviceKind.*` catalog. */
+export type DeviceKindLabelRows = typeof DEVICE_KIND_LABELS;
+
+/**
+ * A device's status, the read verdict `deriveDeviceStatus` (`DEVICE_STATUSES`,
+ * `@synap-core/types/device-manifest`). `unknown` is a device that never
+ * reported, so it says that. Keyed by EVERY status.
+ */
+export const DEVICE_STATUS_LABELS = {
+  online: "Online",
+  offline: "Offline",
+  degraded: "Degraded",
+  unknown: "Not reported yet",
+} as const satisfies Readonly<Record<DeviceStatus, string>>;
+
+/** The device status rows, exactly typed: the keys of the `deviceStatus.*` catalog. */
+export type DeviceStatusLabelRows = typeof DEVICE_STATUS_LABELS;
+
+/**
  * A NEED's name (0426, `NEEDS` in `@synap-core/types/needs`): what a process
  * read, the need picker and a run's "missing" line call it. Keyed by EVERY
  * need slug; `needs-labels.test.ts` pins each English word to `NEEDS`' own
@@ -2784,6 +2822,42 @@ export function resolveStepRunnerLabel(
   return (
     translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
     STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * What a device is (`vm` → "Virtual machine"), in `opts.locale` (else the
+ * ambient catalog locale), through `deviceKind.<kind>`. An unknown kind (a
+ * newer pod's) humanizes; none is "".
+ */
+export function resolveDeviceKindLabel(
+  kind: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!kind) return "";
+  const key = kind.trim().toLowerCase();
+  if (!Object.hasOwn(DEVICE_KIND_LABELS, key)) return humanizeToken(kind);
+  return (
+    translatedWord(`deviceKind.${key}`, catalogLocaleOf(opts?.locale)) ??
+    DEVICE_KIND_LABELS[key as keyof DeviceKindLabelRows]
+  );
+}
+
+/**
+ * A device's status (`online`, `offline`, `degraded`, `unknown`), in
+ * `opts.locale` (else the ambient catalog locale), through
+ * `deviceStatus.<status>`. An unknown token humanizes; none is "".
+ */
+export function resolveDeviceStatusLabel(
+  status: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  if (!Object.hasOwn(DEVICE_STATUS_LABELS, key)) return humanizeToken(status);
+  return (
+    translatedWord(`deviceStatus.${key}`, catalogLocaleOf(opts?.locale)) ??
+    DEVICE_STATUS_LABELS[key as keyof DeviceStatusLabelRows]
   );
 }
 
@@ -4494,6 +4568,8 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
+  deviceKinds: DEVICE_KIND_LABELS,
+  deviceStatuses: DEVICE_STATUS_LABELS,
   needs: NEED_LABELS,
   intents: INTENT_LABELS,
 });
