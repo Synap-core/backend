@@ -229,7 +229,9 @@ describe("the governance numbers, through their door", () => {
 describe("the platform floors name the switch that lifts them", () => {
   it("the structure floor is split: the switch lifts exactly its writes, the rest names no switch", async () => {
     const { alwaysPropose } = await caller(ALICE).platformDefaults();
-    const builds = alwaysPropose.find((e) => e.key === "agent-builds-structure");
+    const builds = alwaysPropose.find(
+      (e) => e.key === "agent-builds-structure"
+    );
     expect(builds?.switchedBy).toBe("@agent-builds-structure");
     expect([...(builds?.actions ?? [])].sort()).toEqual(
       [...AGENT_BUILDS_STRUCTURE_EVENT_KEYS].sort()
