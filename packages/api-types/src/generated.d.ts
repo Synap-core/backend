@@ -10292,6 +10292,160 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"compute_spend_daily_cents"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
+declare const DeviceConnectionSchema: z.ZodDiscriminatedUnion<[
+	z.ZodObject<{
+		mode: z.ZodLiteral<"agent">;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		driver: z.ZodString;
+		installationId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"bridge">;
+		viaDeviceId: z.ZodString;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		leaseId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"provider">;
+		resourceId: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		mode: z.ZodLiteral<"manual">;
+	}, z.core.$strip>
+], "mode">;
+export type DeviceConnection = z.output<typeof DeviceConnectionSchema>;
+declare const DeviceIdentitySchema: z.ZodObject<{
+	arch: z.ZodOptional<z.ZodString>;
+	hostname: z.ZodOptional<z.ZodString>;
+	model: z.ZodOptional<z.ZodString>;
+	os: z.ZodOptional<z.ZodString>;
+	osVersion: z.ZodOptional<z.ZodString>;
+	vendor: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceIdentity = z.output<typeof DeviceIdentitySchema>;
+declare const DeviceLocationSchema: z.ZodObject<{
+	network: z.ZodOptional<z.ZodString>;
+	provider: z.ZodOptional<z.ZodString>;
+	region: z.ZodOptional<z.ZodString>;
+	site: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceLocation = z.output<typeof DeviceLocationSchema>;
+declare const DeviceHealthSchema: z.ZodObject<{
+	checkedAt: z.ZodOptional<z.ZodString>;
+	detail: z.ZodOptional<z.ZodString>;
+	state: z.ZodEnum<{
+		degraded: "degraded";
+		failing: "failing";
+		ok: "ok";
+	}>;
+}, z.core.$strip>;
+export type DeviceHealth = z.output<typeof DeviceHealthSchema>;
+declare const DeviceManifestSchema: z.ZodObject<{
+	capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	health: z.ZodOptional<z.ZodObject<{
+		checkedAt: z.ZodOptional<z.ZodString>;
+		detail: z.ZodOptional<z.ZodString>;
+		state: z.ZodEnum<{
+			degraded: "degraded";
+			failing: "failing";
+			ok: "ok";
+		}>;
+	}, z.core.$strip>>;
+	identity: z.ZodOptional<z.ZodObject<{
+		arch: z.ZodOptional<z.ZodString>;
+		hostname: z.ZodOptional<z.ZodString>;
+		model: z.ZodOptional<z.ZodString>;
+		os: z.ZodOptional<z.ZodString>;
+		osVersion: z.ZodOptional<z.ZodString>;
+		vendor: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	location: z.ZodOptional<z.ZodObject<{
+		network: z.ZodOptional<z.ZodString>;
+		provider: z.ZodOptional<z.ZodString>;
+		region: z.ZodOptional<z.ZodString>;
+		site: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	manifestVersion: z.ZodLiteral<1>;
+	parameters: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+	resources: z.ZodOptional<z.ZodObject<{
+		cpu: z.ZodOptional<z.ZodObject<{
+			cores: z.ZodOptional<z.ZodNumber>;
+			model: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>;
+		disks: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			freeMb: z.ZodNumber;
+			fs: z.ZodOptional<z.ZodString>;
+			mount: z.ZodString;
+			sizeMb: z.ZodNumber;
+			tier: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>>;
+		gpus: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			model: z.ZodString;
+			vramMb: z.ZodOptional<z.ZodNumber>;
+		}, z.core.$strip>>>;
+		memoryMb: z.ZodOptional<z.ZodNumber>;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type DeviceManifest = z.output<typeof DeviceManifestSchema>;
+declare const DEVICE_STATUSES: readonly [
+	"online",
+	"offline",
+	"degraded",
+	"unknown"
+];
+export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
+/** What a list row shows of a device's resources. Absent = not reported. */
+export interface DeviceResourcesSummary {
+	cpuModel: string | null;
+	cpuCores: number | null;
+	memoryMb: number | null;
+	gpus: Array<{
+		model: string;
+		vramMb: number | null;
+	}>;
+	/** Summed over the reported disks; null when none was reported. */
+	diskSizeMb: number | null;
+	diskFreeMb: number | null;
+	/** Whole percent used over the reported disks; null when none. */
+	diskUsedPct: number | null;
+}
+declare const DEVICE_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type DeviceBelongsTo = (typeof DEVICE_BELONGS_TO)[number];
+/** One device as `fleet.list` / `fleet.get` answer it. */
+export interface FleetDevice {
+	id: string;
+	kind: string;
+	name: string;
+	parentDeviceId: string | null;
+	/** The machine user when it runs the Synap runner (`computers[].agentUserId`). */
+	principalUserId: string | null;
+	ownerUserId: string;
+	workspaceId: string | null;
+	belongsTo: DeviceBelongsTo;
+	connection: DeviceConnection;
+	labels: string[];
+	status: DeviceStatus;
+	lastReportAt: string | null;
+	createdAt: string;
+	retiredAt: string | null;
+	identity: DeviceIdentity;
+	resources: DeviceResourcesSummary;
+	capabilities: string[];
+	location: DeviceLocation | null;
+	health: DeviceHealth | null;
+}
+/** A device in the tree: its children are the devices it hosts. */
+export type FleetDeviceNode = DeviceTreeNode<FleetDevice>;
+/** `fleet.get`: the device with its whole manifest, as last reported. */
+export interface FleetDeviceDetail extends FleetDevice {
+	manifest: DeviceManifest | null;
+}
+/** A device in a tree built by {@link buildDeviceTree}. */
+export type DeviceTreeNode<T> = T & {
+	children: DeviceTreeNode<T>[];
+};
 declare const CONFIG_SCOPE_KINDS: [
 	"default",
 	"bridge",
@@ -42229,6 +42383,53 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				userId: string;
 				workspaceId: string | null;
+			};
+		}>;
+	}>>;
+	fleet: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: FleetDeviceDetail;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeRetired?: boolean | undefined;
+			} | undefined;
+			meta: object;
+			output: {
+				devices: FleetDeviceNode[];
 			};
 		}>;
 	}>>;

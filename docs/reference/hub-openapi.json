@@ -7441,6 +7441,23 @@
           "unreadable"
         ]
       },
+      "DeviceReportAck": {
+        "type": "object",
+        "properties": {
+          "recorded": { "type": "boolean" },
+          "deviceId": { "type": ["string", "null"] },
+          "manifest": {
+            "type": "string",
+            "enum": ["accepted", "absent", "refused"]
+          },
+          "error": { "type": "string" }
+        },
+        "required": ["recorded", "deviceId", "manifest"]
+      },
+      "ComputerReportBody": {
+        "type": "object",
+        "properties": { "manifest": {}, "reporter": { "type": "string" } }
+      },
       "InstallationRequestApplied": {
         "anyOf": [
           { "$ref": "#/components/schemas/InstallationRequested" },
@@ -58482,6 +58499,69 @@
         }
       }
     },
+    "/computers/me/report": {
+      "post": {
+        "tags": ["Computers"],
+        "summary": "A computer reports what it is (its device manifest)",
+        "description": "A connected computer's own key only (the device-flow key). Merges `manifest` (the device manifest v1, optional) into the computer's device, section by section, and moves its report time. `reporter` names the process (its capabilities are kept apart from the other processes' and expire 30 minutes after its last report). A manifest the pod cannot read is answered `manifest: \"refused\"` with the field in `error`, and the last good one is kept.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ComputerReportBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "device": { "$ref": "#/components/schemas/DeviceReportAck" }
+                  },
+                  "required": ["device"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not this computer's own key, or no hub-protocol.write",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "503": {
+            "description": "The report was not recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/installations/request": {
       "post": {
         "tags": ["Installations"],
@@ -58647,7 +58727,7 @@
       "post": {
         "tags": ["HostJobs"],
         "summary": "Lease the next host job of an installation on this computer",
-        "description": "Answers `{ job: null }` when nothing is due. The job names the installation's kind (`service` | `tool`), its approved manifest and version. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "description": "Answers `{ job: null }` when nothing is due. The job names the installation's kind (`service` | `tool`), its approved manifest and version. Every lease is also the computer reporting: `manifest` (optional, the device manifest v1) is stored on its device, and `device` says what was recorded (`manifest`: accepted, absent or refused with `error`); it never fails the lease. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -58665,7 +58745,8 @@
                       "diskGb": { "type": "number", "minimum": 0 }
                     },
                     "additionalProperties": {}
-                  }
+                  },
+                  "manifest": {}
                 },
                 "additionalProperties": {}
               }
@@ -58674,7 +58755,7 @@
         },
         "responses": {
           "200": {
-            "description": "The leased job, or null",
+            "description": "The leased job, or null, and the device report",
             "content": {
               "application/json": {
                 "schema": {
@@ -58683,9 +58764,10 @@
                     "job": {
                       "type": ["object", "null"],
                       "additionalProperties": {}
-                    }
+                    },
+                    "device": { "$ref": "#/components/schemas/DeviceReportAck" }
                   },
-                  "required": ["job"]
+                  "required": ["job", "device"]
                 }
               }
             }
