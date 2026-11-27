@@ -481,30 +481,6 @@ export async function buildGraphEnvelope(
  * performance boundary, never an authorization one.
  */
 const readOnlyLogger = createLogger({ module: "mcp-read-only-tools" });
-let readOnlyToolNamesPromise: Promise<ReadonlySet<string>> | null = null;
-
-/**
- * The names of every tool whose definition declares `readOnlyHint: true`,
- * read once from the live tool definitions (`tools.list()`, no session ctx —
- * the same list `gen-manifest` serializes) and cached. A failed read is NOT
- * cached, so the next call retries.
- */
-export function readOnlyToolNames(): Promise<ReadonlySet<string>> {
-  readOnlyToolNamesPromise ??= import("../tools/index.js")
-    .then(async ({ tools }) => {
-      const defs = await tools.list();
-      return new Set(
-        defs
-          .filter((t) => t.annotations?.readOnlyHint === true)
-          .map((t) => t.name)
-      ) as ReadonlySet<string>;
-    })
-    .catch((err: unknown) => {
-      readOnlyToolNamesPromise = null;
-      throw err;
-    });
-  return readOnlyToolNamesPromise;
-}
 
 /**
  * True when the tool only reads — no write to group under a session. An
@@ -514,6 +490,7 @@ export function readOnlyToolNames(): Promise<ReadonlySet<string>> {
  */
 export async function isReadOnlyTool(toolName: string): Promise<boolean> {
   try {
+    const { readOnlyToolNames } = await import("../define-tool.js");
     return (await readOnlyToolNames()).has(toolName);
   } catch (err) {
     readOnlyLogger.error(

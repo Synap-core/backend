@@ -224,7 +224,7 @@ export const MCP_MODEL_TOOLS: ReadonlySet<string> = new Set(["synap_ask"]);
 /**
  * The exemption of one MCP `tools/call`, from the tool's own metadata:
  * `openWorldTools` = the tools that declare `openWorldHint: true`
- * (`openWorldToolNames`, routers/mcp/tools/index.ts).
+ * (`openWorldToolNames`, routers/mcp/define-tool.ts).
  */
 export function classifyMcpToolCall(
   toolName: string | undefined,

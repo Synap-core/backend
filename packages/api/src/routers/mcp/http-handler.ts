@@ -46,7 +46,8 @@ import {
   checkHubRateLimit,
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
-import { tools, openWorldToolNames } from "./tools/index.js";
+import { tools } from "./tools/index.js";
+import { openWorldToolNames } from "./define-tool.js";
 import { effectiveToolCall } from "./call-tool-name.js";
 import {
   classifyMcpToolCall,

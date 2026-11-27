@@ -284,6 +284,32 @@ export function toolExposure(): Record<string, Record<string, string>> {
   );
 }
 
+/** Every name (aliases too) whose definition declares `hint: true`. */
+function namesWithHint(hint: "readOnlyHint" | "openWorldHint"): Set<string> {
+  return new Set(
+    [...reg().byName.values()]
+      .filter((d) => d.annotations?.[hint] === true)
+      .flatMap((d) => [d.name, ...(d.aliases ?? []).map((a) => a.name)])
+  );
+}
+
+/**
+ * The read-only tools: what the pod edge counts against an agent's READ
+ * budget (`crud_read`, apps/api middleware/security.ts), and the calls that
+ * group no write under a session (`isReadOnlyTool`).
+ */
+export async function readOnlyToolNames(): Promise<Set<string>> {
+  return namesWithHint("readOnlyHint");
+}
+
+/**
+ * The tools that reach outside the pod (a capability, an automation, a
+ * playbook run): the Hub request guard never times them out.
+ */
+export async function openWorldToolNames(): Promise<Set<string>> {
+  return namesWithHint("openWorldHint");
+}
+
 /** Is this a pod tool name (a tool or an alias)? */
 export function isPodToolName(name: string): boolean {
   return toolDefinition(name) !== undefined;
