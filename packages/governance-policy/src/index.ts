@@ -983,6 +983,40 @@ const BUILDS_STRUCTURE_DOORS = [
 export const AGENT_BUILDS_STRUCTURE_EVENT_KEYS: readonly GateEventKey[] =
   BUILDS_STRUCTURE_DOORS.flatMap(structureDoorEventKeys);
 
+/**
+ * Does this write make an executable HTML page? Read from the write's own
+ * data (pure, no I/O), the ONE classification every gate uses for
+ * {@link AgentPolicyInput.agentHtmlPage}:
+ *   - `document/create` with `type: "html"` (every html document door, the
+ *     html-embed cell doors included: they write the page through it);
+ *   - `surface/create` with `body: "html"`;
+ *   - `whiteboard/place` whose `resources` hold an `html` resource or an
+ *     `artboard-deck` (one page per slide).
+ */
+export function writesHtmlPage(
+  subjectType: string,
+  action: string,
+  data: Record<string, unknown> | null | undefined
+): boolean {
+  if (!data) return false;
+  if (subjectType === "document" && action === "create") {
+    return data.type === "html";
+  }
+  if (subjectType === "surface" && action === "create") {
+    return data.body === "html";
+  }
+  if (subjectType === "whiteboard" && action === "place") {
+    return (
+      Array.isArray(data.resources) &&
+      data.resources.some((r) => {
+        const kind = (r as { kind?: unknown } | null)?.kind;
+        return kind === "html" || kind === "artboard-deck";
+      })
+    );
+  }
+  return false;
+}
+
 /** Which floor family covers this event key, or null. */
 export function floorClassOf(eventKey: string): FloorClassPattern | null {
   if (
@@ -1615,6 +1649,17 @@ export interface AgentPolicyInput {
    */
   podAdminSchemaChange?: boolean;
   /**
+   * The write makes an executable HTML PAGE (decision D1 default, surfaces
+   * review 27 Nov 2026): a `document/create` of `type: "html"`, a
+   * `surface/create` with an html body, a `whiteboard/place` with html or
+   * deck resources ({@link writesHtmlPage}, resolved by the caller from the
+   * write's data). An agent's page runs code in the person's view, as a
+   * cell does, so it is floored at rung 2.09 like `cell/create`, whatever
+   * door it comes through, and no rule or switch widens it. A person's own
+   * write never reaches this ladder. Absent/false → no effect.
+   */
+  agentHtmlPage?: boolean;
+  /**
    * The floor families the pod switched on (their class rows, resolved by the
    * caller: {@link FLOOR_CLASS_PATTERNS}). On, rung 2.08 / the create and
    * activate half of 2.09 yield to the rungs below. Absent/false → the floor.
@@ -2020,6 +2065,16 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
       )
     )
   ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.AGENT_STRUCTURE_WRITE,
+      reasonCode: "AGENT_STRUCTURE_WRITE",
+    };
+  }
+  // 2.09 (page) — an agent's executable HTML page, through any door: the
+  // floor `cell/create` gives an agent's cell (decision D1 default). Never
+  // yields to the pod's switch, as `cell/create` does not.
+  if (input.agentHtmlPage === true) {
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.AGENT_STRUCTURE_WRITE,

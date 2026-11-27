@@ -58,6 +58,11 @@ import { canRead, type Principal } from "../../access/door.js";
 import { loadReadableDocument } from "../../utils/document-edit-access.js";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import { runFrameReadOp } from "./frame-read-ops.js";
+import { TRPCError } from "@trpc/server";
+import {
+  assertUserRateLimit,
+  type UserRateLimit,
+} from "../../middleware/ai-rate-limit.js";
 
 /** The surface a frame draws, as its host names it. */
 export type FrameSurface =
@@ -70,13 +75,43 @@ export const FRAME_SURFACE_KINDS = ["cell", "document", "draft"] as const;
 /** Another person's draft: refused, whatever it asks. */
 export const FRAME_DRAFT_NOT_YOURS = "FRAME_DRAFT_NOT_YOURS" as const;
 
+/** Too many reads by one caller for one surface: 429, try again shortly. */
+export const FRAME_READ_RATE_LIMITED = "FRAME_READ_RATE_LIMITED" as const;
+
+/**
+ * The frame read door's budget, per caller (the person, and the agent when
+ * one acts) and per SURFACE (security review M4, code-quality S1,
+ * architecture S5): every read costs a log row and a pod read, and a frame
+ * in a loop must not flood either. Counted before anything is loaded or
+ * logged. 240 a minute is four a second for ONE surface: a bento of many
+ * tiles of one cell shares it, a page's normal reads stay far under it.
+ */
+export const FRAME_READ_LIMIT: UserRateLimit = {
+  name: "frame-read",
+  max: 240,
+  windowMs: 60_000,
+};
+
+/** The surface as the budget counts it: the host's own name for it. */
+function surfaceBudgetKey(surface: FrameSurface): string {
+  switch (surface.kind) {
+    case "cell":
+      return `cell:${surface.typeKey}`;
+    case "document":
+      return `document:${surface.id}`;
+    case "draft":
+      return `draft:${surface.draftId}`;
+  }
+}
+
 /** A refusal of the door, with the HTTP status Hub REST answers. */
 export class FrameReadError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404,
+    readonly status: 400 | 403 | 404 | 429,
     readonly code:
       | typeof FRAME_READ_UNDECLARED
       | typeof FRAME_DRAFT_NOT_YOURS
+      | typeof FRAME_READ_RATE_LIMITED
       | "FRAME_READ_UNKNOWN_OP"
       | "FRAME_SURFACE_NOT_FOUND"
       | "FRAME_SPACE_FORBIDDEN",
@@ -287,6 +322,18 @@ export async function frameRead(
   const userId = ctx.userId;
   if (!userId) {
     throw new FrameReadError(403, "FRAME_SPACE_FORBIDDEN", "Sign in to read.");
+  }
+  // The budget first: a refused read of a looping frame costs no row.
+  try {
+    assertUserRateLimit(
+      `${ctx.agentUserId ? `${userId}/${ctx.agentUserId}` : userId}:${surfaceBudgetKey(input.surface)}`,
+      FRAME_READ_LIMIT
+    );
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "TOO_MANY_REQUESTS") {
+      throw new FrameReadError(429, FRAME_READ_RATE_LIMITED, err.message);
+    }
+    throw err;
   }
   const { op } = input;
   if (!isCellBridgeReadOp(op)) {

@@ -24,6 +24,7 @@ import {
   readDeclaredFrameIo,
 } from "../../../services/cells/declared-frame-io.js";
 import {
+  cellDefineScopeRefusal,
   cellInstallRefusal,
   cellRetireRefusal,
   installMarketplaceCell,
@@ -132,6 +133,23 @@ export async function applyCellDefineProposal(
     await assertMayWriteNamespacedTypeKey(
       proposedTypeKey,
       proposal.workspaceId ?? null
+    );
+  }
+
+  // A POD-WIDE cell (the reviewed scope has no space) is drawn by every
+  // space: only a pod admin approves one into being, as only a pod admin
+  // retires one (review M1). Nothing is written on a refusal.
+  const podWide = await cellDefineScopeRefusal(
+    userId,
+    proposal.workspaceId ?? null
+  );
+  if (podWide) {
+    throw attachFailureMeta(
+      new TRPCError({
+        code: "FORBIDDEN",
+        message: `Couldn't apply — ${podWide.error} Nothing was defined.`,
+      }),
+      { errorClass: "conflict" }
     );
   }
 

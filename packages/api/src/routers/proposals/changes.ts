@@ -16,6 +16,10 @@ import {
 } from "@synap-core/types/vocabulary";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import {
+  describeDeclaredRead,
+  parseDeclaredReads,
+} from "@synap-core/types/cell-bridge";
+import {
   labelFromPath,
   valueTypeOf,
   type ProposalPreviousData,
@@ -349,6 +353,10 @@ export function buildProposalChanges(
   // the raw copies it would otherwise also emit.
   const promotedStages = readPromotedStages(data.stages);
   const promotesScope = typeof data.scope === "string" && data.scope !== "";
+  // An HTML page's declared reads, its placement as a cell, and what a
+  // publish freezes onto the public web (decision D2): promoted as readable
+  // rows; the raw copies would be duplicates.
+  const pageRows = htmlPageReviewRows(data);
 
   // Generic fallback: one change per non-infra top-level key the entity-shape
   // walk above did not cover (no "properties." prefix). It used to run ONLY
@@ -378,6 +386,7 @@ export function buildProposalChanges(
     // Promoted below as readable rows; the raw copy would be a duplicate.
     if (key === "stages" && promotedStages) continue;
     if (key === "scope" && promotesScope) continue;
+    if (pageRows.replaces.has(key)) continue;
     changes.push({
       path: key,
       label: labelFromPath(key),
@@ -553,6 +562,10 @@ export function buildProposalChanges(
     });
   }
 
+  for (const row of pageRows.rows) {
+    changes.push({ ...row, operation, before: undefined, valueType: valueTypeOf(row.after) });
+  }
+
   // A delete's values are what it REMOVES: each is the row's `before`, and
   // there is no next value. The pushes above write the payload value as
   // `after` (a create's and an update's shape), so a delete is turned over
@@ -608,4 +621,98 @@ function readPromotedStages(value: unknown): PromotedStage[] | null {
       description: str(s.description),
     };
   });
+}
+
+/** What one declared reads list says, as words (`describeDeclaredRead`). */
+function declaredReadsAsWords(raw: unknown): string[] | null {
+  const parsed = parseDeclaredReads(raw);
+  return parsed.ok ? parsed.value.map(describeDeclaredRead) : null;
+}
+
+/**
+ * The review rows of an HTML page (surfaces review D2 / S2, security M2):
+ *   - a page made (`document/create` `type: "html"`, `surface/create` body
+ *     html): what it reads, or that it declares nothing and so reads
+ *     everything the viewer can see; and when approving also PLACES it as a
+ *     cell (`placeAs`);
+ *   - a page published (`share/create` with `pageReads`): which reads will be
+ *     frozen onto the public web, which the publish door will not run, or
+ *     that it declares nothing (an empty public snapshot).
+ * Field labels (not domain tokens), like the egress rows: no vocabulary door.
+ * `replaces`: the raw payload keys these rows stand for.
+ */
+function htmlPageReviewRows(data: Record<string, unknown>): {
+  rows: Array<{ path: string; label: string; after: unknown }>;
+  replaces: Set<string>;
+} {
+  const rows: Array<{ path: string; label: string; after: unknown }> = [];
+  const replaces = new Set<string>();
+  const spec =
+    data.spec && typeof data.spec === "object" && !Array.isArray(data.spec)
+      ? (data.spec as Record<string, unknown>)
+      : null;
+  const isPage = data.type === "html" || data.body === "html";
+  if (isPage) {
+    const raw = data.type === "html" ? data.reads : spec?.reads;
+    const words =
+      raw === undefined || raw === null ? null : declaredReadsAsWords(raw);
+    rows.push({
+      path: "reads",
+      label: "What this page reads",
+      after:
+        raw === undefined || raw === null
+          ? "It declares no reads, so it can read anything you can see"
+          : words && words.length > 0
+            ? words
+            : words
+              ? "Nothing: it declares that it reads nothing"
+              : raw,
+    });
+    if (data.type === "html") replaces.add("reads");
+  }
+  if (data.placeAs !== undefined && data.placeAs !== null) {
+    rows.push({
+      path: "placeAs",
+      label: "Also placed as a cell",
+      after: "Approving also places this page as a cell where it was asked",
+    });
+    replaces.add("placeAs");
+  }
+  const pageReads =
+    data.pageReads && typeof data.pageReads === "object"
+      ? (data.pageReads as {
+          public?: unknown;
+          withheld?: unknown;
+          undeclared?: unknown;
+        })
+      : null;
+  if (pageReads) {
+    replaces.add("pageReads");
+    if (pageReads.undeclared === true) {
+      rows.push({
+        path: "pageReads.public",
+        label: "Frozen onto the public page",
+        after:
+          "Nothing: the page declares no reads, so its public copy holds no data",
+      });
+    } else {
+      const pub = Array.isArray(pageReads.public) ? pageReads.public : [];
+      rows.push({
+        path: "pageReads.public",
+        label: "Frozen onto the public page",
+        after: pub.length > 0 ? pub : "Nothing",
+      });
+      const withheld = Array.isArray(pageReads.withheld)
+        ? pageReads.withheld
+        : [];
+      if (withheld.length > 0) {
+        rows.push({
+          path: "pageReads.withheld",
+          label: "Not published (the publish door refuses these reads)",
+          after: withheld,
+        });
+      }
+    }
+  }
+  return { rows, replaces };
 }

@@ -50,6 +50,7 @@ import {
   claimDocumentRevision,
   emitDocumentContentReplaced,
   DocumentRevisionConflictError,
+  htmlPageSizeRefusal,
 } from "@synap/database";
 import { storage } from "@synap/storage";
 import { emitSideEffects } from "@synap/events";
@@ -859,6 +860,12 @@ export async function applyDocumentPatch(
     allowRemovingEmbeds: input.allowRemovingEmbeds === true,
   };
   let rendered = renderDocumentPatch(baseContent, ops, renderOptions);
+  // An HTML page is at most 2 MB after an edit, as at create (review S4):
+  // refused BEFORE governance, so an oversized patch is never filed.
+  if (doc.type === "html") {
+    const tooLarge = htmlPageSizeRefusal(rendered.markdown);
+    if (tooLarge) throw new TRPCError({ code: "BAD_REQUEST", message: tooLarge });
+  }
 
   // 4. Advisory diagnostics of the result.
   let diagnostics = await diagnoseForDocument(

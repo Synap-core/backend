@@ -287,6 +287,10 @@ export function registerShareExecutors(): void {
         const published = await applyPublish(database, plan, {
           userId: ownerUserId,
           agentUserId: proposal.agentUserId ?? null,
+          // The key the agent filed it with: its grant bounds the page's
+          // publish-time reads (decision D2 default).
+          agentApiKeyId:
+            (proposal as { apiKeyId?: string | null }).apiKeyId ?? null,
           sourceProposalId: input.proposalId,
           mintToken: false,
         });

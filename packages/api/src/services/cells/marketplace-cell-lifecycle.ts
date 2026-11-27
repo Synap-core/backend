@@ -86,6 +86,29 @@ export async function cellRetireRefusal(
       };
 }
 
+/**
+ * Who may DEFINE a pod-wide cell type (`workspaceId` null): a pod admin, as
+ * for retiring one (`cellRetireRefusal`), since every space draws it
+ * (security review M1, 27 Nov 2026). A cell in one space is judged by that
+ * door's own space check (membership, or the agent gate). Checked on the
+ * person behind the call when it is filed, and on the approver when it is
+ * approved. Null = allowed.
+ */
+export async function cellDefineScopeRefusal(
+  userId: string,
+  workspaceId: string | null
+): Promise<CellLifecycleRefusal | null> {
+  if (workspaceId) return null;
+  return (await isPodAdmin(userId))
+    ? null
+    : {
+        ok: false,
+        status: 403,
+        error:
+          "Only a pod admin can define a pod-wide cell type: every space draws it. Name the space (workspaceId) to define it there.",
+      };
+}
+
 /** The active cell type row a retire would deactivate, or null. */
 export async function findActiveCellType(
   typeKey: string,

@@ -13,6 +13,7 @@ import {
   validateDeps,
 } from "../../../services/cells/define-cell.js";
 import {
+  cellDefineScopeRefusal,
   cellInstallRefusal,
   cellRetireRefusal,
   findActiveCellType,
@@ -39,6 +40,7 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { canWrite, userPrincipal } from "../../../access/door.js";
+import { confineCellScope } from "../confine-workspace.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
@@ -271,10 +273,17 @@ export function registerCellsRoutes(app: HubHono): void {
       );
     }
 
-    const { packageSlug, cellKey, workspaceId, reasoning } = parsed.data;
-    if (!workspaceId) {
+    const { packageSlug, cellKey, reasoning } = parsed.data;
+    if (!parsed.data.workspaceId) {
       return c.json({ error: "workspaceId is required" }, 400);
     }
+    // A key bound to one space installs in that space only (review H3).
+    const scope = confineCellScope(
+      c.get("keyWorkspaceId") as string | null | undefined,
+      parsed.data.workspaceId
+    );
+    if (!scope.ok) return c.json({ error: scope.error }, 403);
+    const workspaceId = scope.workspaceId!;
 
     const userId = c.get("userId") ?? "";
     const refused = await cellInstallRefusal(userId, workspaceId);
@@ -426,7 +435,6 @@ export function registerCellsRoutes(app: HubHono): void {
     const {
       name,
       rendererSource,
-      workspaceId,
       description,
       defaultSize,
       deps,
@@ -440,6 +448,19 @@ export function registerCellsRoutes(app: HubHono): void {
     if (!declared.ok) return c.json({ error: declared.error }, 400);
     const declaredFields = declaredFrameIoFields(declared);
     const userId = c.get("userId");
+    // A key bound to one space defines in that space only, never pod-wide
+    // (review H3); with no binding, `workspaceId` omitted is pod-wide.
+    const scope = confineCellScope(
+      c.get("keyWorkspaceId") as string | null | undefined,
+      parsed.data.workspaceId
+    );
+    if (!scope.ok) return c.json({ error: scope.error }, 403);
+    const workspaceId = scope.workspaceId ?? undefined;
+    // A POD-WIDE cell is drawn by every space: only a pod admin defines one,
+    // as only a pod admin retires one (review M1). Checked on the person
+    // behind the call, agent or not; the approval checks the approver again.
+    const podWide = await cellDefineScopeRefusal(userId ?? "", scope.workspaceId);
+    if (podWide) return c.json({ error: podWide.error }, podWide.status);
     // body.agentUserId wins; fall back to the auto-injected context value the
     // auth middleware sets for an agent API key (same resolution order as the
     // entities door).
@@ -633,7 +654,13 @@ export function registerCellsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const typeKey = c.req.param("typeKey");
-    const workspaceId = c.req.query("workspaceId") || null;
+    // A key bound to one space retires in that space only (review H3).
+    const scope = confineCellScope(
+      c.get("keyWorkspaceId") as string | null | undefined,
+      c.req.query("workspaceId") || null
+    );
+    if (!scope.ok) return c.json({ error: scope.error }, 403);
+    const workspaceId = scope.workspaceId;
     const userId = c.get("userId") ?? "";
     const refused = await cellRetireRefusal(userId, workspaceId);
     if (refused) return c.json({ error: refused.error }, refused.status);
