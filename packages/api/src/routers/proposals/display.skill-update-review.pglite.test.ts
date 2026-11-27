@@ -35,6 +35,7 @@ const OTHER = "other-1";
 const WS = randomUUID();
 const SKILL_SEEN = randomUUID();
 const SKILL_HIDDEN = randomUUID();
+const RULE = randomUUID();
 const OLD_BODY = "## Creative director\nWrite the old way.";
 const HIDDEN_NAME = "other-secret-skill";
 const HIDDEN_BODY = "Other's secret instructions";
@@ -81,6 +82,12 @@ beforeAll(async () => {
       HIDDEN_NAME,
       HIDDEN_BODY,
     ]
+  );
+  // A pod rule as stored: a `rules/` ref, a machine-token name, no category.
+  await q(
+    `insert into skills (id, user_id, scope, kind, name, slug, body) values
+       ($1,$2,'user','instruction','rules_work_units','rules/work-units','# one unit')`,
+    [RULE, VIEWER]
   );
 });
 
@@ -190,6 +197,37 @@ describe("a skill.update names its skill and shows what it holds now", () => {
     const text = JSON.stringify(review);
     expect(text).not.toContain(HIDDEN_NAME);
     expect(text).not.toContain(HIDDEN_BODY);
+  });
+});
+
+describe("a rule edit is titled as a rule (proposal 0a641510)", () => {
+  it('a row filed as "Update Tool" with the raw name reads `Update Rule "work-units"`, summary and heading alike', async () => {
+    // Filed before the gate knew rules: the stored summary is the bare
+    // "Update Tool" and the stored name the machine token the title door
+    // drops. The read derives both from the rule's row, through the one
+    // rule predicate, so the row and its review heading say the same thing.
+    const legacy = skillUpdate(RULE) as unknown as {
+      data: Record<string, unknown>;
+    };
+    legacy.data.targetName = "rules_work_units";
+    const [out] = await enrichProposalsForDisplay([legacy as never], VIEWER);
+    const shown = out as unknown as {
+      request: { summary?: string; targetName?: string };
+      review: { summary?: string; targetName?: string };
+    };
+    expect(shown.request.summary).toBe('Update Rule "work-units"');
+    expect(shown.review.summary).toBe('Update Rule "work-units"');
+    expect(shown.review.targetName).toBe("work-units");
+  });
+
+  it("a skill that is not a rule keeps the Tool noun", async () => {
+    const [out] = await enrichProposalsForDisplay(
+      [skillUpdate(SKILL_SEEN)],
+      VIEWER
+    );
+    expect(
+      (out as unknown as { review: { summary?: string } }).review.summary
+    ).toBe('Update Tool "creative-director"');
   });
 });
 

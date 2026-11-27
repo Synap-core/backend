@@ -43,11 +43,15 @@ import { db, automations, links, and, eq, inArray } from "@synap/database";
 import { createLinks } from "../links/links-service.js";
 import type { RuleShape } from "../knowledge/classify-intent.js";
 import { normalizeExpiresAt, readExpiresAt } from "./expiry.js";
+import { RULE_CATEGORY } from "@synap-core/types/skill-rule";
 
 /** Marker written into `skills.metadata` — what makes a skill row a RULE. */
 export const RULE_METADATA_KEY = "rule" as const;
-/** `skills.category` value used so a rule is filterable without a JSONB scan. */
-export const RULE_CATEGORY = "rule" as const;
+/**
+ * `skills.category` value used so a rule is filterable without a JSONB scan.
+ * Declared once, beside the rule predicate (`@synap-core/types/skill-rule`).
+ */
+export { RULE_CATEGORY };
 
 export interface RuleBehaviourRecord {
   /**

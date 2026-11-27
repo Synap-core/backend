@@ -30,7 +30,7 @@ import {
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
-import { isRuleSkill } from "../../../../lib/rule-skill";
+import { skillObjectKind } from "@synap-core/types/skill-rule";
 import { useSetSkillApproved } from "../../presence/use-request-doors";
 import { formatRelative, readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -106,9 +106,9 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
 
   const instruction = skill.kind === "instruction";
   // A rule is pushed into the work it scopes, never a Tool (founder, 19 Nov
-  // 2026): its page names it a Rule (`lib/rule-skill.ts`, the predicate the
-  // Tools and Rules lists read).
-  const objectKind = isRuleSkill(skill) ? "rule" : "skill";
+  // 2026): its page names it a Rule (`@synap-core/types/skill-rule`, the
+  // predicate the Tools and Rules lists and the proposal titles read).
+  const objectKind = skillObjectKind(skill);
   const row = skillRow(skill);
   const spaceName = (wsId: string) =>
     (spaces.data ?? []).find((s) => s.id === wsId)?.name;
