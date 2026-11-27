@@ -27,7 +27,12 @@ import {
   sql,
   type KeyGrant,
 } from "@synap/database";
-import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
+import {
+  apiKeys,
+  grants as grantRows,
+  KEY_PREFIXES,
+  users,
+} from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { meetScope } from "@synap-core/types/grants";
 import { ensurePersonalAgentUser } from "../utils/personal-agent-user.js";
@@ -170,11 +175,16 @@ export async function ensureSynapAiKey(
     )[0];
   const held = await oldestHeld();
   if (held) return { agentUserId, keyId: held.id };
-  const secret = `synap_ai_${randomBytes(32).toString("hex")}`;
+  // `key_prefix` holds one of the DECLARED prefixes (`KEY_PREFIXES`; the
+  // `api_keys_key_prefix_check` rule refuses any other on a non-hub_inbound
+  // key): `synap_ai_…`.slice(0, 12) was refused, so every app chat turn (the
+  // gate ensures this key first) answered 500 (2026-11-27). Same shape as an
+  // app connection's key (`app-connect.ts`).
+  const secret = `${KEY_PREFIXES.USER}${randomBytes(32).toString("hex")}`;
   const key = await new ApiKeyRepository(db, new EventRepository(sql)).create(
     {
       keyName: "Synap AI",
-      keyPrefix: secret.slice(0, 12),
+      keyPrefix: KEY_PREFIXES.USER,
       key: secret,
       scope: [],
       userId: agentUserId,
