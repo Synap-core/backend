@@ -63,7 +63,7 @@ export interface ToolDefinition extends Tool {
 const DEFINED = Symbol("defineTool");
 
 /** Declare one MCP tool. The only way a tool enters the list (tripwire). */
-export function defineTool<const D extends ToolDefinition>(def: D): D {
+export function defineTool(def: ToolDefinition): ToolDefinition {
   return Object.defineProperty(def, DEFINED, { value: true });
 }
 
