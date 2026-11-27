@@ -26,6 +26,7 @@ import {
   desc,
   inArray,
   lte,
+  exists,
   drizzleSql,
   automations,
   automationRuns,
@@ -47,7 +48,7 @@ import {
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { PROPOSAL_TRACK_RUN_WINDOW } from "@synap-core/types/proposals";
 import type { SQL } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   userVisibleWhere,
@@ -1600,6 +1601,36 @@ export interface ListRunGroupsInput {
 }
 
 /**
+ * A run that FAILED within the health window: `failed` only (a
+ * `blocked_by_policy` run is a calm governance outcome), dated by
+ * `coalesce(completedAt, startedAt)`, newer than `RECENT_FAILURE_WINDOW_DAYS`.
+ * ONE rule for both ledgers and both readers: the groupers' `recentFailedCount`
+ * and `listRecentlyFailingFlows` read this same predicate, so "failing" can
+ * never mean two things. `isRecentFailure` is its client-side twin for chat.
+ */
+function recentFailureWhere(cols: {
+  status: AnyPgColumn;
+  startedAt: AnyPgColumn;
+  completedAt: AnyPgColumn;
+}): SQL {
+  return drizzleSql`${cols.status} = 'failed' and coalesce(${cols.completedAt}, ${cols.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')`;
+}
+
+/**
+ * The merged order of flows across the two ledgers: latest start descending,
+ * then flow kind and flow id ascending (deterministic, keyset-safe).
+ */
+function compareFlowsNewestFirst(
+  a: { latestStartedAt: Date; flowType: string; flowId: string },
+  b: { latestStartedAt: Date; flowType: string; flowId: string }
+): number {
+  const time = b.latestStartedAt.getTime() - a.latestStartedAt.getTime();
+  if (time !== 0) return time;
+  const kind = a.flowType.localeCompare(b.flowType);
+  return kind !== 0 ? kind : a.flowId.localeCompare(b.flowId);
+}
+
+/**
  * The MEASURED duration aggregates of a run group, over one rule: a run counts
  * toward the sample only when it COMPLETED and carries a `completedAt` at or
  * after its `startedAt`. A running, failed or cancelled run has no duration to
@@ -1751,12 +1782,7 @@ export async function listRunGroupsPage(
     );
 
   const merged = (await Promise.all(jobs)).flat();
-  merged.sort((a, b) => {
-    const time = b.latestStartedAt.getTime() - a.latestStartedAt.getTime();
-    if (time !== 0) return time;
-    const kind = a.flowType.localeCompare(b.flowType);
-    return kind !== 0 ? kind : a.flowId.localeCompare(b.flowId);
-  });
+  merged.sort(compareFlowsNewestFirst);
   const hasNextPage = merged.length > limit;
   const groups = hasNextPage ? merged.slice(0, limit) : merged;
   const last = groups.at(-1);
@@ -1771,6 +1797,168 @@ export async function listRunGroupsPage(
           })
         : null,
   };
+}
+
+// ── Public: the flows failing NOW (health read) ──────────────────────────────
+
+/** One flow with at least one recent failure (see `recentFailureWhere`). */
+export interface FailingFlow {
+  flowType: "automation" | "playbook";
+  flowId: string;
+  flowName: string;
+  /** Failures inside the health window (> 0 by construction). */
+  recentFailedCount: number;
+  /** Any visible run of this flow still running (any age). */
+  hasRunning: boolean;
+  /** The flow's newest visible run start (any status): the sort key. */
+  latestStartedAt: Date;
+}
+
+/**
+ * The flows that failed within the health window, newest-active first: the
+ * rows `listRunGroups` would return with `recentFailedCount > 0`, with the same
+ * `recentFailedCount`, `hasRunning` and `latestStartedAt`, in the same order,
+ * under the same user floor and lens. The difference is cost: this reads only
+ * the recent failed runs (the `status` / activity-time indexes), then per
+ * failing flow its newest start and whether one runs, instead of aggregating
+ * every run of every flow (64k automation runs on the founder's pod, an
+ * external-merge sort, about 220 ms per call vs about 13 ms).
+ *
+ * One deliberate difference: `listRunGroups({ limit })` keeps the `limit`
+ * most recently ACTIVE flows before anything filters for failures, so a
+ * failing flow ranked below `limit` active flows was dropped; here the
+ * `limit` applies to failing flows only. THROWS on a failed read.
+ */
+export async function listRecentlyFailingFlows(input: {
+  userId: string;
+  scope?: { workspaceId?: string };
+  limit?: number;
+}): Promise<FailingFlow[]> {
+  const limit = Math.min(input.limit ?? 50, 100);
+  const workspaceId = input.scope?.workspaceId;
+  const merged = (
+    await Promise.all([
+      failingAutomationFlows(input.userId, workspaceId, limit),
+      failingPlaybookFlows(input.userId, workspaceId, limit),
+    ])
+  ).flat();
+  merged.sort(compareFlowsNewestFirst);
+  return merged.slice(0, limit);
+}
+
+/** The grouper's floor + lens, on any copy of a ledger's `workspace_id`. */
+function runFloor(
+  workspaceIdColumn: AnyPgColumn,
+  userId: string,
+  workspaceId: string | undefined
+): SQL | undefined {
+  return and(
+    userVisibleWhere(workspaceIdColumn, userId),
+    workspaceId ? eq(workspaceIdColumn, workspaceId) : undefined
+  );
+}
+
+async function failingAutomationFlows(
+  userId: string,
+  workspaceId: string | undefined,
+  limit: number
+): Promise<FailingFlow[]> {
+  // A second copy of the ledger for the per-flow lookups (correlated on the
+  // outer row's flow id, under the same floor as the outer read).
+  const other = alias(automationRuns, "flow_run");
+  const sameFlow = and(
+    eq(other.automationId, automationRuns.automationId),
+    runFloor(other.workspaceId, userId, workspaceId)
+  );
+  const latest = drizzleSql<Date>`(${db
+    .select({ startedAt: other.startedAt })
+    .from(other)
+    .where(sameFlow)
+    .orderBy(desc(other.startedAt))
+    .limit(1)})`;
+  const rows = await db
+    .select({
+      flowId: automationRuns.automationId,
+      flowName: automations.name,
+      recentFailedCount: drizzleSql<number>`count(*)::int`,
+      hasRunning: drizzleSql<boolean>`${exists(
+        db
+          .select({ one: drizzleSql`1` })
+          .from(other)
+          .where(and(sameFlow, drizzleSql`${other.status} = 'running'`))
+      )}`,
+      latestStartedAt: latest,
+    })
+    .from(automationRuns)
+    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+    .where(
+      and(
+        runFloor(automationRuns.workspaceId, userId, workspaceId),
+        recentFailureWhere(automationRuns)
+      )
+    )
+    .groupBy(automationRuns.automationId, automations.name)
+    .orderBy(desc(latest), asc(automationRuns.automationId))
+    .limit(limit);
+  return rows.map((r) => ({
+    flowType: "automation" as const,
+    flowId: r.flowId,
+    flowName: r.flowName ?? "Automation",
+    recentFailedCount: r.recentFailedCount,
+    hasRunning: r.hasRunning === true,
+    // A raw SQL value: postgres.js returns a timestamp here as a STRING.
+    latestStartedAt: new Date(r.latestStartedAt),
+  }));
+}
+
+async function failingPlaybookFlows(
+  userId: string,
+  workspaceId: string | undefined,
+  limit: number
+): Promise<FailingFlow[]> {
+  const other = alias(playbookRuns, "flow_run");
+  const sameFlow = and(
+    eq(other.playbookId, playbookRuns.playbookId),
+    runFloor(other.workspaceId, userId, workspaceId)
+  );
+  const latest = drizzleSql<Date>`(${db
+    .select({ startedAt: other.startedAt })
+    .from(other)
+    .where(sameFlow)
+    .orderBy(desc(other.startedAt))
+    .limit(1)})`;
+  const rows = await db
+    .select({
+      flowId: playbookRuns.playbookId,
+      flowName: playbooks.name,
+      recentFailedCount: drizzleSql<number>`count(*)::int`,
+      hasRunning: drizzleSql<boolean>`${exists(
+        db
+          .select({ one: drizzleSql`1` })
+          .from(other)
+          .where(and(sameFlow, drizzleSql`${other.status} = 'running'`))
+      )}`,
+      latestStartedAt: latest,
+    })
+    .from(playbookRuns)
+    .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
+    .where(
+      and(
+        runFloor(playbookRuns.workspaceId, userId, workspaceId),
+        recentFailureWhere(playbookRuns)
+      )
+    )
+    .groupBy(playbookRuns.playbookId, playbooks.name)
+    .orderBy(desc(latest), asc(playbookRuns.playbookId))
+    .limit(limit);
+  return rows.map((r) => ({
+    flowType: "playbook" as const,
+    flowId: r.flowId,
+    flowName: r.flowName ?? "Playbook",
+    recentFailedCount: r.recentFailedCount,
+    hasRunning: r.hasRunning === true,
+    latestStartedAt: new Date(r.latestStartedAt),
+  }));
 }
 
 /**
@@ -1836,7 +2024,7 @@ async function groupAutomationRuns(
       // needs-attention 'failed' rollup alongside genuine failures (the run-detail
       // surface renders the two with distinct calm/red tones).
       failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
-      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'failed' and coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
+      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${recentFailureWhere(automationRuns)}))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'running'))::int`,
       ...durationAggregates(automationRuns),
@@ -1923,7 +2111,7 @@ async function groupPlaybookRuns(
       runCount: drizzleSql<number>`count(*)::int`,
       completedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'completed'))::int`,
       failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
-      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed' and coalesce(${playbookRuns.completedAt}, ${playbookRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
+      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${recentFailureWhere(playbookRuns)}))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'running'))::int`,
       ...durationAggregates(playbookRuns),
