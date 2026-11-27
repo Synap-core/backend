@@ -7279,6 +7279,51 @@ _heal_units_converge() {
     return 0
 }
 
+# ── automatic disk hygiene (founder, 27 Nov 2026, with decision ce5fb987) ──────
+# Once a day (SYNAP_DISK_HYGIENE_INTERVAL_SEC, env or deploy/.env, default 86400; 0 = off), on the
+# first heal tick that finds the update lock free, run what `synap clean images`
+# and the clean door's prune actions run on request (_ue_prune_images): this
+# pod's release images older than the current AND previous release (a rollback
+# stays possible; every image a container uses is kept), this pod's dangling
+# first-party images (LABEL io.synap.first-party), the BuildKit cache down to
+# 2 GB, and pre-update dumps beyond the newest 2 (plus every dump an update
+# record names). Before, they ran only at the start of an update, after an
+# applied one, or when a person asked: an update that aborted after a host
+# build left its images and up to ~10 GB of cache until the next update
+# (perso, 27 Nov 2026). Never another stack's image, never a volume, never a
+# scheduled dump (the backup service keeps its own retention) nor a file a
+# person put in backups/. Recorded as a `pod.clean` event, action `hygiene`.
+_heal_disk_hygiene() { # cwd = deploy dir
+    local every="${SYNAP_DISK_HYGIENE_INTERVAL_SEC:-$(_ue_env_get SYNAP_DISK_HYGIENE_INTERVAL_SEC)}" stamp=state/heal/last-disk-hygiene now last
+    every="${every:-86400}"
+    case "$every" in ''|*[!0-9]*) every=86400 ;; esac
+    [ "$every" -gt 0 ] || return 0
+    now="$(date +%s)"; last="$(cat "$stamp" 2>/dev/null || true)"
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ $(( now - last )) -ge "$every" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    # A subshell: the lock (flock fd or mkdir dir) is released when it ends, so
+    # the restarts below take it again on their own.
+    (
+        local root before after freed=""
+        if ! synap_update_lock "$(pwd)" "synap heal (disk hygiene)" 2>/dev/null; then
+            echo "synap heal: another pod operation holds the update lock — disk hygiene waits for a later tick"
+            exit 0
+        fi
+        root="$(_res_timeout 10 docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)"
+        before="$(_clean_avail "$root")"
+        _ue_prune_images
+        after="$(_clean_avail "$root")"
+        if [ -n "$before" ] && [ -n "$after" ]; then freed=$(( after > before ? after - before : 0 )); fi
+        echo "$now" > "$stamp"
+        _synap_event "$(jq -cn --arg f "$freed" \
+            '{kind: "pod.clean", status: "done", action: "hygiene",
+              detail: "daily disk hygiene: old release images, dangling first-party images, build cache capped at 2 GB, pre-update dumps beyond the newest 2"}
+             + (if $f == "" then {} else {freedBytes: ($f | tonumber)} end)')" 0 >/dev/null
+    ) || echo "synap heal: disk hygiene failed (the next tick retries)" >&2
+    return 0
+}
+
 cmd_heal() {
     case "${1:-}" in -h|--help) echo "Usage: synap heal   (restart this pod's unhealthy containers within a budget; run by synap-heal.timer)"; return 0 ;; esac
     local deploy_dir=$(get_deploy_dir)
@@ -7291,6 +7336,7 @@ cmd_heal() {
     # failure never stops the tick.
     ( _res_sample ) || echo "synap heal: could not write state/resources.json" >&2
     _clean_dir_layout
+    _heal_disk_hygiene
     local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n w why cls todo=""
     local grace="${SYNAP_HEAL_STUCK_GRACE_TICKS:-2}"
     case "$grace" in ''|*[!0-9]*) grace=2 ;; esac

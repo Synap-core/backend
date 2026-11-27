@@ -122,7 +122,15 @@ after the merge; the nightly publishes the newest such commit if none did, and
 `synap update --from-source` of a clean checkout whose commit has such a
 release applies that release instead of building (pull first,
 `SYNAP_SOURCE_PULL_FIRST=0` to always build); without one it says so and
-builds, each image bounded by `SYNAP_BUILD_TIMEOUT_SEC` (default 2400). The release
+builds, each image bounded by `SYNAP_BUILD_TIMEOUT_SEC` (default 2400).
+
+Disk hygiene runs by itself: once a day the heal timer does what
+`synap clean images` does (release images older than the current and previous
+release, this pod's dangling images, the build cache down to 2 GB, pre-update
+dumps beyond the newest 2), only while no update holds the lock, and records a
+`pod.clean` event. `SYNAP_DISK_HYGIENE_INTERVAL_SEC` (seconds, default 86400;
+0 = off). Other stacks' images, volumes, scheduled dumps and files a person put
+in `backups/` are never touched. The release
 manifest is signed by CI's own identity (keyless cosign), and the pod refuses
 an unsigned one, so an image built on the devbox and pushed to GHCR by hand
 cannot become a release a pod accepts. Build on the devbox to test a change;

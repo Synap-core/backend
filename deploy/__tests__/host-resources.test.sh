@@ -99,8 +99,11 @@ M
 J
   : > "$FAKE/docker.log"; : > "$FAKE/curl.log"; : > "$FAKE/du.log"
 }
+# SYNAP_DISK_HYGIENE_INTERVAL_SEC=0: heal's once-a-day disk hygiene ACTS (it
+# prunes; prune-heal.test.sh §4c is its test). Off here, so E still proves the
+# resources sample itself is read-only.
 heal() {
-  ( cd "$S" || exit 1; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_PROC_ROOT="$P" SYNAP_LOCK_IMPL=mkdir \
+  ( cd "$S" || exit 1; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_PROC_ROOT="$P" SYNAP_LOCK_IMPL=mkdir SYNAP_DISK_HYGIENE_INTERVAL_SEC=0 \
       SYNAP_SYSTEMD_RUN_DIR="$TMP/no-systemd" DOCKER_HOST="unix://$FAKE/docker.sock" bash "$REPO/synap" heal ) >"$S/out" 2>&1 </dev/null
 }
 R() { jq -c "$1" "$DEPLOY/state/resources.json" 2>/dev/null; }

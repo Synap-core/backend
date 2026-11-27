@@ -25,6 +25,8 @@
 #       /health probe, the backend's last `event loop blocked` line, never a
 #       key id or a secret-looking value) and gives a STUCK backend
 #       SYNAP_HEAL_STUCK_GRACE_TICKS more ticks; a dead one restarts at once
+#   (e3) heal runs the same pruner unasked once a day (disk hygiene), only
+#       with the update lock free, recorded as a pod.clean event; 0 = off
 #   + pre-update dumps (newest 2 + every dump an update record names), the unattended update path
 #     (request contract, policy, window, enforce), units install/status/remove,
 #     `synap clean` scoped to this pod, and a static no-global-prune scan.
@@ -367,6 +369,37 @@ grep -q "^compose up -d --no-deps --force-recreate kratos" "$FAKE/log" && grep -
   && ok "(e) kratos recreated on the restored config, event recorded" || bad "(e) kratos not recreated: $(grep kratos "$FAKE/log")"
 : > "$FAKE/log"; run_synap heal
 ! grep -qE "^compose (up|restart).*kratos" "$FAKE/log" && ok "(e) kratos on its verified config still crash-looping: heal leaves it to Docker's backoff" || bad "(e) heal kept acting on kratos: $(grep kratos "$FAKE/log")"
+
+# ═══ 4c. daily disk hygiene on the heal tick (founder, 27 Nov 2026) ═════════
+# What `synap clean images` runs on request now also runs unasked, once a day,
+# on the first heal tick that finds the update lock free. Same pruner, so the
+# same promises (a)(b)(c) must hold when no person asked.
+hyg_ev() { grep '"kind":"pod.clean"' "$DEPLOY/state/events.jsonl" 2>/dev/null | grep '"action":"hygiene"'; }
+setup hygiene; dumps_fixture
+run_synap heal; rc=$?
+[ "$rc" = 0 ] && ! img "sha256:old-backend" && ! img "sha256:dev-old" && ! img "sha256:dangling-ours" && [ "$(cat "$FAKE/cache")" = 2000000000 ] \
+  && ok "hygiene: the first heal tick removes old release images and our dangling ones, and caps the build cache at 2 GB" || { bad "hygiene: rc=$rc images=$(cut -d'|' -f1 "$FAKE/images.tsv" | tr '\n' ' ') cache=$(cat "$FAKE/cache")"; show; }
+img "sha256:webui" && img "sha256:idle-tool" && img "sha256:dangling-unlabeled" && img "sha256:rel1-backend" && img "sha256:rel2-pod-admin" && img "sha256:dev-used" && [ ! -s "$FAKE/violations" ] \
+  && ok "hygiene: other stacks' images (used and unused), unlabeled dangling, current + previous release and in-use images kept; no global prune" || bad "hygiene: kept set wrong or violation: $(cat "$FAKE/violations")"
+dump 20261014T090000Z-auto && dump 20260901T000000Z-manual && dump 20261012T000000Z-pre-update && ! dump 20261005T000000Z-pre-update \
+  && ok "hygiene: scheduled and manual dumps untouched; pre-update dumps beyond the newest 2 (and pinned) removed" || bad "hygiene dumps: $(ls "$DEPLOY/backups/postgres" | tr '\n' ' ')"
+hyg_ev | jq -e 'select(.status == "done" and (.freedBytes | type) == "number" and .freedBytes > 0)' >/dev/null \
+  && ok "hygiene: recorded as a pod.clean event (action hygiene) with the bytes freed" || bad "hygiene: event $(hyg_ev)"
+: > "$FAKE/log"; run_synap heal
+! grep -qE "^(rmi|builder prune)" "$FAKE/log" && [ "$(hyg_ev | wc -l | tr -d ' ')" = 1 ] && ok "hygiene: at most once a day (the next tick prunes nothing)" || bad "hygiene ran twice: $(grep -E '^(rmi|builder)' "$FAKE/log" | head -3)"
+echo $(( $(date +%s) - 90000 )) > "$DEPLOY/state/heal/last-disk-hygiene"; : > "$FAKE/log"; run_synap heal
+grep -q "^builder prune -f --max-used-space 2gb" "$FAKE/log" && [ "$(hyg_ev | wc -l | tr -d ' ')" = 2 ] && ok "hygiene: runs again once a day has passed" || bad "hygiene: not re-run after 25 h"
+setup hygieneoff
+SYNAP_DISK_HYGIENE_INTERVAL_SEC=0 run_synap heal
+! grep -qE "^(rmi|builder prune)" "$FAKE/log" && img "sha256:old-backend" && ok "hygiene: SYNAP_DISK_HYGIENE_INTERVAL_SEC=0 turns it off" || bad "hygiene ran while off"
+setup hygienelock
+mkdir -p "$DEPLOY/state/update.lock.d"; echo "synap update pid=$$ since=2026-10-15T00:00:00Z" > "$DEPLOY/state/update.lock.d/owner"
+run_synap heal; rc=$?
+[ "$rc" = 0 ] && ! grep -qE "^(rmi|builder prune)" "$FAKE/log" && [ ! -e "$DEPLOY/state/heal/last-disk-hygiene" ] && [ -d "$DEPLOY/state/update.lock.d" ] \
+  && ok "hygiene: the update lock is held (an update may be building): nothing pruned, no stamp, the holder's lock left alone" || { bad "hygiene under a held lock: rc=$rc"; show; }
+rm -rf "$DEPLOY/state/update.lock.d"; run_synap heal
+! img "sha256:old-backend" && [ -s "$DEPLOY/state/heal/last-disk-hygiene" ] && [ ! -d "$DEPLOY/state/update.lock.d" ] \
+  && ok "hygiene: lock free on a later tick: it runs and releases its lock" || { bad "hygiene: did not run once the lock was free"; show; }
 
 # ═══ 4b. heal records WHY, and gives a stuck backend more time (G7a) ═════════
 # The fake answers heal's questions once $FAKE/why exists: the container id
