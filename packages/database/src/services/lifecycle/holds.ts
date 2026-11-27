@@ -16,9 +16,11 @@
  * carried hold of a `paused → paused` move), the holds whose `until.date` has
  * come (the hourly resume sweep), the holds waiting on a thing that just
  * moved (the `until.moves` resume), the holds waiting on a dev fact
- * (`pr:` / `main:` / `job:` / `ai:`, the hourly sweep's second half), and the holds
- * whose `reviewBy` has passed (the status watcher, W6). A passed `reviewBy`
- * never moves anything.
+ * (`pr:` / `main:` / `job:` / `ai:`, the hourly sweep's second half), every
+ * hold waiting on a thing's move (the sweep's safety net for a lost wake, read
+ * with that thing's moves, `listSubjectMoves`), and the holds whose `reviewBy`
+ * has passed (the status watcher, W6). A passed `reviewBy` never moves
+ * anything.
  */
 import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -27,6 +29,7 @@ import { ISO_STAMP_PATTERN } from "@synap-core/types/needs-you/rule";
 import {
   HOLD_WAIT_NOT_YOURS_MESSAGE,
   holdWaitSlotMatches,
+  parseHoldMovesRef,
   parseHoldWaitRef,
   type Hold,
   type MoveHoldDecision,
@@ -151,6 +154,11 @@ export type HoldFilter =
   | { awaitingDevFacts: true }
   /** Every hold whose `until.moves` names an answer or a proposal (`HoldWaitRef`). */
   | { awaitingWaitRefs: true }
+  /**
+   * Every hold whose `until.moves` names a transition subject
+   * (`parseHoldMovesRef`: `entity:<id>`, `focus_session:<id>`, ...).
+   */
+  | { awaitingSubjects: true }
   /** Every current hold (the status watcher's wait episodes ask about each). */
   | { current: true };
 
@@ -193,6 +201,11 @@ function filterSql(filter: HoldFilter): SQL {
   }
   if ("awaitingWaitRefs" in filter) {
     return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(answer|proposal):'`;
+  }
+  if ("awaitingSubjects" in filter) {
+    // The partial index's own predicate (0374); which `moves` name a subject
+    // is decided by `parseHoldMovesRef` below, never a second list here.
+    return sql`(o.transition->'hold'->'until'->>'moves') IS NOT NULL`;
   }
   return sql`o.transition->'hold'->'until'->>'moves' = ${`${filter.awaiting.subjectType}:${filter.awaiting.subjectId}`}`;
 }
@@ -251,6 +264,16 @@ export async function listHolds(
     );
   }
   if ("resumeDueBy" in filter) held = dueByDate(held, filter.resumeDueBy);
+  if ("awaitingSubjects" in filter) {
+    held = held.filter((t) => {
+      const until = t.hold.until;
+      return (
+        until != null &&
+        "moves" in until &&
+        parseHoldMovesRef(until.moves) != null
+      );
+    });
+  }
   const standing = await statusesNow(db, held);
   const nowMs = now.getTime();
   return held
@@ -273,6 +296,52 @@ export async function listHolds(
           t.hold.reviewBy != null && Date.parse(t.hold.reviewBy) <= nowMs,
       };
     });
+}
+
+/** One move of an awaited thing, as the transition log recorded it. */
+export interface SubjectMove {
+  subjectType: TransitionSubjectType;
+  subjectId: string;
+  transitionId: string;
+  to: string;
+  category: string;
+  /** When it was recorded (ISO): the order the reactor saw the moves in. */
+  recordedAt: string;
+}
+
+/**
+ * Every move the transition log recorded for these things, oldest first: what
+ * a hold on a thing's move (`until.moves` = `entity:<id>`, ...) is decided on
+ * when the move's own delivery to the hold-resume reactor was not seen (the
+ * hourly sweep, a pause recorded after the move). Read by the subject index
+ * (0374); one thing has few moves. A failed read throws: it is never "no move".
+ */
+export async function listSubjectMoves(
+  db: Db | Tx,
+  subjects: readonly { subjectType: string; subjectId: string }[]
+): Promise<SubjectMove[]> {
+  if (subjects.length === 0) return [];
+  const ids = [...new Set(subjects.map((s) => s.subjectId))];
+  const res = await db.execute(sql`
+    SELECT ${SUBJECT_TYPE("o")} AS "subjectType",
+           ${SUBJECT_ID("o")} AS "subjectId",
+           o.transition_id AS "transitionId",
+           o.transition->>'to' AS "to",
+           o.transition->>'category' AS "category",
+           coalesce(o.transition->>'recordedAt', to_json(o.created_at) #>> '{}') AS "recordedAt"
+      FROM ${lifecycleTransitionOutbox} o
+     WHERE ${SUBJECT_ID("o")} IN (${sql.join(
+       ids.map((id) => sql`${id}`),
+       sql`, `
+     )})
+     ORDER BY ${RECORDED("o")}, o.created_at, o.transition_id`);
+  const raw = (
+    Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])
+  ) as SubjectMove[];
+  const wanted = new Set(
+    subjects.map((s) => `${s.subjectType}:${s.subjectId}`)
+  );
+  return raw.filter((m) => wanted.has(`${m.subjectType}:${m.subjectId}`));
 }
 
 /**

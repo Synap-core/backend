@@ -6,7 +6,12 @@
  *     current hold whose date has come;
  *   - `until.moves`: the reactor below sends this queue the transition of
  *     every move; the job resumes the holds that waited on that thing (and,
- *     with `until.to`, on it reaching that status or category);
+ *     with `until.to`, on it reaching that status or category). That send
+ *     happens ONCE per move, so a lost one (a delivery that failed, a
+ *     process without the reactor) or a pause recorded after the move is
+ *     caught on the thing's recorded moves (`subjectHoldsMet`): when a pause
+ *     on a thing is recorded (`pausedOn`, the reactor below) and on every
+ *     hourly sweep;
  *   - `until.moves` naming a DEV FACT (`pr:<owner/name>#<n>`,
  *     `main:<owner/name>`, `job:<name>`, plan P1.4): the observation door
  *     (api `record-observation.ts`) sends this queue `devFact` = that ref
@@ -64,6 +69,7 @@ import {
   gt,
   inArray,
   listHolds,
+  listSubjectMoves,
   proposals,
   resolveStatusMoveTarget,
   setRunStatus,
@@ -88,10 +94,14 @@ import {
 import {
   holdWaitSlotMatches,
   holdWokenBy,
+  isTerminalLifecycleCategory,
   parseHoldDevRef,
+  parseHoldMovesRef,
   parseHoldWaitRef,
   HOLD_AI_MOVES,
+  type HoldUntil,
   type HoldWaitRef,
+  type LifecycleCategory,
 } from "@synap-core/types/lifecycle";
 import {
   DEV_LOOP_EVENT_TYPES,
@@ -159,6 +169,13 @@ export interface HoldResumeJobData {
    * the ones naming that session's slots or that proposal when given.
    */
   waits?: { sessionId?: string; proposalId?: string };
+  /**
+   * A pause that waits on a thing's move was recorded: its `until.moves`
+   * (`focus_session:<id>`, `entity:<id>`...). The holds on that thing are
+   * decided now on its recorded moves, so a thing that already moved or ended
+   * before the pause releases it at once.
+   */
+  pausedOn?: string;
 }
 
 /**
@@ -511,6 +528,92 @@ async function waitHoldsMet(
   });
 }
 
+/**
+ * The holds on a THING's move (`until.moves` = `entity:<id>`,
+ * `focus_session:<id>`..., `parseHoldMovesRef`) that its RECORDED moves
+ * already satisfy — the safety net under the reactor's one `awaiting` send,
+ * which a lost delivery, a process without the reactor or a pause recorded
+ * after the move never sends again. Decided on the transition log, never on
+ * the thing's current status alone, with the reactor's own rule
+ * (`holdWokenBy`: any move, or one landing on `until.to` as a status or a
+ * category). Met when:
+ *  - a move of the thing recorded after the pause began wakes the hold;
+ *  - or the thing already stands where the hold waits for it (its latest
+ *    move lands on `until.to`) or, with no `to`, has ENDED (done or lost):
+ *    it will not move for this hold again, as a wait on a session that
+ *    ended without its answer is over.
+ * One read for every hold at once. A failed read throws (the sweep surfaces
+ * it as a failed job and runs again); it is never "nothing to resume".
+ */
+async function subjectHoldsMet(
+  held: readonly CurrentHold[]
+): Promise<Array<{ h: CurrentHold; reason: string }>> {
+  const holds = held.flatMap((h) => {
+    const until = h.hold.until;
+    if (!until || !("moves" in until)) return [];
+    const ref = parseHoldMovesRef(until.moves);
+    if (!ref) return [];
+    if (Number.isNaN(Date.parse(h.hold.since))) {
+      logger.warn(
+        {
+          subjectType: h.subjectType,
+          subjectId: h.subjectId,
+          since: h.hold.since,
+        },
+        "hold on a move: its pause start does not parse — this hold is skipped, the others resume"
+      );
+      return [];
+    }
+    return [{ h, until, ref }];
+  });
+  if (holds.length === 0) return [];
+  const moves = await listSubjectMoves(
+    db,
+    holds.map(({ ref }) => ref)
+  );
+  const byThing = new Map<string, typeof moves>();
+  for (const m of moves) {
+    const key = `${m.subjectType}:${m.subjectId}`;
+    byThing.set(key, [...(byThing.get(key) ?? []), m]);
+  }
+  return holds.flatMap(({ h, until, ref }) => {
+    const log = byThing.get(`${ref.subjectType}:${ref.subjectId}`) ?? [];
+    const since = Date.parse(h.hold.since);
+    const woke = log.find(
+      (m) =>
+        Date.parse(m.recordedAt) > since &&
+        holdWokenBy(until, { ...ref, to: m.to, category: m.category })
+    );
+    if (woke) {
+      return [
+        {
+          h,
+          reason: `What it waited on (${until.moves}) moved to ${woke.to}.`,
+        },
+      ];
+    }
+    const latest = log.at(-1);
+    return latest && standsWhereHoldWaits(until, latest)
+      ? [
+          {
+            h,
+            reason: `What it waited on (${until.moves}) was already ${latest.to}.`,
+          },
+        ]
+      : [];
+  });
+}
+
+/** The awaited thing's latest move leaves nothing more to wait for. */
+function standsWhereHoldWaits(
+  until: Extract<HoldUntil, { moves: string }>,
+  latest: { to: string; category: string }
+): boolean {
+  return until.to != null
+    ? until.to === latest.to || until.to === latest.category
+    : isTerminalLifecycleCategory(latest.category as LifecycleCategory);
+}
+
 export async function handleHoldResume(
   data: HoldResumeJobData = {},
   now: Date = new Date()
@@ -518,6 +621,7 @@ export async function handleHoldResume(
   const moved = data.awaiting;
   const devFact = data.devFact ? parseHoldDevRef(data.devFact) : null;
   let held: Array<{ h: CurrentHold; reason: string; ai?: true }>;
+  let sweepFailure: unknown = null;
   if (moved) {
     held = (await listHolds(db, { awaiting: moved }, now))
       // A WAIT (`proposal:<id>`, `answer:…`) is resumed only by the wait
@@ -537,6 +641,11 @@ export async function handleHoldResume(
         data.waits
       )
     ).map(({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) }));
+  } else if (data.pausedOn) {
+    const ref = parseHoldMovesRef(data.pausedOn);
+    held = ref
+      ? await subjectHoldsMet(await listHolds(db, { awaiting: ref }, now))
+      : [];
   } else if (data.devFact) {
     const i = data.devFact.indexOf(":");
     held = devFact
@@ -560,13 +669,25 @@ export async function handleHoldResume(
         }))
       : [];
   } else {
-    const [dated, dev, waits] = await Promise.allSettled([
+    const [dated, dev, waits, things] = await Promise.allSettled([
       listHolds(db, { resumeDueBy: now }, now),
       listHolds(db, { awaitingDevFacts: true }, now).then(devHoldsMet),
       listHolds(db, { awaitingWaitRefs: true }, now).then((held) =>
         waitHoldsMet(held)
       ),
+      // The safety net under the reactor's one send per move: a hold on a
+      // thing whose move was never seen is decided on the log here.
+      listHolds(db, { awaitingSubjects: true }, now).then(subjectHoldsMet),
     ]);
+    if (things.status === "rejected") {
+      // Never "nothing to resume": the job fails once the others ran, so
+      // pg-boss records it and runs it again.
+      sweepFailure = things.reason;
+      logger.error(
+        { err: things.reason },
+        "hold on a move: read failed — the sweep fails and runs again"
+      );
+    }
     if (waits.status === "rejected") {
       logger.warn(
         { err: waits.reason },
@@ -597,9 +718,10 @@ export async function handleHoldResume(
       ...(waits.status === "fulfilled" ? waits.value : []).map(
         ({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) })
       ),
+      ...(things.status === "fulfilled" ? things.value : []),
     ];
   }
-  const woken = Boolean(moved || data.devFact || data.waits);
+  const woken = Boolean(moved || data.devFact || data.waits || data.pausedOn);
   let resumed = 0;
   let failure: unknown = null;
   let aiStillHeld = false;
@@ -642,11 +764,14 @@ export async function handleHoldResume(
             ? "dev_fact"
             : data.waits
               ? "wait"
-              : "sweep",
+              : data.pausedOn
+                ? "paused_on"
+                : "sweep",
       },
       "Resumed held things"
     );
   }
+  if (sweepFailure) throw sweepFailure;
   return { resumed, skipped: held.length - resumed };
 }
 
@@ -886,10 +1011,12 @@ export const holdResumeReactor: Reactor = {
     // A pause that waits on an answer or a proposal: checked NOW, so one that
     // landed before the wait began resumes it at once (the Inngest trap).
     const until = (d.hold as { until?: unknown } | null | undefined)?.until;
-    const waitsOn =
+    const movesRef =
       until && typeof until === "object" && "moves" in until
-        ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
+        ? String((until as { moves: unknown }).moves)
         : null;
+    const waitsOn = movesRef ? parseHoldWaitRef(movesRef) : null;
+    const pausedOn = movesRef ? parseHoldMovesRef(movesRef) : null;
     // A session ENDED: the holds that wait on one of its slots
     // (`answer:<id>/…`) are checked now — an end without the answer is over.
     if (
@@ -931,6 +1058,20 @@ export const holdResumeReactor: Reactor = {
         } satisfies HoldResumeJobData,
         payload.eventId
           ? { singletonKey: `hold-resume:wait:${payload.eventId}` }
+          : {}
+      );
+    }
+    // A pause that waits on a THING's move: decided now on that thing's
+    // recorded moves, so a thing that already moved or ended before the pause
+    // (or while its delivery was lost) releases it at once.
+    if (d.category === "paused" && pausedOn) {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          pausedOn: `${pausedOn.subjectType}:${pausedOn.subjectId}`,
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:paused-on:${payload.eventId}` }
           : {}
       );
     }
