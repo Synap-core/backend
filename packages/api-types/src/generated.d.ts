@@ -14050,7 +14050,7 @@ export interface CurrentHold extends Required<HoldSubjectRef> {
 	/** The person the paused thing's move was attributed to. */
 	userId: string;
 	workspaceId: string | null;
-	/** `until.date` has come: the hourly sweep resumes it. */
+	/** `until.date` has come: the resume sweep resumes it. */
 	resumeDue: boolean;
 	/** `reviewBy` has passed: a signal for the watcher, never a move. */
 	reviewDue: boolean;
