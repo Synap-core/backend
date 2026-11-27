@@ -76,9 +76,6 @@ export const capabilityHandlers = {
     if (typeof profileId !== "string" || !profileId) {
       return ok({ error: "profileId is required" });
     }
-    if (!Array.isArray(args.options)) {
-      return ok({ error: "options is required (each { key, category })" });
-    }
     return ok(
       await proposeKindLifecycle({
         userId,
@@ -107,12 +104,6 @@ export const capabilityHandlers = {
     const profileId = args.profileId;
     if (typeof profileId !== "string" || !profileId) {
       return ok({ error: "profileId is required" });
-    }
-    if (!Array.isArray(args.options)) {
-      return ok({
-        error:
-          "options is required: the complete new list, each { key, category, label? }",
-      });
     }
     const lifecycle = await new ProfileResolutionService(
       db
@@ -942,11 +933,6 @@ export const capabilityHandlers = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (typeof args.name !== "string" || args.name.trim() === "") {
       return ok({ error: "name is required" });
-    }
-    if (typeof args.triggerType !== "string") {
-      return ok({
-        error: "triggerType is required (event | cron | webhook | manual)",
-      });
     }
     const flow = args.flowDefinition as
       { nodes?: unknown; edges?: unknown } | undefined;

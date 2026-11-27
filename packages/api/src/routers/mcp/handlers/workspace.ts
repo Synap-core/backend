@@ -972,9 +972,6 @@ export const workspaceHandlers = {
     if (typeof workspaceId !== "string" || !workspaceId) {
       return ok({ error: "workspaceId is required" });
     }
-    if (!args.brief || typeof args.brief !== "object") {
-      return ok({ error: "brief is required: the fields to change" });
-    }
     return ok(
       await updateSpaceBriefGoverned({
         userId: ctx.userId,
@@ -1082,9 +1079,6 @@ export const workspaceHandlers = {
   synap_change_kind_scope: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (typeof args.profileId !== "string") {
-      return ok({ error: "profileId is required" });
-    }
     const scope =
       args.scope === "shared" || args.scope === "workspace"
         ? args.scope

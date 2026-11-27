@@ -234,11 +234,6 @@ export const askPersonHandlers = {
         error: `question is required: ONE line of at most ${ASK_PERSON_QUESTION_MAX} characters, the thing you need the person to answer. NOTHING WAS FILED.`,
       });
     }
-    if (!args.ask || typeof args.ask !== "object" || Array.isArray(args.ask)) {
-      return ok({
-        error: `ask is required: HOW the person answers — {mode:'confirm'} | {mode:'choose', options:[…]} | {mode:'form', form:{fields:[…]}} | {mode:'act', steps:[…]} | {mode:'provide', provide:{…}}. NOTHING WAS FILED.${ASK_SKILL_HINT}`,
-      });
-    }
     const askArg = AskSchema.safeParse(args.ask);
     if (!askArg.success) {
       return ok({

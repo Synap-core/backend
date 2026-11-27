@@ -1,10 +1,8 @@
 /**
  * `synap_capture` DECLARES every plan input its handler forwards.
  *
- * MCP input schemas are advisory, and the undeclared-args check
- * (`undeclared-args.ts`) answers a key the tool does not declare with
- * `ignoredArgs: "synap_capture does not take …: ignored"` today and refuses
- * it once W-C3 turns the check into a refusal. The handler forwards every
+ * The door's input check (`parseToolArgs`, define-tool.ts) refuses a key
+ * the tool does not declare. The handler forwards every
  * `CAPTURE_PLAN_KEYS` array, but `edits` (the re-plan ops, from-intent §2d)
  * was forwarded and never declared: an agent that followed the skill was told
  * its re-plan was ignored, and would be refused.

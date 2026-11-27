@@ -313,9 +313,6 @@ export const sessionHandlers = {
       typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined;
     const kinds = parseSessionChangeKinds(args.events);
     if (!kinds.ok) return ok({ error: kinds.error });
-    if (args.stamp !== undefined && typeof args.stamp !== "boolean") {
-      return ok({ error: "stamp must be true or false." });
-    }
     // `stamp: false` = a PEEK (a watcher): never writes the "Picked up" receipt.
     const stampReceipt = Boolean(agentUserId) && args.stamp !== false;
     if (isConversation) {

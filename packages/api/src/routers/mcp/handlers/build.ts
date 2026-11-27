@@ -1997,15 +1997,6 @@ export const buildHandlers = {
           : [...new Set((types as string[]).map((t) => t.trim()))];
     }
     if (args.parameters !== undefined) {
-      if (
-        !args.parameters ||
-        typeof args.parameters !== "object" ||
-        Array.isArray(args.parameters)
-      ) {
-        return toolError(
-          `Tool '${toolName}': parameters must be a JSON Schema object.`
-        );
-      }
       patch.parameters = args.parameters as Record<string, unknown>;
     }
     // Same bound as `synap_create_skill` (1..300 s): the input holds it.
