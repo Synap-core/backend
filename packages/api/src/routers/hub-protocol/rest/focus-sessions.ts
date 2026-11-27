@@ -68,6 +68,7 @@ import { requestClientKey } from "../../../services/focus-sessions/resolve-work-
 import type { SessionCriterion } from "@synap/playbooks";
 import {
   normalizeSessionTitle,
+  SESSION_CLOSE_OUTCOMES,
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
@@ -301,6 +302,11 @@ const WorkGraphWireSchema = z.object({
       playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
       /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
       skipped: z.literal(true).optional(),
+      /** The step's planned window and due date (`metadata`, valid dates only). Absent = none. */
+      plannedFor: z.string().optional(),
+      dueBy: z.string().optional(),
+      /** How it ended (`sessionClosedAs`). Absent = not ended, or an older pod. */
+      closedAs: z.enum(SESSION_CLOSE_OUTCOMES).optional(),
     })
   ),
   edges: z.array(

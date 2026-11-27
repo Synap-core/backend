@@ -45580,7 +45580,13 @@
                             "type": ["string", "null"],
                             "enum": ["session", "goal", null]
                           },
-                          "skipped": { "type": "boolean", "enum": [true] }
+                          "skipped": { "type": "boolean", "enum": [true] },
+                          "plannedFor": { "type": "string" },
+                          "dueBy": { "type": "string" },
+                          "closedAs": {
+                            "type": "string",
+                            "enum": ["done", "not_done"]
+                          }
                         },
                         "required": [
                           "id",
@@ -45621,7 +45627,8 @@
                               "waits_on_output",
                               "triggered",
                               "updated",
-                              "serves"
+                              "serves",
+                              "replaces"
                             ]
                           },
                           "from": { "type": "string" },

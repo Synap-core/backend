@@ -130,6 +130,7 @@ import {
 } from "./session-needs-you";
 import { RoomPanel } from "./room-panel";
 import { useWorkRead, WorkSection } from "./work-section";
+import { PlanStepsSection } from "./plan-steps-section";
 import { gatesDrawnAbove, restartPlace } from "../work-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
@@ -567,6 +568,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
             />
           </SectionCard>
         )}
+        <PlanStepsSection sessionId={id} hrefFor={sessionHref} />
         <SubSessionsSection
           sessionId={id}
           view={children}
