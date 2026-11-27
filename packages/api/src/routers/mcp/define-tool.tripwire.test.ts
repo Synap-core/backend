@@ -52,6 +52,7 @@ const ALLOWED: ReadonlyArray<{
     reason:
       "The dispatch: each domain's handler map, keyed by the tool it runs. Merged into TOOL_HANDLERS, which `satisfies Required<McpHandlerMap>` against the definitions, so a tool without a handler (or a handler for no tool) does not compile.",
   },
+  { file: /^routers\/mcp\/no-such\.ts$/, shape: "list", reason: "negctl" },
 ];
 
 type Shape = "map" | "list" | "keyed";
