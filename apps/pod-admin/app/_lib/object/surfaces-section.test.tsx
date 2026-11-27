@@ -1,12 +1,15 @@
 /**
  * The Surfaces list on an object's page, rendered from the wire
  * shape `surfaces.forObject` answers: each row a door (an attached surface
- * opens this page on it, `?surface=`), the body and the detail look not
- * listed again, a failed read said with its retry, a partial read said, and
- * nothing drawn when there is nothing.
+ * opens this page on it, `?surface=`) with a ⋯ menu, the body and the detail
+ * look not listed again, a row that opens nowhere not listed, nothing drawn
+ * while the read is in flight or when there is nothing, a failed read (or a
+ * failed store with nothing listed) said with its retry, and a failed store
+ * beside listed rows said in one line under them.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
 
 type Read = {
   isLoading?: boolean;
@@ -18,6 +21,7 @@ const asked: Array<{ kind: string; id: string }> = [];
 
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
+    useUtils: () => ({ surfaces: { forObject: { invalidate: vi.fn() } } }),
     surfaces: {
       forObject: {
         useQuery: (input: { kind: string; id: string }) => {
@@ -30,6 +34,7 @@ vi.mock("../../../lib/trpc", () => ({
           };
         },
       },
+      detach: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
     },
   },
 }));
@@ -56,7 +61,9 @@ const draw = () => renderToStaticMarkup(<SurfacesSection anchor={anchor} />);
 beforeEach(() => {
   read = {};
   asked.length = 0;
+  setAmbientCatalogLocale("en");
 });
+afterEach(() => setAmbientCatalogLocale("en"));
 
 describe("SurfacesSection", () => {
   it("lists the surfaces, each a door; an attached one opens this page on it", () => {
@@ -113,9 +120,43 @@ describe("SurfacesSection", () => {
     // Each body named through the vocabulary door.
     expect(html).toContain(">HTML artifact<");
     expect(html).toContain(">View<");
+    // Each row carries its ⋯ menu, named for the row.
+    expect(html).toContain('aria-label="Actions for Investor radar"');
+    expect(html).toContain('aria-label="Actions for Deck"');
   });
 
-  it("caps the list and offers Show all", () => {
+  it("does not list a row that opens nowhere here (named, not a door)", () => {
+    read = {
+      data: {
+        rows: [
+          row({}),
+          // A space's start-page cell: no page here, no outside link.
+          row({
+            id: "home-cell",
+            body: "cell",
+            relation: "home",
+            title: "Start cell",
+            source: "start-page",
+            openUrl: `/open/${E}`,
+          }),
+        ],
+        unavailable: [],
+      },
+    };
+    const html = draw();
+    expect(html).toContain(">Investor radar<");
+    expect(html).not.toContain("Start cell");
+  });
+
+  it("names each body in the reader's language", () => {
+    setAmbientCatalogLocale("fr");
+    read = { data: { rows: [row({})], unavailable: [] } };
+    const html = draw();
+    expect(html).toContain(">Vue<");
+    expect(html).not.toContain(">View<");
+  });
+
+  it("caps the list; Show all says it is collapsed", () => {
     read = {
       data: {
         rows: Array.from({ length: SURFACES_CAP + 2 }, (_, i) =>
@@ -130,24 +171,48 @@ describe("SurfacesSection", () => {
     const html = draw();
     expect(html).toContain(`Board ${SURFACES_CAP - 1}`);
     expect(html).not.toContain(`Board ${SURFACES_CAP}<`);
-    expect(html).toContain(`Show all ${SURFACES_CAP + 2}`);
+    expect(html).toMatch(
+      new RegExp(
+        `<button[^>]*aria-expanded="false"[^>]*>Show all ${SURFACES_CAP + 2}`
+      )
+    );
+  });
+
+  it("draws nothing while the read is in flight (no card that then vanishes)", () => {
+    read = { isLoading: true, data: undefined };
+    expect(draw()).toBe("");
   });
 
   it("says a failed read, with a retry, never an empty list", () => {
     read = { isError: true, data: undefined };
     const html = draw();
     expect(html).toContain("Couldn’t load surfaces");
+    expect(html).toMatch(/<button[^>]*>[^<]*Retry/);
   });
 
-  it("says when a store could not be read, even with no rows", () => {
+  it("a failed store with nothing listed is a failed read, never a short list", () => {
     read = {
       data: { rows: [], unavailable: [{ source: "views", error: "boom" }] },
     };
     const html = draw();
-    expect(html).toContain("Some places couldn’t be read");
-    // The shared error row, with its retry.
-    expect(html).toContain("text-status-down");
+    expect(html).toContain("Couldn’t load surfaces");
+    expect(html).not.toContain("Some surfaces couldn’t be loaded");
     expect(html).toMatch(/<button[^>]*>[^<]*Retry/);
+  });
+
+  it("a failed store beside listed rows is one line under them, with its retry", () => {
+    read = {
+      data: {
+        rows: [row({})],
+        unavailable: [{ source: "views", error: "boom" }],
+      },
+    };
+    const html = draw();
+    expect(html).toContain(">Investor radar<");
+    expect(html).toContain("Some surfaces couldn’t be loaded.");
+    expect(html).not.toContain("Couldn’t load surfaces");
+    const strip = html.slice(html.indexOf("Some surfaces couldn"));
+    expect(strip).toMatch(/<button[^>]*>[^<]*Retry/);
   });
 
   it("draws nothing when the object carries nothing", () => {

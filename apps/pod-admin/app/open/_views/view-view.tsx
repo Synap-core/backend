@@ -19,6 +19,7 @@ import { formatRelative } from "../../../lib/format";
 import { shortDescription } from "../../_lib/object/object-summaries";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import type { ObjectCrumb } from "../../_lib/object/object-header";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { HandoffCard } from "../../(admin)/components/handoff-card";
 import { openIn } from "../../../lib/open-in";
@@ -56,7 +57,14 @@ function viewRender(config: unknown): unknown {
     : undefined;
 }
 
-export function ViewView({ id }: { id: string }) {
+export function ViewView({
+  id,
+  breadcrumb,
+}: {
+  id: string;
+  /** The trail back, when this view opened on an object (`?surface=`). */
+  breadcrumb?: ObjectCrumb[];
+}) {
   const query = trpc.views.get.useQuery({ id });
   useReauthOnUnauthorized(query.error);
   const loaded = (query.data as ViewPayload | undefined)?.view;
@@ -75,7 +83,12 @@ export function ViewView({ id }: { id: string }) {
   const fail = loadFailure(query.error, "View");
   if (fail || !data?.view) {
     return (
-      <OpenFailure kind="view" id={id} failure={fail ?? couldNotLoad("View")} />
+      <OpenFailure
+        kind="view"
+        id={id}
+        failure={fail ?? couldNotLoad("View")}
+        breadcrumb={breadcrumb}
+      />
     );
   }
 
@@ -120,6 +133,7 @@ export function ViewView({ id }: { id: string }) {
       header={{
         kind: "view",
         title,
+        breadcrumb,
         summary: written ?? describeView(view, t),
         ...(drawn
           ? { secondaryActions: <OpenInAppLink type="view" id={id} /> }
