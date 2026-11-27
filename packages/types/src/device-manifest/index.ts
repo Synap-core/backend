@@ -85,6 +85,11 @@ export const DeviceConnectionSchema = z.discriminatedUnion("mode", [
     installationId: Id.optional(),
     /** The bridge driver ("proxmox", "moonraker", …). */
     driver: z.string().trim().min(1).max(64),
+    /**
+     * What the bridge's own system calls this device (a Proxmox guest's
+     * `vmid`): how a later discovery finds the device it already made.
+     */
+    externalId: Id.optional(),
   }),
   z.object({
     mode: z.literal("provider"),
@@ -123,6 +128,12 @@ export const DEVICE_CAPABILITY_NAME =
 const Word = (max: number) => z.string().trim().min(1).max(max);
 const Mb = z.number().int().nonnegative();
 
+/**
+ * A firmware UUID that names no machine: all zeros or all F, what a board or a
+ * VM that never set one reports.
+ */
+const PLACEHOLDER_HARDWARE_ID = /^[0-]+$|^[fF-]+$/;
+
 export const DeviceIdentitySchema = z.object({
   vendor: Word(120).optional(),
   model: Word(200).optional(),
@@ -132,6 +143,13 @@ export const DeviceIdentitySchema = z.object({
   osVersion: Word(120).optional(),
   arch: Word(32).optional(),
   hostname: Word(253).optional(),
+  /**
+   * The machine's firmware UUID (DMI `product_uuid`, macOS
+   * `IOPlatformUUID`): the same machine seen by two doors (its own runner and
+   * a hypervisor's bridge) is one device. A placeholder reads as absent
+   * (`parseDeviceManifest`).
+   */
+  hardwareId: Word(64).optional(),
 });
 export type DeviceIdentity = z.output<typeof DeviceIdentitySchema>;
 
@@ -263,6 +281,11 @@ export function parseDeviceManifest(
   const parsed = DeviceManifestSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   const manifest = parsed.data;
+  if (
+    manifest.identity?.hardwareId !== undefined &&
+    PLACEHOLDER_HARDWARE_ID.test(manifest.identity.hardwareId)
+  )
+    delete manifest.identity.hardwareId;
   const kindSchema =
     opts.kind && isDeviceKind(opts.kind)
       ? DEVICE_KIND_PARAMETERS[opts.kind]
@@ -273,7 +296,10 @@ export function parseDeviceManifest(
       return { ok: false, error: firstIssue(p.error, "parameters") };
     manifest.parameters = p.data as Record<string, unknown>;
   }
-  if (JSON.stringify(manifest).length > DEVICE_MANIFEST_MAX_BYTES)
+  if (
+    new TextEncoder().encode(JSON.stringify(manifest)).length >
+    DEVICE_MANIFEST_MAX_BYTES
+  )
     return {
       ok: false,
       error: `the manifest is larger than ${DEVICE_MANIFEST_MAX_BYTES} bytes`,
@@ -314,6 +340,13 @@ export const DEVICE_DEFAULT_REPORTER = "runner";
  */
 export const DEVICE_CAPABILITY_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * The most reporters a device keeps: each report drops those older than the
+ * TTL, then the oldest beyond this many, so a device whose processes come
+ * and go under new names never grows without bound.
+ */
+export const DEVICE_CAPABILITY_REPORTERS_MAX = 16;
+
 /** Each reporter's latest capabilities and when it last reported. */
 export type DeviceCapabilityReports = Record<
   string,
@@ -343,7 +376,10 @@ export function effectiveDeviceCapabilities(
 
 /**
  * The reports after `reporter` reported at `now`: its capabilities replaced
- * when the report carries some, kept (and refreshed) when it carries none.
+ * when the report carries a list (`[]` = this reporter has none), kept (and
+ * their time refreshed) when it carries none (unknown). The other reporters
+ * older than {@link DEVICE_CAPABILITY_TTL_MS} are dropped, then the oldest
+ * beyond {@link DEVICE_CAPABILITY_REPORTERS_MAX}.
  */
 export function recordCapabilityReport(
   reports: DeviceCapabilityReports | null | undefined,
@@ -352,8 +388,17 @@ export function recordCapabilityReport(
   now: Date
 ): DeviceCapabilityReports {
   const prev = (reports ?? {})[reporter];
+  const nowMs = now.getTime();
+  const others = Object.entries(reports ?? {})
+    .filter(([k]) => k !== reporter)
+    .map(([k, v]) => [k, v, new Date(v.at).getTime()] as const)
+    .filter(
+      ([, , at]) => !Number.isNaN(at) && nowMs - at <= DEVICE_CAPABILITY_TTL_MS
+    )
+    .sort((a, b) => b[2] - a[2])
+    .slice(0, DEVICE_CAPABILITY_REPORTERS_MAX - 1);
   return {
-    ...(reports ?? {}),
+    ...Object.fromEntries(others.map(([k, v]) => [k, v])),
     [reporter]: {
       capabilities: capabilities ?? prev?.capabilities ?? [],
       at: now.toISOString(),

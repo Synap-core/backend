@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEVICE_CAPABILITY_REPORTERS_MAX,
   DEVICE_CAPABILITY_TTL_MS,
+  DEVICE_MANIFEST_MAX_BYTES,
   DEVICE_KINDS,
   DEVICE_KIND_PARAMETERS,
   DEVICE_ONLINE_WINDOW_MS,
@@ -287,5 +289,116 @@ describe("several processes report one device", () => {
     expect(merged.location).toEqual(stored.manifest.location);
     // The union, never the one report's set.
     expect(merged.capabilities).toEqual(["run.tool", "wake.agent"]);
+  });
+});
+
+describe("identity.hardwareId and a bridge's externalId (what P2 matches on)", () => {
+  it("keeps a firmware UUID of at most 64 characters; a placeholder reads as absent", () => {
+    const id = "4C4C4544-0042-3510-8051-B4C04F4E4B32";
+    const ok = parseDeviceManifest({
+      manifestVersion: 1,
+      identity: { hostname: "devbox", hardwareId: id },
+    });
+    expect(ok.ok && ok.manifest.identity).toEqual({
+      hostname: "devbox",
+      hardwareId: id,
+    });
+    for (const placeholder of [
+      "00000000-0000-0000-0000-000000000000",
+      "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    ]) {
+      const p = parseDeviceManifest({
+        manifestVersion: 1,
+        identity: { hostname: "vm", hardwareId: placeholder },
+      });
+      expect(p.ok && p.manifest.identity).toEqual({ hostname: "vm" });
+    }
+    const long = parseDeviceManifest({
+      manifestVersion: 1,
+      identity: { hardwareId: "a".repeat(65) },
+    });
+    expect(long.ok).toBe(false);
+    expect(!long.ok && long.error).toMatch(/^identity\.hardwareId:/);
+  });
+
+  it("a bridge connection may name the bridge's own id of the device", () => {
+    expect(
+      DeviceConnectionSchema.parse({
+        mode: "bridge",
+        viaDeviceId: "host",
+        driver: "proxmox",
+        externalId: "109",
+      })
+    ).toMatchObject({ externalId: "109" });
+    expect(
+      DeviceConnectionSchema.safeParse({
+        mode: "bridge",
+        viaDeviceId: "host",
+        driver: "proxmox",
+      }).success
+    ).toBe(true);
+  });
+});
+
+describe("the manifest size is counted in bytes", () => {
+  it("refuses a manifest whose UTF-8 is over the limit though its length is not", () => {
+    // 3 bytes per "€": a third of the limit in characters, the whole of it in bytes.
+    const wide = "€".repeat(Math.ceil(DEVICE_MANIFEST_MAX_BYTES / 3));
+    const parsed = parseDeviceManifest({
+      manifestVersion: 1,
+      parameters: { note: wide },
+    });
+    expect(JSON.stringify({ note: wide }).length).toBeLessThan(
+      DEVICE_MANIFEST_MAX_BYTES
+    );
+    expect(parsed.ok).toBe(false);
+    expect(!parsed.ok && parsed.error).toMatch(/larger than/);
+  });
+});
+
+describe("recordCapabilityReport: [] is none, a missing list is unknown", () => {
+  const t0 = new Date("2026-11-27T10:00:00.000Z");
+  const later = new Date(t0.getTime() + 60_000);
+  const start = recordCapabilityReport({}, "worker", ["run.tool"], t0);
+
+  it("[] replaces the reporter's set with none", () => {
+    expect(
+      recordCapabilityReport(start, "worker", [], later).worker
+    ).toEqual({ capabilities: [], at: later.toISOString() });
+  });
+
+  it("no list keeps the stored set and moves its time", () => {
+    expect(
+      recordCapabilityReport(start, "worker", undefined, later).worker
+    ).toEqual({ capabilities: ["run.tool"], at: later.toISOString() });
+  });
+
+  it("drops reporters past the TTL and keeps the newest up to the cap", () => {
+    const reports: Record<string, { capabilities: string[]; at: string }> = {
+      gone: {
+        capabilities: ["serve.http"],
+        at: new Date(
+          later.getTime() - DEVICE_CAPABILITY_TTL_MS - 1
+        ).toISOString(),
+      },
+    };
+    for (let i = 0; i < DEVICE_CAPABILITY_REPORTERS_MAX + 4; i++)
+      reports[`p${i}`] = {
+        capabilities: [],
+        at: new Date(t0.getTime() + i * 1000).toISOString(),
+      };
+    const after = recordCapabilityReport(
+      reports,
+      "worker",
+      ["run.tool"],
+      later
+    );
+    expect(Object.keys(after)).toHaveLength(DEVICE_CAPABILITY_REPORTERS_MAX);
+    expect(after.gone).toBeUndefined();
+    expect(after.worker?.capabilities).toEqual(["run.tool"]);
+    // The oldest go first.
+    expect(after.p0).toBeUndefined();
+    expect(after[`p${DEVICE_CAPABILITY_REPORTERS_MAX + 3}`]).toBeDefined();
   });
 });
