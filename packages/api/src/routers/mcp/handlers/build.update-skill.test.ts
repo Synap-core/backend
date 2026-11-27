@@ -367,9 +367,9 @@ describe("synap_update_skill — agentTypes", () => {
       expect(parsed.ok).toBe(false);
       if (!parsed.ok) {
         expect(parsed.result.isError).toBe(true);
-        expect(
-          (parsed.result.content[0] as { text: string }).text
-        ).toContain("agentTypes");
+        expect((parsed.result.content[0] as { text: string }).text).toContain(
+          "agentTypes"
+        );
       }
     }
     // A blank name (a string to the input): refused by the handler.
