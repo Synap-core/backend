@@ -18156,11 +18156,22 @@ export interface RunGroup {
 	hasRunning: boolean;
 	/** Runs that completed. */
 	completedCount: number;
-	/** Runs that failed (lifetime — the drill-down number). */
+	/**
+	 * Runs that failed (lifetime — the drill-down number). A run that stopped at
+	 * its token budget or step limit is not one: it is in `stoppedCount`.
+	 */
 	failedCount: number;
 	/**
+	 * Runs that STOPPED at their budget (lifetime): `failed` with
+	 * `stopReason: 'budget'` (its token budget or step limit; the run's `error`
+	 * says which). Nothing broke, so it is counted apart from `failedCount` and
+	 * never makes a flow "failing".
+	 */
+	stoppedCount: number;
+	/**
 	 * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
-	 * governance outcome, not a failure) within the last
+	 * governance outcome and a budget stop is in `stoppedCount`, neither is a
+	 * failure) within the last
 	 * `RECENT_FAILURE_WINDOW_DAYS` (7, `@synap-core/types/run-activity`) days,
 	 * each dated by `coalesce(completedAt, startedAt)` — the HEALTH number. A
 	 * flow is "failing" iff this is > 0; a flow that failed 271 times in June
