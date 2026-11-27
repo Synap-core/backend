@@ -66,8 +66,10 @@ describe("ci.yml: the MCP generated files are handed back (F11)", () => {
     // The committed paths exist in the repo, so a rename cannot orphan a name.
     for (const f of FILES) {
       expect(
-        readFileSync(join(REPO, "packages/api/src/routers/mcp/tools", f), "utf8")
-          .length,
+        readFileSync(
+          join(REPO, "packages/api/src/routers/mcp/tools", f),
+          "utf8"
+        ).length,
         f
       ).toBeGreaterThan(0);
     }

@@ -2,9 +2,11 @@
  * ORACLE: each tool's `input` (zod, the one source since the zod-first
  * conversion) derives the JSON Schema each tool advertised BEFORE it, modulo
  * key order. `__fixtures__/input-schemas.pre-zod.json` is a frozen copy of
- * every `inputSchema` in the committed manifest at origin/main 611a2ea4 (the
- * manifest is regenerated from the zod inputs afterwards, so comparing with
- * it would be a tautology).
+ * every `inputSchema` in the committed manifest at origin/main 611a2ea4,
+ * refrozen at origin/main 80c2a35b when main was merged in (27 Nov 2026), so
+ * main's own schema changes are the baseline, not differences (the manifest
+ * is regenerated from the zod inputs afterwards, so comparing with it would
+ * be a tautology).
  *
  * A difference fails unless `ACCEPTED` lists its path with the reason; an
  * accepted path that no longer differs fails too (the list cannot rot).
