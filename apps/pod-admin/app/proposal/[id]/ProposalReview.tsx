@@ -27,10 +27,13 @@ export function ProposalReview({
   proposalId,
   podHost,
   identity,
+  canGoHome,
 }: {
   proposalId: string;
   podHost?: string;
   identity?: string;
+  /** The reader is a member or an admin: the mark leads Home. */
+  canGoHome?: boolean;
 }) {
   const { query, sourceExits, sourceState, workspaceName } =
     useProposalReview(proposalId);
@@ -77,6 +80,7 @@ export function ProposalReview({
     <ReceiverShell
       podHost={podHost}
       identity={identity}
+      canGoHome={canGoHome}
       footer={footer}
       pinsBar={pinsBar}
       /* Widens to a document's width when the review shows text

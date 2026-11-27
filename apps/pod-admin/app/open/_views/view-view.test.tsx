@@ -402,6 +402,29 @@ describe("/open/view: a board the pod's renderer bundle draws", () => {
     expect(out.match(/<iframe\b/gi) ?? []).toHaveLength(0);
     expect(out).toContain("This view is worked in the Synap app");
   });
+
+  it("a drawn board reads in the whole window: the bar, then the filled body, no card", () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out).toContain('data-reader="fill"');
+    // The bar: the mark, the title, Share and the ⋯ menu.
+    expect(out).toContain("<svg");
+    expect(out).toMatch(/<h1[^>]*>Finding pipeline<\/h1>/);
+    expect(out).toContain("Share");
+    expect(out).toContain('aria-label="More about Finding pipeline"');
+    // No receiver card around it: the card's page and its facts grid are gone.
+    expect(out).not.toContain("min-h-screen");
+    expect(out).not.toContain("<dl");
+    // The frame runs once, under the bar.
+    expect(out.indexOf("<iframe")).toBeGreaterThan(out.indexOf("</header>"));
+  });
+
+  it("an undrawn layout never opens the reader", () => {
+    answer = view({ type: "calendar" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out).not.toContain("data-reader");
+    expect(out).toContain("min-h-screen");
+  });
 });
 
 describe("/open/view: no renderer bundle on this pod", () => {

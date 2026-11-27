@@ -73,6 +73,11 @@ export const en = {
   "surfaces.notFound": "Not found",
   "surfaces.missing":
     "This surface isn’t on this page any more, or you can’t see it.",
+  "reader.share": "Share",
+  "reader.shareCopied": "Link copied",
+  "reader.share.aria": "Copy this page’s link",
+  "reader.more.aria": "More about {title}",
+  "reader.signedInAs": "Signed in as {who}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -141,6 +146,11 @@ export const fr: Catalog<typeof en> = {
   "surfaces.notFound": "Introuvable",
   "surfaces.missing":
     "Cette surface n’est plus sur cette page, ou vous ne pouvez pas la voir.",
+  "reader.share": "Partager",
+  "reader.shareCopied": "Lien copié",
+  "reader.share.aria": "Copier le lien de cette page",
+  "reader.more.aria": "Plus sur {title}",
+  "reader.signedInAs": "Connecté en tant que {who}",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

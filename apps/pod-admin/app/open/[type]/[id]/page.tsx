@@ -24,6 +24,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { podAdminRole } from "../../../../lib/kratos";
+import { opensHome } from "../../../../lib/route-policy";
 import { OpenSurface } from "./OpenSurface";
 import {
   openDocumentTitle,
@@ -72,13 +73,16 @@ export default async function OpenPage({
   if (update) redirect(update);
   const parsed = parseOpenParams(type, id);
   const h = await headers();
-  // A role question only the role-aware kinds need: a space's and an agent's
+  // `/open` is self-service, so the proxy did not ask the role. Asked once
+  // here for two things: the Synap mark leads Home only for a member or an
+  // admin (`opensHome`), and the role-aware kinds (a space's and an agent's
   // console pages are pod-admin only, so a member keeps the card `/open`
-  // draws (`openRedirect`).
+  // draws, `openRedirect`).
+  const role = await podAdminRole(h);
   const viewerIsPodAdmin =
     parsed.status !== "not-found" &&
     ROLE_AWARE_KINDS.has(parsed.type) &&
-    (await podAdminRole(h)) === "admin";
+    role === "admin";
   // The review surface lives at /proposal/:id, a space's page at
   // /workspaces/:id, an agent's at /agents/:id: don't draw a card for any.
   const to = openRedirect(parsed, viewerIsPodAdmin);
@@ -93,6 +97,7 @@ export default async function OpenPage({
       viewerIsPodAdmin={viewerIsPodAdmin}
       podHost={h.get("host") ?? undefined}
       identity={h.get("x-pod-admin-email") ?? undefined}
+      canGoHome={opensHome(role)}
     />
   );
 }
