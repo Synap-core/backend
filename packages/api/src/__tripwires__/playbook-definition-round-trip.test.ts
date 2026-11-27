@@ -85,6 +85,8 @@ import { CreatePlaybookBodySchema } from "../routers/hub-protocol/rest/playbooks
 import { createPlaybookDoor } from "../routers/hub-protocol/playbook-doors.js";
 import { playbookRowToPackagePlaybook } from "../services/workspace-to-package-definition.js";
 import { createInputSchema } from "../routers/playbooks.js";
+import { parseToolArgs } from "../routers/mcp/define-tool.js";
+import { buildHandlers } from "../routers/mcp/handlers/build.js";
 import type { LoopDefinition } from "@synap/playbooks";
 import type { Context } from "../types/context.js";
 import {
@@ -288,6 +290,34 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
   );
 
   withTemplate(
+    "MCP synap_create_playbook (its input takes the ONE schema's fields) → its handler → shared door → playbooks.create",
+    async () => {
+      // The MCP door's own input check (`parseToolArgs`, the tool's zod input)
+      // runs first, as on the live call path; then its handler.
+      const gp = grantProcess((await grantsPackage()).playbooks);
+      const parsed = parseToolArgs("synap_create_playbook", {
+        name: gp.name,
+        goalTemplate: gp.goalTemplate,
+        scope: gp.scope,
+        stages: gp.stages,
+      });
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      if (!parsed.ok) return;
+      expectMethod(parsed.args, "MCP parse");
+      const res = await buildHandlers.synap_create_playbook!({
+        toolName: "synap_create_playbook",
+        args: parsed.args,
+        userId: USER,
+        apiKeyScopes: ["mcp.write"],
+        requestedWorkspaceId: "33333333-3333-4333-8333-333333333333",
+      } as never);
+      expect(res.isError, JSON.stringify(res.content)).toBeFalsy();
+      expect(createPlaybookMock).toHaveBeenCalledTimes(1);
+      expectMethod(lastCreate(), "MCP door create");
+    }
+  );
+
+  withTemplate(
     "the router's own create input keeps them (playbooks.create)",
     async () => {
       const gp = grantProcess((await grantsPackage()).playbooks);
@@ -348,6 +378,10 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
       "routers/workspaces/definition-engine.ts",
       "routers/hub-protocol/rest/packages.ts",
       "routers/hub-protocol/rest/playbooks.ts",
+      // MCP synap_create_playbook / synap_update_playbook take the definition
+      // fields from the ONE schema (create driven above; update reaches the
+      // shared update door, not a create).
+      "routers/mcp/tools/index.ts",
       // defines the schemas themselves
       "schemas/playbook-definition.ts",
       // not a door: the template reconcile normalizes `desired` through the
