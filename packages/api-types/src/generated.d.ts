@@ -44001,6 +44001,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				forOutput?: string | undefined;
 				forceCreate?: boolean | undefined;
 				goal: string;
 				params?: Record<string, unknown> | undefined;

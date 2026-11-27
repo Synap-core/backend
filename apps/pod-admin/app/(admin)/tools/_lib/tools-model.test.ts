@@ -63,7 +63,7 @@ function skill(over: Partial<SkillLike> = {}): SkillLike {
   return {
     id: "s-instr",
     name: "Dogfood journal",
-    // Not a `rules/` slug: a rule is never a Tool (`lib/rule-skill.ts`).
+    // Not a `rules/` slug: a rule is never a Tool (`@synap-core/types/skill-rule`).
     slug: "house/dogfood-journal",
     kind: "instruction",
     description: "File what you hit",

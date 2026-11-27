@@ -7,7 +7,7 @@
  * automation (the rule loop) shows the automation as a second, linked object.
  */
 
-import { isRuleSkill, type RuleSkillLike } from "../../../../lib/rule-skill";
+import { isRuleSkill, type RuleSkillLike } from "@synap-core/types/skill-rule";
 
 /** The `skills.list` fields this page reads (structural). */
 export interface RuleSourceLike extends RuleSkillLike {
