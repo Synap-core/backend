@@ -168,7 +168,7 @@ describe("My access", () => {
   });
 
   it("draws zero computers as an answer with its door, never as empty", () => {
-    expect(computerRow([])).toEqual({ count: 0, href: "/my-computers" });
+    expect(computerRow([])).toEqual({ count: 0, href: "/my-devices" });
   });
 });
 
@@ -397,7 +397,7 @@ describe("the cards speak French to a French reader", () => {
         spaces={{ kind: "empty" }}
         computers={{
           kind: "ready",
-          value: { count: 3, href: "/my-computers" },
+          value: { count: 3, href: "/my-devices" },
         }}
         keys={{ kind: "ready", value: { count: 1, href: "/my-connections" } }}
         skeleton={false}

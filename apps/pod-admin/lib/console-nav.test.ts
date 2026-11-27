@@ -47,7 +47,7 @@ describe("navHref", () => {
   });
 
   it("opens a computer on its own page, from every surface alike", () => {
-    expect(computerHref("c 1")).toBe("/computers/c%201");
+    expect(computerHref("c 1")).toBe("/devices/c%201");
     expect(SEARCH_DESTINATION.computer.href("c 1")).toBe(computerHref("c 1"));
   });
 

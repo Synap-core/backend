@@ -9,7 +9,7 @@
  * makes (`computers-model.ts` in the browser repo), so the two cannot disagree
  * about what "Expiring" means.
  *
- * Shared by `/computers` (every member's, pod admin) and `/my-computers` (the
+ * Shared by `/devices` (every member's, pod admin) and `/my-devices` (the
  * person's own): the rows are the same shape, `owner` is only on the admin's.
  */
 
