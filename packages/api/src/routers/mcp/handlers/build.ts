@@ -168,7 +168,17 @@ async function promoteOntoAttachment(
   };
   const anchor = { kind: "playbook" as const, id: input.playbookId };
   const target = { kind: "playbook", id: input.playbookId };
+  const { surfaceKeyRefusal } =
+    await import("../../../services/surfaces/key-binding.js");
   if (input.cellKey) {
+    // A key bound to one space makes surfaces in that space only (H3).
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      bodyWorkspaceId: input.workspaceId,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const { createSurface } =
       await import("../../../services/surfaces/create.js");
     const outcome = await createSurface(
@@ -198,6 +208,13 @@ async function promoteOntoAttachment(
   const inSlot = await attachmentsInSlot(anchor, input.slot);
   const outcomes = [];
   for (const row of inSlot) {
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      surface: row,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome = await detachSurface(actor, { anchor, surface: row });
     const o = outcome as unknown as Record<string, unknown>;
     if (o.status === "refused" || o.status === "denied") {
@@ -342,7 +359,17 @@ export const buildHandlers: McpHandlerMap = {
       throw new Error(`Invalid synap_create_cell args: ${declared.error}`);
     }
     const declaredFields = declaredFrameIoFields(declared);
-    const cellWorkspaceId = parsed.data.workspaceId ?? null;
+    // A key bound to one space defines in that space only, never pod-wide
+    // (review H3); a pod-wide cell needs a pod admin (review M1).
+    const { confineCellScope } =
+      await import("../../hub-protocol/confine-workspace.js");
+    const scope = confineCellScope(ctx.keyWorkspaceId, parsed.data.workspaceId);
+    if (!scope.ok) throw new Error(scope.error);
+    const cellWorkspaceId = scope.workspaceId;
+    const { cellDefineScopeRefusal } =
+      await import("../../../services/cells/marketplace-cell-lifecycle.js");
+    const podWide = await cellDefineScopeRefusal(userId, cellWorkspaceId);
+    if (podWide) throw new Error(podWide.error);
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
     // proposal a person approves and then watches fail on every open.
@@ -552,6 +579,16 @@ export const buildHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const { createSurface } =
       await import("../../../services/surfaces/create.js");
+    // A key bound to one space makes surfaces in that space only (H3).
+    const { surfaceKeyRefusal } =
+      await import("../../../services/surfaces/key-binding.js");
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor: args.anchor as SurfaceAnchor,
+      bodyWorkspaceId: ((args.spec ?? {}) as SurfaceSpec).workspaceId,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome = await createSurface(
       {
         userId,
@@ -592,6 +629,16 @@ export const buildHandlers: McpHandlerMap = {
     };
     const anchor = args.anchor as SurfaceAnchor;
     const surface = args.surface as SurfaceRef;
+    // A key bound to one space touches surfaces in that space only (H3).
+    const { surfaceKeyRefusal } =
+      await import("../../../services/surfaces/key-binding.js");
+    const offKey = await surfaceKeyRefusal({
+      keyWorkspaceId: ctx.keyWorkspaceId,
+      userId,
+      anchor,
+      surface,
+    });
+    if (offKey) return surfaceAnswer(toolName, offKey);
     const outcome =
       args.detach === true
         ? await detachSurface(actor, { anchor, surface })
@@ -1173,6 +1220,18 @@ export const buildHandlers: McpHandlerMap = {
       const { createSurface } =
         await import("../../../services/surfaces/create.js");
       const type = String(args.type ?? "");
+      // A key bound to one space makes surfaces in that space only (H3).
+      const { surfaceKeyRefusal } =
+        await import("../../../services/surfaces/key-binding.js");
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: ctx.keyWorkspaceId,
+        userId,
+        anchor: args.attachTo as SurfaceAnchor,
+        bodyWorkspaceId: requestedWorkspaceId
+          ? (confinedWorkspaceId ?? requestedWorkspaceId)
+          : undefined,
+      });
+      if (offKey) return surfaceAnswer(toolName, offKey);
       const outcome = await createSurface(
         {
           userId,

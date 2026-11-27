@@ -236,6 +236,45 @@ describe("EntityBodyService", () => {
       expect(arg.content).toBeUndefined();
     });
 
+    // Surfaces review S6 (27 Nov 2026): an uploaded .html file is an inert
+    // FILE, never a runnable page (a page is written only through
+    // `createHtmlPage`). Rules out "an upload makes an unchecked page", and
+    // the `text/` rule turning it into a `text` + html page.
+    it("an uploaded html file is stored as an inert file, its mime kept", async () => {
+      for (const mimeType of ["text/html", "text/html; charset=utf-8"]) {
+        createSpy.mockClear();
+        await svc.setBody({
+          entityId: "e-1",
+          userId: "user-1",
+          workspaceId: "ws-1",
+          provenance: HUMAN,
+          bytes: Buffer.from("<script>alert(1)</script>"),
+          mimeType,
+          filename: "page.html",
+        });
+        const arg = createSpy.mock.calls[0]![0] as any;
+        expect({ mimeType, type: arg.type }).toEqual({
+          mimeType,
+          type: "file",
+        });
+        expect(arg.mimeType).toBe(mimeType);
+      }
+      createSpy.mockClear();
+      await svc.setBody({
+        entityId: "e-1",
+        userId: "user-1",
+        workspaceId: "ws-1",
+        provenance: HUMAN,
+        storedObject: {
+          storageKey: "files/ws-1/uploads/user-1/u/page.html",
+          size: 10,
+          mimeType: "text/html",
+          filename: "page.html",
+        },
+      });
+      expect((createSpy.mock.calls[0]![0] as any).type).toBe("file");
+    });
+
     it("caller metadata is merged OVER the defaults (a media copy says so)", async () => {
       await svc.setBody({
         entityId: "e-1",

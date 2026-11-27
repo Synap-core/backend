@@ -610,6 +610,16 @@ export const entityHandlers: McpHandlerMap = {
       }
       const { createSurface } =
         await import("../../../services/surfaces/create.js");
+      // A key bound to one space makes surfaces in that space only (H3).
+      const { surfaceKeyRefusal } =
+        await import("../../../services/surfaces/key-binding.js");
+      const offKey = await surfaceKeyRefusal({
+        keyWorkspaceId: ctx.keyWorkspaceId,
+        userId,
+        anchor: args.attachTo as SurfaceAnchor,
+        bodyWorkspaceId: requestedWorkspaceId,
+      });
+      if (offKey) throw new Error(offKey.error);
       const outcome = (await createSurface(
         {
           userId,

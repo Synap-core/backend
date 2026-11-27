@@ -100,10 +100,13 @@ export {
 export {
   CELL_BRIDGE_ANY_VALUE,
   CELL_BRIDGE_DECLARED_MAX,
+  CELL_BRIDGE_PUBLISHABLE_READ_OPS,
   FRAME_READ_UNDECLARED,
+  describeDeclaredRead,
   isReadDeclared,
   parseDeclaredReads,
   parseDeclaredWrites,
+  publishedReadRefusal,
   storedDeclaredReads,
   type CellBridgeDeclaredRead,
   type CellBridgeDeclaredReads,

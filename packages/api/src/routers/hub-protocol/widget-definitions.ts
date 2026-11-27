@@ -25,6 +25,8 @@ import { TRPCError } from "@trpc/server";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this door — its only caller
 // was the `native` branch below. Kept on disk at utils/widget-compiler.ts.
 import { assertMayActAs } from "./guard.js";
+import { confineCellScope } from "./confine-workspace.js";
+import { cellDefineScopeRefusal } from "../../services/cells/marketplace-cell-lifecycle.js";
 import { actingAgentUserId } from "./utils.js";
 import { listRenderables } from "../../services/cells/renderables.js";
 import {
@@ -142,6 +144,19 @@ export const hubWidgetDefinitionsRouter = router({
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose — a hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);
+      // A key bound to one space defines in that space only, never pod-wide
+      // (review H3); a pod-wide cell needs a pod admin (review M1).
+      const scope = confineCellScope(ctx.keyWorkspaceId, input.workspaceId);
+      if (!scope.ok) {
+        throw new TRPCError({ code: "FORBIDDEN", message: scope.error });
+      }
+      const podWide = await cellDefineScopeRefusal(
+        input.userId,
+        scope.workspaceId
+      );
+      if (podWide) {
+        throw new TRPCError({ code: "FORBIDDEN", message: podWide.error });
+      }
       // Built-in renderable keys are reserved (the catalog always wins on
       // read) — refuse before filing a proposal nobody could apply.
       try {

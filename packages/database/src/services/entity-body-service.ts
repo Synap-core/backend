@@ -48,6 +48,7 @@ import {
 import type { EventRepository } from "../repositories/event-repository.js";
 import { uploadDocumentVersionSnapshot } from "../utils/document-version-storage.js";
 import { createDocumentWithContent } from "../utils/claim-document-revision.js";
+import { isHtmlPageBody } from "../utils/html-page.js";
 // The ONE long-form heuristic every writer surface calls.
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
@@ -57,10 +58,17 @@ const logger = createLogger({ module: "entity-body-service" });
  * Map a mime type → `documents.type`. Behavior-identical to file-upload.ts's
  * `documentTypeForMimeType` (returns "file" for unknown/binary — the DB column
  * is free `text`, so the value is stored verbatim).
+ *
+ * An uploaded HTML file is stored as an inert FILE (its bytes, downloadable),
+ * never as a runnable page (surfaces review S6, 27 Nov 2026): a page runs
+ * code in every viewer's frame, so it is written only through the HTML page
+ * door (`createHtmlPage`: the size cap, the declared reads, its review). It
+ * is checked before the `text/` rule, which would otherwise make it a `text`
+ * document with an html mime: a page too (`isFramePage`).
  */
 function documentTypeForMimeType(mimeType: string): string {
   if (mimeType === "text/markdown") return "markdown";
-  if (mimeType === "text/html") return "html";
+  if (isHtmlPageBody({ mimeType })) return "file";
   if (mimeType.startsWith("text/")) return "text";
   if (mimeType === "application/json") return "code";
   if (mimeType === "application/pdf") return "pdf";

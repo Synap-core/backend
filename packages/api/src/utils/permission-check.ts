@@ -178,6 +178,7 @@ import {
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   classifySettingSensitivity,
+  writesHtmlPage,
   type AgentPolicyInput,
   type ChannelCapabilityGrant,
   type GovernedWritePair,
@@ -1463,6 +1464,8 @@ interface AnonymousPolicyFacts {
     | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
+  /** rung 2.09 (page) — the AI write makes an executable HTML page (`writesHtmlPage`). */
+  agentHtmlPage: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
   governanceRuleVerdict: "auto" | "propose" | "deny" | undefined;
   /** rung 2.8 attribution — the rule behind the verdict (echoed on execute, never decides). */
@@ -1506,6 +1509,8 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *   2.06 ARBITRARY EXEC    — FIRES (previously hand-mirrored here).
  *   2.07 POD-ADMIN SCHEMA  — FIRES. Resolved by 4d on `userId`, the human the
  *                            write acts for — not on an agent row.
+ *   2.09 HTML PAGE         — FIRES. An unattributed AI write of an executable
+ *                            HTML page is reviewed like an agent's (D1).
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
  *   2.1  possibleDuplicate — FIRES (an AI create with a possible twin).
@@ -1566,6 +1571,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     possibleDuplicate: facts.possibleDuplicate,
     lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
+    agentHtmlPage: facts.agentHtmlPage,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
     governanceRuleNamesWrite: facts.governanceRuleNamesWrite,
@@ -2051,6 +2057,16 @@ async function evaluatePermission(
         podAdminSchemaChange = true;
       }
     }
+    // An AI write that makes an executable HTML page is always reviewed
+    // (rung 2.09, decision D1 default): one classification of the write's
+    // data, whatever door it came through. A person's own page never is.
+    const agentHtmlPage =
+      isAiWrite &&
+      writesHtmlPage(
+        subjectType,
+        action,
+        data as Record<string, unknown> | undefined
+      );
 
     // Session-scoped force-propose: an unattended propose-only playbook's session
     // (e.g. CRM hygiene) stamps `metadata.governance.forceProposeWrites` so every
@@ -2238,6 +2254,7 @@ async function evaluatePermission(
         heldAsDraft: opts.heldAsDraft,
         ...(opts.ruleSubject ? { ruleSubject: opts.ruleSubject } : {}),
         podAdminSchemaChange,
+        agentHtmlPage,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
         // a would-be-auto write from an untrusted (external / bridge) channel.
@@ -2786,6 +2803,7 @@ async function evaluatePermission(
           possibleDuplicate: isAgentPossibleDuplicate,
           lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
+          agentHtmlPage,
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,
           governanceRuleNamesWrite: ruleMatch?.namesWrite,

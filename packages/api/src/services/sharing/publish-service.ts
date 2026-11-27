@@ -56,7 +56,14 @@
 
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
-import { getDb, and, eq, isNull, desc } from "@synap/database";
+import {
+  getDb,
+  getRequestApiKeyId,
+  and,
+  eq,
+  isNull,
+  desc,
+} from "@synap/database";
 import {
   entities,
   documents,
@@ -78,7 +85,11 @@ import {
 import { projectPublishedProperties } from "./public-read.js";
 import { isPublicationLive } from "./publication-live.js";
 import { isFramePage } from "../surfaces/frame-read.js";
-import { PUBLISHED_PAGE_KEY, buildPublishedPage } from "./published-page.js";
+import {
+  PUBLISHED_PAGE_KEY,
+  buildPublishedPage,
+  pageReadsForReview,
+} from "./published-page.js";
 import {
   agentOf,
   attributedShareCaller,
@@ -325,6 +336,11 @@ export async function publishResource(
   );
   const database = await getDb();
   const plan = await planPublish(database, actor.userId, req);
+  // An HTML page: the reads its publication will freeze onto the public web,
+  // shown to whoever reviews the publish (decision D2).
+  const pageReads = (await isPageDocument(database, plan.documentId))
+    ? await pageReadsForReview(database, plan.documentId!)
+    : null;
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -343,6 +359,7 @@ export async function publishResource(
       resolvedResourceType: plan.resourceType,
       resolvedResourceId: plan.resourceId,
       workspaceId: plan.workspaceId,
+      ...(pageReads ? { pageReads } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -354,6 +371,7 @@ export async function publishResource(
   return applyPublish(database, plan, {
     userId: actor.userId,
     agentUserId,
+    agentApiKeyId: agentUserId ? (getRequestApiKeyId() ?? null) : null,
     // Belt and braces: an agent is never granted here (ADMIN floor); if it
     // ever were, it still gets no token; nor does a key.
     mintToken: mayReceiveShareSecret(actor, agentUserId),
@@ -371,6 +389,8 @@ export async function applyPublish(
   opts: {
     userId: string;
     agentUserId?: string | null;
+    /** The key the agent's publish proposal was filed with (its grant bounds the page's reads). */
+    agentApiKeyId?: string | null;
     sourceProposalId?: string;
     mintToken: boolean;
   }
@@ -382,6 +402,12 @@ export async function applyPublish(
     ? await buildPublishedPage(database, {
         publisherUserId: opts.userId,
         documentId: plan.documentId!,
+        proposedBy: opts.agentUserId
+          ? {
+              agentUserId: opts.agentUserId,
+              apiKeyId: opts.agentApiKeyId ?? null,
+            }
+          : null,
       })
     : null;
   const stored: Record<string, unknown> = page

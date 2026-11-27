@@ -95,3 +95,39 @@ export function getConfinedWorkspace<
     requested
   );
 }
+
+/**
+ * The space a CELL write lands in, for the calling key (security review H3,
+ * 27 Nov 2026). A cell type is renderer code every member of its space runs,
+ * so a key bound to one space must not install, define or retire one in
+ * another space, nor POD-WIDE (`workspaceId` null: every space draws it).
+ *
+ *   - unbound key → `requested` unchanged (null = pod-wide, judged further by
+ *     the door: a pod-wide write needs a pod admin);
+ *   - bound key, `requested` its own space → that space;
+ *   - bound key, another space or none (pod-wide) → refused, with the reason.
+ *
+ * Unlike `resolveConfinedWorkspace`, an omitted space is NOT pinned to the
+ * key's space: for a cell, "no space" means "pod-wide", a different act, so
+ * the caller is told rather than silently narrowed.
+ */
+export function confineCellScope(
+  keyWorkspaceId: string | null | undefined,
+  requested: string | null | undefined
+): { ok: true; workspaceId: string | null } | { ok: false; error: string } {
+  if (keyWorkspaceId == null)
+    return { ok: true, workspaceId: requested ?? null };
+  if (requested == null) {
+    return {
+      ok: false,
+      error: `This key is confined to workspace ${keyWorkspaceId}: it cannot write a pod-wide cell (every space draws it). Name its own space (workspaceId).`,
+    };
+  }
+  if (requested !== keyWorkspaceId) {
+    return {
+      ok: false,
+      error: `This key is confined to workspace ${keyWorkspaceId}`,
+    };
+  }
+  return { ok: true, workspaceId: requested };
+}
