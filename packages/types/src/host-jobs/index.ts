@@ -74,6 +74,13 @@ export const HostJobLeaseBodySchema = z
       })
       .passthrough()
       .optional(),
+    /**
+     * The computer's self-description (`@synap-core/types/device-manifest`,
+     * v1), optional. Checked by the pod's device registry, never here: a
+     * manifest the pod cannot read is answered `device.manifest: "refused"`
+     * and never fails the lease.
+     */
+    manifest: z.unknown().optional(),
   })
   .passthrough();
 

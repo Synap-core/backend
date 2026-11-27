@@ -51,6 +51,7 @@ import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { machinesRouter } from "./routers/machines.js";
 import { devicesRouter } from "./routers/devices.js";
+import { fleetRouter } from "./routers/fleet.js";
 import { presenceRouter } from "./routers/presence.js";
 import { governanceRulesRouter } from "./routers/governance-rules.js";
 import { governanceCeilingsRouter } from "./routers/governance-ceilings.js";
@@ -187,6 +188,9 @@ export const coreRouter = router({
   machines: machinesRouter,
   // Signed-in devices of the Synap apps.
   devices: devicesRouter,
+  // The devices registry (devices plan 767a5978, decision 78fc3fa1): the
+  // Devices page. `fleet`, because `devices` above is the signed-in apps.
+  fleet: fleetRouter,
   presence: presenceRouter,
   governanceRules: governanceRulesRouter,
   governanceCeilings: governanceCeilingsRouter,

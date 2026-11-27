@@ -584,6 +584,18 @@ const OBJECT_KIND_ROWS = {
     label: "Computer",
     labelPlural: "Computers",
   },
+  // A device (devices plan 767a5978, decision 78fc3fa1): anything the person
+  // connects that describes itself (a computer, a VM, a printer, a camera, a
+  // sensor), a `devices` row. The product word that replaces "Computers" in
+  // the nav; a computer stays a device KIND. `fleet` is only the code word.
+  device: {
+    kind: "device",
+    category: "agent",
+    icon: "MonitorSmartphone",
+    color: ID(7),
+    label: "Device",
+    labelPlural: "Devices",
+  },
   // A `governance_rules` row: "which AI writes wait for me?" (concepts.md).
   // The user word is "Approvals" — never "Trust rules" (the old nav label),
   // and never "Rules", which is the automation (`automation` above).

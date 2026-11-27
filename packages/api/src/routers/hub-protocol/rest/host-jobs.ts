@@ -40,6 +40,8 @@ import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { and, db, eq } from "@synap/database";
 import { HOST_RUNNER_SCOPE, hostJobs, users } from "@synap/database/schema";
+import { recordDeviceReport } from "../../../services/fleet/devices.js";
+import { DeviceReportAckSchema } from "./computer-report.js";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   HOST_BODY_MAX_BYTES,
@@ -226,8 +228,16 @@ export function registerHostJobsRoutes(app: HubHono): void {
         typeof runnerId === "string" ? runnerId : null
       );
       await reconcileComputer(who.runner, { recheckTools: cameBack });
+      // Every lease is the computer reporting (devices plan 767a5978, P1):
+      // the device's report time moves and, when the runner sends one, its
+      // manifest is stored. Never fails the lease: an older CLI sends none,
+      // a manifest the pod cannot read is answered `refused`.
+      const device = await recordDeviceReport({
+        machineUserId: who.runner.machineUserId,
+        manifest: (parsed.data as { manifest?: unknown }).manifest,
+      });
       const job = await leaseHostJob(who.runner, parsed.data);
-      return c.json({ job });
+      return c.json({ job, device });
     } catch (err) {
       logger.error({ err }, "host-jobs lease failed");
       return c.json(
@@ -427,15 +437,19 @@ function registerHostJobsOpenApi(app: HubHono): void {
     description:
       "Answers `{ job: null }` when nothing is due. The job names the " +
       "installation's kind (`service` | `tool`), its approved manifest and " +
-      `version. ${runner}`,
+      "version. Every lease is also the computer reporting: `manifest` " +
+      "(optional, the device manifest v1) is stored on its device, and " +
+      "`device` says what was recorded (`manifest`: accepted, absent or " +
+      `refused with \`error\`); it never fails the lease. ${runner}`,
     request: { body: HostJobLeaseBodySchema },
     responses: {
       200: {
-        description: "The leased job, or null",
+        description: "The leased job, or null, and the device report",
         schema: zOpenapi.object({
           job: zOpenapi
             .record(zOpenapi.string(), zOpenapi.unknown())
             .nullable(),
+          device: DeviceReportAckSchema,
         }),
       },
       400: refusals[400],

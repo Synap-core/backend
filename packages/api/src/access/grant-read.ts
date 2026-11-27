@@ -65,6 +65,7 @@ import {
   automations,
   boxRuns,
   hostJobs,
+  devices,
   installationBindings,
   installations,
   cellInstances,
@@ -375,6 +376,10 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     hostJobs,
     spec("installation", hostJobs, { idColumn: hostJobs.installationId }),
   ],
+  // A device (0461): what the person's tools are installed ON. A grant on
+  // INSTALLATIONS reads the devices too (no subject of its own in P1, plan
+  // 767a5978); an id-restricted grant names installations, so it reads none.
+  [devices, spec("installation", { workspaceId: devices.workspaceId })],
   [links, spec("link", links)],
   [tools, spec("tool", tools)],
   [mcpServers, spec("tool", mcpServers)],

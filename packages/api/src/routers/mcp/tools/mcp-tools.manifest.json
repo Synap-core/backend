@@ -3522,7 +3522,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
+      "description": "Who can take the person's work, and on which COMPUTER — read-only. `devices[]`: their devices (kind, status, resources; a computer's `principalUserId` is its agentUserId). `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -8694,6 +8694,10 @@
             "type": "string",
             "description": "One computer's id (synap_list_agents)."
           },
+          "deviceId": {
+            "type": "string",
+            "description": "Or that computer's device id (devices[])."
+          },
           "capabilityKey": {
             "type": "string",
             "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
@@ -8730,6 +8734,10 @@
             "type": "string",
             "description": "One of the person's computers (market.search `computers`) by id, name, a word of it, or \"mac\"/\"linux\"/\"windows\" for their only one; or \"pod\" for a pod capability."
           },
+          "device": {
+            "type": "string",
+            "description": "Or that computer's device id (devices[])."
+          },
           "action": {
             "type": "string",
             "enum": ["install", "update", "verify", "remove"],
@@ -8744,7 +8752,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["capabilityKey", "computer"]
+        "required": ["capabilityKey"]
       }
     },
     {

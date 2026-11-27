@@ -38,6 +38,7 @@ import {
   BOX_RUNNER_SCOPE,
   HOST_RUNNER_SCOPE,
   apiKeys,
+  devices,
   grants,
   users,
   type AgentMetadata,
@@ -469,6 +470,11 @@ export async function renameMachine(
     .where(
       and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
     );
+  // Its device carries the same name (devices plan 767a5978): one rename.
+  await db
+    .update(devices)
+    .set({ name: trimmed, updatedAt: new Date() })
+    .where(eq(devices.principalUserId, machineUserId));
 }
 
 /**

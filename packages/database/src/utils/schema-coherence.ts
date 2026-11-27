@@ -68,6 +68,29 @@ interface RequiredColumn {
  * Keep this list in sync with 0099_schema_reconciliation.sql.
  */
 export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
+  // The devices registry (0461): every computer's enrolment and every runner
+  // poll writes a row; a missing table or column fails them (logged, the
+  // poll itself still answers) and the Devices page reads nothing.
+  {
+    table: "devices",
+    column: "principal_user_id",
+    addedBy: "0461_devices.sql",
+  },
+  {
+    table: "devices",
+    column: "manifest",
+    addedBy: "0461_devices.sql",
+  },
+  {
+    table: "devices",
+    column: "last_report_at",
+    addedBy: "0461_devices.sql",
+  },
+  {
+    table: "compute_leases",
+    column: "device_id",
+    addedBy: "0461_devices.sql",
+  },
   {
     table: "space_access",
     column: "object_type",

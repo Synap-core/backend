@@ -30,6 +30,7 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import { fullUuidError } from "../tool-errors.js";
+import { computerFromDeviceArgs } from "../../../services/fleet/devices.js";
 
 /** Where a refused capability CAN go: its computer blocks, read once. */
 async function manifestFor(
@@ -64,10 +65,14 @@ export const installationHandlers: McpHandlerMap = {
               "No live installation of the person has this id: list them without installationId.",
           });
     }
-    const computerId =
-      typeof ctx.args.computerId === "string" && ctx.args.computerId.trim()
-        ? ctx.args.computerId.trim()
-        : undefined;
+    // `deviceId` is an alias of `computerId` (devices plan 767a5978 §2): a
+    // device's id answers its computer.
+    const named = await computerFromDeviceArgs(access, {
+      computer: ctx.args.computerId,
+      device: ctx.args.deviceId,
+    });
+    if (!named.ok) return ok({ error: named.error });
+    const computerId = named.computer;
     const capabilityKey =
       typeof ctx.args.capabilityKey === "string"
         ? ctx.args.capabilityKey.trim()
@@ -95,8 +100,17 @@ export const installationHandlers: McpHandlerMap = {
         error:
           "capabilityKey is a capability's catalog slug, e.g. media-ffmpeg: find one with synap_run_capability market.search.",
       });
-    const target =
-      typeof ctx.args.computer === "string" ? ctx.args.computer.trim() : "";
+    // `device` is an alias of `computer` (devices plan 767a5978 §2).
+    const named = await computerFromDeviceArgs(
+      AccessContext.agent({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId,
+      }),
+      { computer: ctx.args.computer, device: ctx.args.device }
+    );
+    if (!named.ok)
+      return ok({ status: "refused", code: "BAD_DEVICE", error: named.error });
+    const target = named.computer ?? "";
     const action = (ctx.args.action ?? "install") as InstallationRequestAction;
     if (!(INSTALLATION_REQUEST_ACTIONS as readonly unknown[]).includes(action))
       return ok({
