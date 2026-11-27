@@ -864,7 +864,8 @@ export async function applyDocumentPatch(
   // refused BEFORE governance, so an oversized patch is never filed.
   if (doc.type === "html") {
     const tooLarge = htmlPageSizeRefusal(rendered.markdown);
-    if (tooLarge) throw new TRPCError({ code: "BAD_REQUEST", message: tooLarge });
+    if (tooLarge)
+      throw new TRPCError({ code: "BAD_REQUEST", message: tooLarge });
   }
 
   // 4. Advisory diagnostics of the result.

@@ -253,7 +253,10 @@ describe("EntityBodyService", () => {
           filename: "page.html",
         });
         const arg = createSpy.mock.calls[0]![0] as any;
-        expect({ mimeType, type: arg.type }).toEqual({ mimeType, type: "file" });
+        expect({ mimeType, type: arg.type }).toEqual({
+          mimeType,
+          type: "file",
+        });
         expect(arg.mimeType).toBe(mimeType);
       }
       createSpy.mockClear();

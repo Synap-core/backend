@@ -563,7 +563,12 @@ export function buildProposalChanges(
   }
 
   for (const row of pageRows.rows) {
-    changes.push({ ...row, operation, before: undefined, valueType: valueTypeOf(row.after) });
+    changes.push({
+      ...row,
+      operation,
+      before: undefined,
+      valueType: valueTypeOf(row.after),
+    });
   }
 
   // A delete's values are what it REMOVES: each is the row's `before`, and

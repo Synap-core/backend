@@ -217,28 +217,6 @@ function approve(key: string, row: Record<string, unknown>, asUser: string) {
   } as unknown as ProposalExecutorArgs);
 }
 
-async function seedCell(typeKey: string, workspaceId: string | null) {
-  await q(
-    `insert into widget_definitions (type_key, workspace_id, name, renderer_type, renderer_source, is_active)
-     values ($1, $2, $1, 'frame', 'export default () => null', true)`,
-    [typeKey, workspaceId]
-  );
-}
-const trustOf = async (typeKey: string, workspaceId: string | null) =>
-  (
-    await q<{ trust_level: string }>(
-      `select trust_level from widget_definitions where type_key = $1 and workspace_id is not distinct from $2`,
-      [typeKey, workspaceId]
-    )
-  ).rows[0]?.trust_level;
-const isActive = async (typeKey: string, workspaceId: string | null) =>
-  (
-    await q<{ is_active: boolean }>(
-      `select is_active from widget_definitions where type_key = $1 and workspace_id is not distinct from $2`,
-      [typeKey, workspaceId]
-    )
-  ).rows[0]?.is_active;
-
 beforeAll(async () => {
   await h.init();
   const tables = (Object.values(schema) as unknown[]).filter(
@@ -347,10 +325,14 @@ describe("H3: a key bound to one space writes cells in that space only", () => {
        values ('cell:pkg:ws2', $1, 'ws2', 'frame', $2, true), ('cell:pkg:podw', null, 'podw', 'frame', $2, true)`,
       [WS2, SOURCE]
     );
-    const other = await call("DELETE", `/cells/cell:pkg:ws2?workspaceId=${WS2}`, {
-      asUser: MEMBER,
-      keyWorkspaceId: WS,
-    });
+    const other = await call(
+      "DELETE",
+      `/cells/cell:pkg:ws2?workspaceId=${WS2}`,
+      {
+        asUser: MEMBER,
+        keyWorkspaceId: WS,
+      }
+    );
     expect(other.status).toBe(403);
     const podWide = await call("DELETE", "/cells/cell:pkg:podw", {
       asUser: ADMIN,
@@ -409,7 +391,8 @@ describe("M1: a pod-wide cell is defined by a pod admin only", () => {
     });
     expect(res.status).toBe(202);
     const row = (await proposalsFor("define")).find(
-      (r) => (r.data as { name?: string } | null)?.name === "Approved pod wide" ||
+      (r) =>
+        (r.data as { name?: string } | null)?.name === "Approved pod wide" ||
         JSON.stringify(r.data).includes("Approved pod wide")
     )!;
     expect(row).toBeDefined();

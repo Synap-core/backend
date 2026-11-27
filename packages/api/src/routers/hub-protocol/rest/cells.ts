@@ -459,7 +459,10 @@ export function registerCellsRoutes(app: HubHono): void {
     // A POD-WIDE cell is drawn by every space: only a pod admin defines one,
     // as only a pod admin retires one (review M1). Checked on the person
     // behind the call, agent or not; the approval checks the approver again.
-    const podWide = await cellDefineScopeRefusal(userId ?? "", scope.workspaceId);
+    const podWide = await cellDefineScopeRefusal(
+      userId ?? "",
+      scope.workspaceId
+    );
     if (podWide) return c.json({ error: podWide.error }, podWide.status);
     // body.agentUserId wins; fall back to the auto-injected context value the
     // auth middleware sets for an agent API key (same resolution order as the

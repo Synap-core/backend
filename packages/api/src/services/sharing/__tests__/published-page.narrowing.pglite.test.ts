@@ -139,9 +139,9 @@ beforeEach(() => {
 });
 
 const permissionsOf = (grant: unknown) =>
-  (grant as { scopes: Array<{ permissions: string[] }> } | null)?.scopes.flatMap(
-    (s) => s.permissions
-  ) ?? null;
+  (
+    grant as { scopes: Array<{ permissions: string[] }> } | null
+  )?.scopes.flatMap((s) => s.permissions) ?? null;
 
 describe("only publishable reads are frozen public", () => {
   it("sessions.list and entities.list of every kind are withheld, the deal read runs", async () => {
@@ -195,7 +195,10 @@ describe("an agent in the chain narrows the reads to its key", () => {
       proposedBy: { agentUserId: AGENT, apiKeyId: PROPOSING_KEY },
     });
     expect(h.reads).toHaveLength(1);
-    expect(h.reads[0]).toMatchObject({ agentUserId: AGENT, keyWorkspaceId: null });
+    expect(h.reads[0]).toMatchObject({
+      agentUserId: AGENT,
+      keyWorkspaceId: null,
+    });
     expect(permissionsOf(h.reads[0]!.grant)).toEqual(["document.read"]);
   });
 

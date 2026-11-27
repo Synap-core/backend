@@ -35,12 +35,7 @@
 
 import { and, eq, GrantRepository, runWithGrant } from "@synap/database";
 import type { getDb, KeyGrant } from "@synap/database";
-import {
-  apiKeys,
-  documents,
-  links,
-  proposals,
-} from "@synap/database/schema";
+import { apiKeys, documents, links, proposals } from "@synap/database/schema";
 import {
   buildCellFrameCsp,
   describeDeclaredRead,
@@ -160,9 +155,7 @@ async function agentKeyReach(
     .limit(1);
   if (!key || !key.isActive || key.revokedAt) return null;
   return {
-    grant: await new GrantRepository(database as never).resolveForKey(
-      apiKeyId
-    ),
+    grant: await new GrantRepository(database as never).resolveForKey(apiKeyId),
     keyWorkspaceId: key.workspaceId ?? null,
   };
 }
@@ -357,7 +350,8 @@ export async function pageReadsForReview(
   };
   for (const entry of declared ?? []) {
     const refusal = publishedReadRefusal(entry);
-    if (refusal) out.withheld.push(`${describeDeclaredRead(entry)}: ${refusal}`);
+    if (refusal)
+      out.withheld.push(`${describeDeclaredRead(entry)}: ${refusal}`);
     else out.public.push(describeDeclaredRead(entry));
   }
   return out;

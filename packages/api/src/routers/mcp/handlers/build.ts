@@ -361,18 +361,13 @@ export const buildHandlers: McpHandlerMap = {
     const declaredFields = declaredFrameIoFields(declared);
     // A key bound to one space defines in that space only, never pod-wide
     // (review H3); a pod-wide cell needs a pod admin (review M1).
-    const { confineCellScope } = await import(
-      "../../hub-protocol/confine-workspace.js"
-    );
-    const scope = confineCellScope(
-      ctx.keyWorkspaceId,
-      parsed.data.workspaceId
-    );
+    const { confineCellScope } =
+      await import("../../hub-protocol/confine-workspace.js");
+    const scope = confineCellScope(ctx.keyWorkspaceId, parsed.data.workspaceId);
     if (!scope.ok) throw new Error(scope.error);
     const cellWorkspaceId = scope.workspaceId;
-    const { cellDefineScopeRefusal } = await import(
-      "../../../services/cells/marketplace-cell-lifecycle.js"
-    );
+    const { cellDefineScopeRefusal } =
+      await import("../../../services/cells/marketplace-cell-lifecycle.js");
     const podWide = await cellDefineScopeRefusal(userId, cellWorkspaceId);
     if (podWide) throw new Error(podWide.error);
     // Define-time check BEFORE the gate: a source that cannot mount in the

@@ -115,7 +115,8 @@ export function confineCellScope(
   keyWorkspaceId: string | null | undefined,
   requested: string | null | undefined
 ): { ok: true; workspaceId: string | null } | { ok: false; error: string } {
-  if (keyWorkspaceId == null) return { ok: true, workspaceId: requested ?? null };
+  if (keyWorkspaceId == null)
+    return { ok: true, workspaceId: requested ?? null };
   if (requested == null) {
     return {
       ok: false,

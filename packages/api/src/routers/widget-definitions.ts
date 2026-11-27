@@ -543,7 +543,11 @@ export const widgetDefinitionsRouter = router({
       requireUserId(ctx.userId);
       requireAdminRole(ctx.workspaceRole);
       // A key bound to one space retires cells in that space only (review H3).
-      resolveConfinedWorkspace(ctx.keyType, ctx.keyWorkspaceId, ctx.workspaceId);
+      resolveConfinedWorkspace(
+        ctx.keyType,
+        ctx.keyWorkspaceId,
+        ctx.workspaceId
+      );
 
       const db = await getDb();
       await db

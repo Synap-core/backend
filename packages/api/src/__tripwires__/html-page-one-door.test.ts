@@ -56,12 +56,11 @@ const MARK_HOLDERS = [DOOR, TOKEN, CREATE_DOOR].sort();
  * Files that write document rows AND name an html shape in code, outside the
  * door, each with its reason and the exact count (a new site fails).
  */
-const HTML_SHAPE_EXEMPT: Record<string, { count: number; reason: string }> =
-  {
-    // None (surfaces review S6, 27 Nov 2026): an uploaded .html file
-    // (`entity-body-service.ts`) is now stored as an inert `file`, never a
-    // runnable page, so no file outside the door names an html shape.
-  };
+const HTML_SHAPE_EXEMPT: Record<string, { count: number; reason: string }> = {
+  // None (surfaces review S6, 27 Nov 2026): an uploaded .html file
+  // (`entity-body-service.ts`) is now stored as an inert `file`, never a
+  // runnable page, so no file outside the door names an html shape.
+};
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
