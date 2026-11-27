@@ -5,9 +5,9 @@
  * door of proof of presence. Every presence dialog links here (pod admin,
  * Relay, the desktop app, the web app); no surface runs its own.
  *
- * Ask → every device of the person is told and can cancel for 24 h → Finish
- * (a fresh sign-in at the pod) clears every proof factor → add a passkey
- * again. Each step is the pod's (`presence.recovery.*`), audited there. The
+ * Ask → the person is told everywhere they are signed in, and can cancel
+ * for 24 h → Finish (a fresh sign-in at the pod) clears every proof factor
+ * → add a passkey again. Each step is the pod's (`presence.recovery.*`), audited there. The
  * states are derived in `presence-recovery-model.ts`.
  */
 

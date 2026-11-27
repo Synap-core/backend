@@ -12,7 +12,8 @@ export const en = {
   description:
     "Your language, how requests from your AIs are laid out, how your AIs act, and what you always or never allow.",
   "language.title": "Language",
-  "language.hint": "The language this site speaks to you, on every device.",
+  "language.hint":
+    "The language this site speaks to you, wherever you sign in.",
   "language.en": "English",
   "language.fr": "Français",
   "language.failed": "Couldn’t change the language",
@@ -83,7 +84,7 @@ export const fr: Catalog<typeof en> = {
   description:
     "Votre langue, la présentation des demandes de vos IA, la façon dont vos IA agissent, et ce que vous autorisez toujours ou jamais.",
   "language.title": "Langue",
-  "language.hint": "La langue de ce site, sur tous vos appareils.",
+  "language.hint": "La langue de ce site, partout où vous vous connectez.",
   "language.en": "English",
   "language.fr": "Français",
   "language.failed": "Impossible de changer la langue",

@@ -8,18 +8,18 @@ import { PRESENCE_WORDS } from "@synap-core/types/presence";
 
 const pageEn = {
   intro:
-    "When you can no longer confirm it’s you (a lost passkey, phone or password manager), you can reset how you confirm it. For your safety this takes 24 hours: every device of yours is told, and any of them can cancel it.",
+    "When you can no longer confirm it’s you (a lost passkey, phone or password manager), you can reset how you confirm it. For your safety this takes 24 hours: you’re told everywhere you’re signed in, and can cancel it from any of those sign-ins.",
   email:
     "An email is never enough here: an app or an AI that reads your mail could use it.",
   "none.ask": "Ask for a reset",
   "none.cancelled": "Your last reset was cancelled {when}.",
   "ask.title": "Ask for a reset?",
   "ask.consequence":
-    "Every device of yours is told now. In 24 hours you can finish it here, after signing in again. Until then, any of your signed-in devices can cancel it.",
+    "You’re told now, everywhere you’re signed in. In 24 hours you can finish it here, after signing in again. Until then, you can cancel it from anywhere you’re signed in.",
   "ask.confirm": "Ask for a reset",
   "waiting.title": "A reset is waiting",
   "waiting.body":
-    "You can finish it from {when}. Every device of yours was told. If you didn’t ask for it, cancel it now.",
+    "You can finish it from {when}. You were told everywhere you’re signed in. If you didn’t ask for it, cancel it now.",
   "waiting.cancel": "Cancel the reset",
   "ready.title": "Your reset is ready",
   "ready.body":
@@ -27,7 +27,7 @@ const pageEn = {
   "ready.finish": "Finish the reset",
   "ready.confirm.title": "Finish the reset?",
   "ready.confirm.consequence":
-    "Every way you confirm it’s you is removed now, and your other browsers are signed out (this one stays). Every device of yours is told.",
+    "Every way you confirm it’s you is removed now, and your other browsers are signed out (this one stays). Your signed-in apps are told.",
   "ready.confirm": "Finish",
   "ready.signIn":
     "Sign in again with your password or an email code, then finish within 10 minutes.",
@@ -48,18 +48,18 @@ const pageEn = {
 
 const pageFr: Catalog<typeof pageEn> = {
   intro:
-    "Si vous ne pouvez plus confirmer que c’est vous (clé d’accès, téléphone ou gestionnaire de mots de passe perdu), vous pouvez réinitialiser vos moyens de confirmation. Par sécurité, cela prend 24 heures : chacun de vos appareils est informé, et n’importe lequel peut l’annuler.",
+    "Si vous ne pouvez plus confirmer que c’est vous (clé d’accès, téléphone ou gestionnaire de mots de passe perdu), vous pouvez réinitialiser vos moyens de confirmation. Par sécurité, cela prend 24 heures : vous en êtes informé partout où vous êtes connecté, et pouvez l’annuler depuis chacune de ces connexions.",
   email:
     "Un e-mail ne suffit jamais ici : une app ou une IA qui lit votre messagerie pourrait s’en servir.",
   "none.ask": "Demander une réinitialisation",
   "none.cancelled": "Votre dernière réinitialisation a été annulée {when}.",
   "ask.title": "Demander une réinitialisation ?",
   "ask.consequence":
-    "Chacun de vos appareils est informé maintenant. Dans 24 heures, vous pourrez la terminer ici, après vous être reconnecté. D’ici là, n’importe lequel de vos appareils connectés peut l’annuler.",
+    "Vous en êtes informé maintenant, partout où vous êtes connecté. Dans 24 heures, vous pourrez la terminer ici, après vous être reconnecté. D’ici là, vous pouvez l’annuler partout où vous êtes connecté.",
   "ask.confirm": "Demander une réinitialisation",
   "waiting.title": "Une réinitialisation est en attente",
   "waiting.body":
-    "Vous pourrez la terminer à partir de {when}. Chacun de vos appareils a été informé. Si vous ne l’avez pas demandée, annulez-la maintenant.",
+    "Vous pourrez la terminer à partir de {when}. Vous en avez été informé partout où vous êtes connecté. Si vous ne l’avez pas demandée, annulez-la maintenant.",
   "waiting.cancel": "Annuler la réinitialisation",
   "ready.title": "Votre réinitialisation est prête",
   "ready.body":
@@ -67,7 +67,7 @@ const pageFr: Catalog<typeof pageEn> = {
   "ready.finish": "Terminer la réinitialisation",
   "ready.confirm.title": "Terminer la réinitialisation ?",
   "ready.confirm.consequence":
-    "Tous vos moyens de confirmer que c’est vous sont retirés maintenant, et vos autres navigateurs sont déconnectés (celui-ci reste connecté). Chacun de vos appareils est informé.",
+    "Tous vos moyens de confirmer que c’est vous sont retirés maintenant, et vos autres navigateurs sont déconnectés (celui-ci reste connecté). Vos apps connectées en sont informées.",
   "ready.confirm": "Terminer",
   "ready.signIn":
     "Reconnectez-vous avec votre mot de passe ou un code par e-mail, puis terminez dans les 10 minutes.",

@@ -27,7 +27,13 @@ import { isTwoWaysRefusal } from "./ways-in-model";
 
 const CATALOGS = { en, fr };
 
-export const DEVICE_KEYS_ANCHOR = "devices";
+export const DEVICE_KEYS_ANCHOR = "phones-and-computers";
+/**
+ * The card's address before "Devices" became the product word for what the
+ * pod reaches (decision 78fc3fa1). Kept so links already sent
+ * (`/settings/security#devices`) still land on this card.
+ */
+export const DEVICE_KEYS_LEGACY_ANCHOR = "devices";
 
 interface DeviceKeyRow {
   id: string;
@@ -67,6 +73,7 @@ export function DeviceKeysCard() {
 
   return (
     <div id={DEVICE_KEYS_ANCHOR} className="scroll-mt-6">
+      <span id={DEVICE_KEYS_LEGACY_ANCHOR} className="block scroll-mt-6" />
       <SectionCard
         title={t("devices.title")}
         hint={t("devices.hint")}
