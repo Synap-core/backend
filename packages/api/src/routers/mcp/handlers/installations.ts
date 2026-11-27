@@ -9,11 +9,9 @@
 import { TRPCError } from "@trpc/server";
 import { AccessContext } from "../../../access/index.js";
 import {
-  INSTALLATION_REQUEST_ACTIONS,
   getInstallationDetail,
   listInstallations,
   loadInstallableCapability,
-  type InstallationRequestAction,
 } from "../../../services/installations/installations.js";
 import {
   computerChoices,
@@ -52,7 +50,7 @@ export const installationHandlers = {
     });
     // DETAIL: one installation with its approved snapshot and its drift
     // against the pod's current definition (ticket c5e95df3).
-    if (typeof ctx.args.installationId === "string") {
+    if (ctx.args.installationId !== undefined) {
       const id = ctx.args.installationId.trim();
       const badId = fullUuidError(ctx.toolName, "installationId", id);
       if (badId) return badId;
@@ -64,14 +62,10 @@ export const installationHandlers = {
               "No live installation of the person has this id: list them without installationId.",
           });
     }
-    const computerId =
-      typeof ctx.args.computerId === "string" && ctx.args.computerId.trim()
-        ? ctx.args.computerId.trim()
-        : undefined;
-    const capabilityKey =
-      typeof ctx.args.capabilityKey === "string"
-        ? ctx.args.capabilityKey.trim()
-        : undefined;
+    // A blank computerId reads as not given.
+    const computerId = ctx.args.computerId?.trim() || undefined;
+    const capabilityKey = ctx.args.capabilityKey?.trim();
+    // The slug's shape is not in the schema: checked here.
     if (capabilityKey !== undefined && !SLUG.test(capabilityKey)) {
       return ok({
         error:
@@ -86,26 +80,18 @@ export const installationHandlers = {
   },
   synap_request_installation: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
-    const capabilityKey =
-      typeof ctx.args.capabilityKey === "string"
-        ? ctx.args.capabilityKey.trim()
-        : "";
+    // The slug's shape is not in the schema: checked here.
+    const capabilityKey = ctx.args.capabilityKey.trim();
     if (!SLUG.test(capabilityKey))
       return ok({
         error:
           "capabilityKey is a capability's catalog slug, e.g. media-ffmpeg: find one with synap_run_capability market.search.",
       });
-    const target =
-      typeof ctx.args.computer === "string" ? ctx.args.computer.trim() : "";
-    const action = (ctx.args.action ?? "install") as InstallationRequestAction;
-    if (!(INSTALLATION_REQUEST_ACTIONS as readonly unknown[]).includes(action))
-      return ok({
-        error: `action is one of ${INSTALLATION_REQUEST_ACTIONS.join(", ")}.`,
-      });
-    const version =
-      typeof ctx.args.version === "string" && ctx.args.version.trim()
-        ? ctx.args.version.trim()
-        : null;
+    // The schema takes "": a blank computer is refused below.
+    const target = ctx.args.computer.trim();
+    const action = ctx.args.action ?? "install";
+    // A blank version reads as not given.
+    const version = ctx.args.version?.trim() || null;
     const caller = {
       userId: ctx.userId,
       agentUserId: ctx.agentUserId ?? null,

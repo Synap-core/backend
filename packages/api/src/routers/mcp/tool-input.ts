@@ -53,6 +53,28 @@ export function clampedLimit(min: number, max: number, fallback: number) {
     });
 }
 
+/** What a `synap_start_session` input is to a launch (`launch: true`). */
+export type LaunchRole = "launch" | "launch-only";
+const LAUNCH_ROLES = new WeakMap<object, LaunchRole>();
+
+/**
+ * Marks a `synap_start_session` input a LAUNCH reads (`launch-only`: only a
+ * launch reads it, and a plain start refuses it). Not advertised: the
+ * launch's input list is read off these marks (`launchInputs`, build.ts).
+ */
+export function launchInput<T extends z.ZodType>(
+  role: LaunchRole,
+  schema: T
+): T {
+  LAUNCH_ROLES.set(schema, role);
+  return schema;
+}
+
+/** The launch mark of one input (`launchInput`), if any. */
+export function launchRole(schema: object): LaunchRole | undefined {
+  return LAUNCH_ROLES.get(schema);
+}
+
 const UNBOUNDED = "x-synap-unbounded";
 const BOUND_KEYS = [
   "minLength",

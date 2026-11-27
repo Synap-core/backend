@@ -218,6 +218,12 @@ describe("what is exempt", () => {
     expect(toolUntimed("synap_ask")).toBe("model");
     expect(toolUntimed("synap_run_capability")).toBe("model");
     expect(toolUntimed("synap_get_entity")).toBeNull();
+    // A start is timed; its launch (and the old name, always a launch) is not.
+    expect(toolUntimed("synap_start_session", { goal: "g" })).toBeNull();
+    expect(toolUntimed("synap_start_session", { launch: true })).toBe("model");
+    expect(toolUntimed("synap_run_playbook", { playbookId: "p" })).toBe(
+      "model"
+    );
     expect(toolUntimed("synap_no_such_tool")).toBeNull();
   });
 

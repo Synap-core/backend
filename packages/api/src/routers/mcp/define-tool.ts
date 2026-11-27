@@ -54,6 +54,8 @@ export interface ToolAlias {
   args?: Record<string, string>;
   /** Tool inputs the old name always means (e.g. `launch: true`). */
   fixedArgs?: Record<string, unknown>;
+  /** Annotations the old name keeps where they differ from its tool's. */
+  annotations?: Partial<NonNullable<Tool["annotations"]>>;
   /**
    * The group whose unlock lets `synap_call_tool` run the old name, when it
    * is not its tool's: a fold never widens who reaches a door.
@@ -121,10 +123,14 @@ export interface ToolDefinition<
   uncapped?: string;
   /**
    * Why the Hub request guard never times it out, beyond `openWorldHint`:
-   * a bounded long poll, or a model run.
+   * a bounded long poll, or a model run. A function for a tool only some of
+   * whose calls run one (start_session's launch), given the call's arguments.
    */
-  untimed?: "long_poll" | "model";
+  untimed?: Untimed | ((args: Record<string, unknown>) => Untimed | null);
 }
+
+/** Why the Hub request guard never times a call out. */
+export type Untimed = "long_poll" | "model";
 
 const DEFINED = Symbol("defineTool");
 
@@ -274,6 +280,7 @@ function aliasWire(alias: ToolAlias, tool: RegisteredTool): Tool {
       ? {
           annotations: {
             ...def.annotations,
+            ...alias.annotations,
             ...(title ? { title: `${title} (old name)` } : {}),
           },
         }
@@ -494,14 +501,22 @@ export function readOnlyToolNames(): ReadonlySet<string> {
 }
 
 /**
- * Why the Hub request guard never times a call of this tool out, or `null`:
- * its own `untimed`, else `model` for a tool that reaches outside the pod
- * (`openWorldHint`: a capability, an automation, a playbook run).
+ * Why the Hub request guard never times this call out, or `null`: its tool's
+ * own `untimed` (read with the call's arguments, an old name's fixed ones
+ * included), else `model` for a tool that reaches outside the pod
+ * (`openWorldHint`: a capability, an automation).
  */
-export function toolUntimed(name: string): "long_poll" | "model" | null {
+export function toolUntimed(
+  name: string,
+  args: Record<string, unknown> = {}
+): Untimed | null {
   const def = toolDefinition(name);
   if (!def) return null;
-  return def.untimed ?? (def.annotations?.openWorldHint ? "model" : null);
+  const untimed =
+    typeof def.untimed === "function"
+      ? def.untimed({ ...args, ...reg().aliases.get(name)?.alias.fixedArgs })
+      : def.untimed;
+  return untimed ?? (def.annotations?.openWorldHint ? "model" : null);
 }
 
 /**

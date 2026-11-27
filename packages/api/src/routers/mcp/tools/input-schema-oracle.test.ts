@@ -42,10 +42,17 @@ const LAUNCH =
  * `synap_run_playbook` is now an old name of `synap_start_session` with
  * `launch: true` (review B2 F5): it keeps its argument NAMES (a missing or an
  * added one is still a difference), each advertised with start_session's
- * schema of the input it maps to.
+ * schema of the input it maps to. Accepted wholesale: only the DESCRIPTIONS
+ * (start_session's words). Each other schema change is listed by path below.
  */
 const ALIAS_OF_START = (path: string) =>
-  /^synap_run_playbook\.properties\.[^.]+\./.test(path);
+  /^synap_run_playbook\.properties\.[^.]+\.description$/.test(path);
+const ALIAS_PLAYBOOK_ID =
+  "start_session's templateId takes null (no suggestions); a launch reads a null as no playbook id, as an absent one";
+const ALIAS_PARENT_FORMAT =
+  "start_session advertises parentSessionId's uuid format (only advertised, `.meta`); the start handler refuses a non-uuid in words, as main's launch did";
+const ALIAS_INTENT_MAX =
+  "start_session bounds suspendedIntent at 400 chars; main's run_playbook handler refused one over 400 too";
 
 const ACCEPTED: Record<string, string> = {
   ...Object.fromEntries(
@@ -62,6 +69,9 @@ const ACCEPTED: Record<string, string> = {
       "required",
     ].map((p) => [`synap_start_session.${p}`, LAUNCH])
   ),
+  "synap_run_playbook.properties.playbookId.type": ALIAS_PLAYBOOK_ID,
+  "synap_run_playbook.properties.parentSessionId.format": ALIAS_PARENT_FORMAT,
+  "synap_run_playbook.properties.suspendedIntent.maxLength": ALIAS_INTENT_MAX,
   "synap_start_session.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_update_session.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_set_track_params.properties.params.additionalProperties": VACUOUS_OPEN,

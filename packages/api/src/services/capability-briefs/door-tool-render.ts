@@ -17,6 +17,7 @@
  */
 
 import {
+  canonicalToolName,
   isPodToolName,
   toolNameOnDoor,
   toolTeachingKeys,
@@ -157,8 +158,12 @@ function rewriteTokens(
       missing.set(token, isOnly);
       return `${token}${MISSING_MARK}`;
     }
-    const podTool = resolveTaughtToolToken(token);
-    if (!podTool) return token;
+    const taught = resolveTaughtToolToken(token);
+    if (!taught) return token;
+    // An old name (an alias) is unlisted on the pod's own door: taught there
+    // as the tool it stands for. The connector keeps its frozen name.
+    const podTool =
+      door === "pod-mcp" ? canonicalToolName(taught) : taught;
     const name = toolNameOnDoor(podTool, door);
     if (name) return name;
     missing.set(podTool, `not on ${DOOR_LABEL[door]}`);

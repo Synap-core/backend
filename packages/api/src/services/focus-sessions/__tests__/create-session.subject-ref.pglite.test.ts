@@ -251,12 +251,21 @@ describe("synap_start_session — subjectRef", () => {
     expect(await stored(goal)).toEqual([]);
   });
 
-  it("a malformed subjectRef is refused in words", async () => {
-    const { body } = await mcpStart({
-      goal: `Ref bad ${randomUUID()}`,
-      subjectRef: "github:x#1",
-    });
-    expect(String(body.error)).toMatch(/subjectRef must be an object/);
+  it("a malformed subjectRef is refused at the door, nothing stored", async () => {
+    const { parseToolArgs } =
+      await import("../../../routers/mcp/define-tool.js");
+    for (const subjectRef of ["github:x#1", { id: MY_ISSUE }, { url: 1 }]) {
+      const parsed = parseToolArgs("synap_start_session", {
+        goal: `Ref bad ${randomUUID()}`,
+        subjectRef,
+      });
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) continue;
+      expect(parsed.result.isError).toBe(true);
+      expect(
+        (parsed.result.content[0] as { text: string }).text
+      ).toMatch(/subjectRef/);
+    }
   });
 });
 

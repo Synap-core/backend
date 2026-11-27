@@ -68,6 +68,16 @@ describe("renderSkillForDoor", () => {
     );
   });
 
+  it("an old name (an alias) reads as its tool on the pod door, frozen on the connector", () => {
+    const src = "List them with `synap_list_widgets`, or `list_widgets`.";
+    expect(renderSkillForDoor(src, "pod-mcp")).toBe(
+      "List them with `synap_list_cells`, or `synap_list_cells`."
+    );
+    expect(renderSkillForDoor(src, "cp-connector")).toBe(
+      "List them with `pod__list_widgets`, or `pod__list_widgets`."
+    );
+  });
+
   it("leaves non-tool snake_case untouched and adds nothing when nothing is missing", () => {
     const src =
       "Link with `depends_on`; the table `synap_packages`; then `synap_ask`.";

@@ -33,6 +33,7 @@ vi.mock("../../entities.js", async (importOriginal) => ({
   },
 }));
 
+import { parseToolArgs } from "../define-tool.js";
 import { entityHandlers } from "./entity.js";
 import type { McpToolContext } from "./shared.js";
 
@@ -145,12 +146,19 @@ describe("synap_update_facet — a role's fields reach the facet door", () => {
   });
 
   it("no properties to change is refused, nothing written", async () => {
-    for (const properties of [undefined, {}, [], "nextAction"]) {
-      const res = (await update()(ctx({ facetId: LEAD, properties }))) as {
-        isError?: boolean;
-      };
-      expect(res.isError).toBe(true);
+    // Absent or not an object: the tool's input, refused at the door.
+    for (const properties of [undefined, [], "nextAction"]) {
+      const res = parseToolArgs("synap_update_facet", {
+        facetId: LEAD,
+        ...(properties === undefined ? {} : { properties }),
+      });
+      expect(res.ok).toBe(false);
     }
+    // An empty change: the handler's own refusal.
+    const res = (await update()(ctx({ facetId: LEAD, properties: {} }))) as {
+      isError?: boolean;
+    };
+    expect(res.isError).toBe(true);
     expect(h.updates).toHaveLength(0);
   });
 });

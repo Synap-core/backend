@@ -16,6 +16,7 @@ import {
   type CapabilityBriefDoor,
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
+import { isUuid } from "@synap-core/types/property-render";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { ASK_INPUT } from "./ask-wire-schema.js";
 import { CAPTURE_TABLE_MAX_ROWS } from "../../../services/capture-agent/capture-table.js";
@@ -151,6 +152,7 @@ import * as fence from "../../../access/grant-door-fence.js";
 import {
   clampedLimit,
   jsonObjectInput,
+  launchInput,
   withoutAdvertisedBounds,
 } from "../tool-input.js";
 import {
@@ -2607,22 +2609,26 @@ export function toolDefinitions() {
             startAnother: "startAnother",
           },
           fixedArgs: { launch: true },
+          // Every call of the old name is a launch: it runs the executor.
+          annotations: { openWorldHint: true },
         },
       ],
       annotations: {
         title: "Start focus session",
         readOnlyHint: false,
         destructiveHint: false,
-        // A launch (`launch: true`) runs the playbook's executor.
-        openWorldHint: true,
+        openWorldHint: false,
       },
+      // A launch runs the playbook (its executor, a model): never timed, as
+      // its Hub twin POST /playbooks/:id/run; a plain start is timed.
+      untimed: (args) => (args.launch === true ? "model" : null),
       description:
         'Start a focus session: goal-bound work. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, its space comes from its playbook, subject, parent session, project or your focus. Decompose with parentSessionId (children) and blockedBy*Ids (ordering), never a chain in the goal; a blocking prerequisite is a child with suspendedIntent. An open session with the same goal here comes back \'deduped\': continue it. DEFAULTS: your writes are grouped into this conversation\'s session (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`); another conversation\'s session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject\'s kind; else the parent\'s; else the main-red playbook for a `main red:` title (`binding` says which). Without templateId, `playbooks` ranks candidates (suggestions); follow or release one later with synap_update_session followPlaybookId; templateId: null skips the ranking. `offers` (suggestions) lists open goals, close sessions to continue, or homes. With a subject, the session\'s step IS the subject\'s status: move the thing (synap_update_entity + expectedStatus). DECLARE at least one criterion, or an outcome with `verify`, else the start is refused (NO_CRITERIA, nothing created): 2-5 binary, observable statements; `outcomes` for what it will produce. LAUNCH (`launch: true`): RUN the playbook (templateId or playbookName) by its runner, executor or the agent you hand it to; only the playbook inputs count, its goal and criteria are the playbook\'s. Outcomes, none to retry: "draft" (the person\'s draft until they accept; tell them), "proposed" (SUCCESS, pass on reviewUrl), "blocked" (nothing ran: `unenabledSkills`; again once `enableProposals` are approved), "running", "already_running" (`session` is the live run; startAnother only if asked), "generated" (pass on generated.reviewUrl), "skipped" (read `message`).',
       input: z.object({
-        launch: z
+        launch: launchInput("launch", z
           .boolean()
           .optional()
-          .describe("true: RUN the playbook (see the description)."),
+          .describe("true: RUN the playbook (see the description).")),
         forceCreate: z
           .boolean()
           .optional()
@@ -2642,36 +2648,36 @@ export function toolDefinitions() {
           .describe(
             "Required, except with launch. The OUTCOME, one sentence (e.g. 'Research web-scraping approaches'), not a paragraph: the name goes in title, deliverables in outcomes, dependencies in blockedBySessionIds."
           ),
-        workspaceId: z
+        workspaceId: launchInput("launch", z
           .string()
           .optional()
           .describe(
             "Pin the session to a space. Usually omit it (see the description)."
-          ),
-        projectId: z
+          )),
+        projectId: launchInput("launch", z
           .string()
           .optional()
           .describe(
             "Project ID the session belongs to; needs no workspace membership."
-          ),
-        trackId: z
+          )),
+        trackId: launchInput("launch", z
           .string()
           .optional()
           .describe(
             "Optional track UUID (synap_list_tracks) — the lasting goal, inside a project, this session works toward. Implies its project; a different projectId is refused."
-          ),
-        trackStage: z
+          )),
+        trackStage: launchInput("launch", z
           .string()
           .optional()
           .describe(
             "Legacy — only for a track with stages: the stage KEY the session is filed at. Omit it (a track with no stages has none; a staged track files at its current stage). A key the track does not declare is refused. Needs trackId."
-          ),
-        subjectEntityId: z
+          )),
+        subjectEntityId: launchInput("launch", z
           .string()
           .optional()
           .describe(
             "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here."
-          ),
+          )),
         subjectRef: z
           .strictObject({
             url: z.string().optional(),
@@ -2691,52 +2697,52 @@ export function toolDefinitions() {
           .describe(
             "Optional channel UUID to BORROW as its room. Omit it and the session mints its own (`channelId`): ask the person there."
           ),
-        agentIds: z
+        agentIds: launchInput("launch", z
           .array(z.string())
           .optional()
           .describe(
             "Optional agent ids to hand this session to (find them, and the computer each runs on, with synap_list_agents). Naming another agent is a hand-off: it is refused when that agent cannot take the person's work (paused, not theirs), and may wait on the person's approval."
-          ),
-        templateId: z
+          )),
+        templateId: launchInput("launch", z
           .string()
           .nullable()
           .optional()
           .describe(
             "Optional playbook UUID it follows from the start (omitted: bound on facts, see the description; null skips the suggestions). With launch: the playbook to run."
-          ),
-        playbookName: z
+          )),
+        playbookName: launchInput("launch-only", z
           .string()
           .optional()
           .describe(
             "With launch, instead of templateId: the playbook's unique name."
-          ),
-        handToAgentId: z
+          )),
+        handToAgentId: launchInput("launch-only", z
           .string()
           .optional()
           .describe(
             "With launch: the agent (synap_list_agents) that runs it; an agent may name only itself."
-          ),
-        runner: z
+          )),
+        runner: launchInput("launch-only", z
           .unknown()
           .optional()
-          .describe("With launch: who runs it (system/synap/processes)."),
-        stageRunners: z
+          .describe("With launch: who runs it (system/synap/processes).")),
+        stageRunners: launchInput("launch-only", z
           .unknown()
           .optional()
-          .describe("With launch: who works each stage, by key."),
-        startAnother: z
+          .describe("With launch: who works each stage, by key.")),
+        startAnother: launchInput("launch-only", z
           .boolean()
           .optional()
-          .describe("With launch: a second run beside a live one."),
-        reasoning: z
+          .describe("With launch: a second run beside a live one.")),
+        reasoning: launchInput("launch-only", z
           .string()
           .optional()
-          .describe("With launch: why, shown on the review."),
-        params: jsonObjectInput("params")
+          .describe("With launch: why, shown on the review.")),
+        params: launchInput("launch", jsonObjectInput("params")
           .optional()
           .describe(
             "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused."
-          ),
+          )),
         outcomes: SESSION_OUTCOMES_INPUT.optional(),
         criteria: z
           .array(z.record(z.string(), z.unknown()))
@@ -2745,13 +2751,13 @@ export function toolDefinitions() {
           .describe(
             "DEPRECATED alias — prefer `outcomes` with kind 'fact'. Binary acceptance criteria, each observable; written to the same storage."
           ),
-        parentSessionId: z
+        parentSessionId: launchInput("launch", z
           .string()
           .meta({ format: "uuid" })
           .optional()
           .describe(
             "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited."
-          ),
+          )),
         targets: z
           .array(z.string().meta({ format: "uuid" }))
           .max(100)
@@ -2774,13 +2780,13 @@ export function toolDefinitions() {
         blockedByTrackIds: z.array(z.string()).optional(),
         startNow: START_NOW_INPUT.optional(),
         ...STEP_TIME_INPUT,
-        suspendedIntent: z
+        suspendedIntent: launchInput("launch", z
           .string()
           .max(400)
           .optional()
           .describe(
             "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
-          ),
+          )),
         forOutput: z
           .string()
           .max(120)
@@ -3961,14 +3967,12 @@ export function toolDefinitions() {
       description:
         'Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit; configure a catalog cell first. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Declare its `reads`: the frame may query nothing else. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded, attached to one object (synap_attach_surface) or bound (synap_promote_cell_to_renderer).',
       input: z.object({
-        name: z
-          .string()
-          .describe(
-            "Human-readable cell name; also the basis for the generated typeKey (`generated:<slug>`)."
-          ),
-        rendererSource: z
-          .string()
-          .describe("The cell's renderer source (HTML/JS frame source)."),
+        name: withoutAdvertisedBounds(z.string().min(1)).describe(
+          "Human-readable cell name; also the basis for the generated typeKey (`generated:<slug>`)."
+        ),
+        rendererSource: withoutAdvertisedBounds(z.string().min(1)).describe(
+          "The cell's renderer source (HTML/JS frame source)."
+        ),
         workspaceId: z
           .string()
           .optional()
@@ -3979,8 +3983,9 @@ export function toolDefinitions() {
           .string()
           .optional()
           .describe("Optional short description of the cell."),
-        viewTypes: z
-          .array(z.string())
+        viewTypes: withoutAdvertisedBounds(
+          z.array(z.string().min(1).max(64)).max(32)
+        )
           .optional()
           .describe(
             'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain cell (placed, never a renderer) and views fall back to the built-in adapter.'
@@ -3991,10 +3996,13 @@ export function toolDefinitions() {
           .describe(
             "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer."
           ),
+        // Parsed as the placement the cell service takes (a view UUID and
+        // nothing else), advertised as main's open `{viewId}`.
         placeOn: z
           .looseObject({
-            viewId: z.string(),
+            viewId: z.string().refine(isUuid, "must be a view UUID"),
           })
+          .refine((p) => Object.keys(p).length === 1, "takes only viewId")
           .optional()
           .describe(
             "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
@@ -6370,7 +6378,7 @@ export function toolDefinitions() {
         destructiveHint: false,
         openWorldHint: false,
       },
-      description: `Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type "bento"; think together → type "whiteboard"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
+      description: `Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type "bento"; think together → type "whiteboard"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_cells lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
       input: z.object({
         name: z.string(),
         type: z.enum(CREATABLE_VIEW_TYPE_KEYS),
@@ -6536,7 +6544,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success.",
+        "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_cells (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success.",
       input: z.object({
         viewId: z.string().describe("View UUID to edit"),
         name: z.string().optional().describe("New name (1-100 chars)."),
@@ -6835,19 +6843,26 @@ export function toolDefinitions() {
               .describe(
                 "The field edits to merge. Only the keys you pass change."
               ),
-            textEdits: z
-              .array(
-                z.looseObject({
-                  field: z.string(),
-                  find: z.string(),
-                  replace: z.string(),
-                })
-              )
+            textEdits: withoutAdvertisedBounds(
+              z
+                .array(
+                  z.looseObject({
+                    field: z.string().min(1),
+                    find: z.string().min(1),
+                    replace: z.string(),
+                  })
+                )
+                .min(1)
+            )
               .optional()
               .describe(
                 "Edit part of a long text field (a cell's rendererSource) without resending it; each `find` must occur once."
               ),
           })
+          .refine(
+            (p) => Object.keys(p.fields ?? {}).length > 0 || !!p.textEdits,
+            "a patch needs fields or textEdits"
+          )
           .optional()
           .describe(
             "What will be applied. Change it with the summary: a summary " +

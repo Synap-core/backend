@@ -299,16 +299,19 @@ describe("synap_create_document — type html makes a page", () => {
     expect(await documentCount()).toBe(before);
   });
 
-  it("a type other than markdown or html is refused before anything is written", async () => {
-    const { rows: before } = await h.client!.query<{ n: number }>(
-      `select count(*)::int as n from documents`
-    );
-    await expect(
-      mcpCreate({ title: "A pdf?", content: "x", type: "pdf" })
-    ).rejects.toThrow(/`type` must be "markdown" or "html"/);
-    const { rows: after } = await h.client!.query<{ n: number }>(
-      `select count(*)::int as n from documents`
-    );
-    expect(after[0]!.n).toBe(before[0]!.n);
+  it("a type other than markdown or html is refused at the door, before the handler", async () => {
+    const { parseToolArgs } = await import("../define-tool.js");
+    const refused = parseToolArgs("synap_create_document", {
+      title: "A pdf?",
+      content: "x",
+      type: "pdf",
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.result.isError).toBe(true);
+      expect((refused.result.content[0] as { text: string }).text).toMatch(
+        /type/
+      );
+    }
   });
 });

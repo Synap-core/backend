@@ -107,9 +107,19 @@ describe("synap_list_tracks — lean rows by default", () => {
   it("detail:'full' returns the whole view; an unknown detail is refused", async () => {
     const out = await body({ detail: "full" });
     expect(out.items[0].criteria).toHaveLength(1);
-    expect((await body({ detail: "huge" })).error).toMatch(
-      /Valid values: lean \(default\), full/
-    );
+    // An unknown detail is refused at the door (the input's enum).
+    const { parseToolArgs } = await import("../define-tool.js");
+    const refused = parseToolArgs("synap_list_tracks", {
+      projectId: "11111111-1111-4111-8111-111111111111",
+      detail: "huge",
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.result.isError).toBe(true);
+      expect((refused.result.content[0] as { text: string }).text).toMatch(
+        /detail/
+      );
+    }
   });
 
   it("9753144a: `name` finds the goal before the page is cut (any case)", async () => {

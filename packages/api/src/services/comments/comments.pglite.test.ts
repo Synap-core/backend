@@ -75,6 +75,7 @@ import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { commentsRouter } from "../../routers/comments.js";
 import { buildHandlers } from "../../routers/mcp/handlers/build.js";
 import { readHandlers } from "../../routers/mcp/handlers/read.js";
+import { parseToolArgs } from "../../routers/mcp/define-tool.js";
 import { registerCommentsRoutes } from "../../routers/hub-protocol/rest/comments.js";
 import type {
   HubHono,
@@ -1100,12 +1101,11 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
       apiKeyScopes: ["mcp.read"],
     } as never);
     expect(both.isError).toBe(true);
-    const badState = await readHandlers.synap_get_thread_context!({
-      toolName: "synap_get_thread_context",
-      args: { object: { type: "entity", id: ENTITY }, state: "closed" },
-      userId: VIEWER,
-      apiKeyScopes: ["mcp.read"],
-    } as never);
-    expect(badState.isError).toBe(true);
+    // A state outside the enum is refused at the door, before the handler.
+    const badState = parseToolArgs("synap_get_thread_context", {
+      object: { type: "entity", id: ENTITY },
+      state: "closed",
+    });
+    expect(badState.ok).toBe(false);
   });
 });

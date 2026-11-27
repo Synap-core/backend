@@ -100,7 +100,8 @@ const { registerWhiteboardsRoutes } = await import("./whiteboards.js");
 const { readHandlers } = await import("../../mcp/handlers/read.js");
 const { restDoorAllowed, mcpToolAllowed } =
   await import("../../../access/grant-door-fence.js");
-const { toolDefinition } = await import("../../mcp/define-tool.js");
+const { toolDefinition, parseToolArgs } =
+  await import("../../mcp/define-tool.js");
 
 /** The bridge's answer for an open room: a real encoded Y.Doc. */
 function liveRoom(records: Record<string, unknown>) {
@@ -589,7 +590,9 @@ describe("MCP synap_read_board: the same reader", () => {
   });
 
   it("a missing or short id is refused before any read; a bound key reads only its space", async () => {
-    expect((await call({})).isError).toBe(true);
+    // A missing id is refused at the door (the input parse), before the handler.
+    expect(parseToolArgs("synap_read_board", {}).ok).toBe(false);
+    expect((await call({ viewId: " " })).isError).toBe(true);
     expect((await call({ viewId: "1b1b1b1b" })).isError).toBe(true);
     expect(m.accessCalls).toEqual([]);
     const r = await call({ viewId: VIEW }, { keyWorkspaceId: OTHER_WS });

@@ -24,16 +24,8 @@ import {
   attachParentSessionIds,
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
-import type {
-  SessionStatus,
-  TerminalSessionStatus,
-} from "../../../services/focus-sessions/session-statuses.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
-import {
-  CLOSE_QUESTION_DISPOSITIONS,
-  readCloseQuestionDispositions,
-  type CloseQuestionDisposition,
-} from "../../../services/messaging/room-post-kind.js";
+import type { CloseQuestionDisposition } from "../../../services/messaging/room-post-kind.js";
 import type {
   ExpectedOutput,
   PlaybookRunner,
@@ -43,7 +35,8 @@ import { stageRunnerSchema } from "../../../schemas/playbook-runner.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { sessionWriteEcho } from "./session-write-echo.js";
-import { launchPlaybook, LAUNCH_ONLY_INPUTS } from "./build.js";
+import { launchInputs, launchPlaybook } from "./build.js";
+import { toolError } from "../tool-errors.js";
 import { fitReply } from "./fit-reply.js";
 import {
   waitForConversationChanges,
@@ -54,11 +47,9 @@ import { namedConversationOf } from "../../../services/focus-sessions/conversati
 import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
-  parseSessionReadDetail,
   projectLeanSessionHeader,
   readLeanSession,
   readSessionDeploys,
-  SESSION_READ_DETAIL_ERROR,
 } from "../../../services/focus-sessions/session-lean.js";
 import {
   describeRelayRefusal,
@@ -285,23 +276,17 @@ export const sessionHandlers = {
   synap_wait_for_answer: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, signal } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    if (
-      args.scope !== undefined &&
-      args.scope !== "session" &&
-      args.scope !== "conversation"
-    ) {
-      return ok({ error: 'scope must be "session" or "conversation".' });
-    }
     const isConversation = args.scope === "conversation";
-    const sessionId =
-      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    // The id's uuid format is not in the schema: checked here.
+    const sessionId = args.sessionId?.trim() ?? "";
     // A conversation wait may name its bound session (its runner row); it
     // needs none.
     if (!isUuid(sessionId) && !(isConversation && sessionId === "")) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     let since: Date | null = null;
-    if (typeof args.since === "string" && args.since.trim() !== "") {
+    // A blank since reads as not given; its timestamp format is checked here.
+    if (args.since?.trim()) {
       const parsed = new Date(args.since);
       if (Number.isNaN(parsed.getTime())) {
         return ok({
@@ -310,8 +295,7 @@ export const sessionHandlers = {
       }
       since = parsed;
     }
-    const timeoutSeconds =
-      typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined;
+    const timeoutSeconds = args.timeoutSeconds;
     const kinds = parseSessionChangeKinds(args.events);
     if (!kinds.ok) return ok({ error: kinds.error });
     // `stamp: false` = a PEEK (a watcher): never writes the "Picked up" receipt.
@@ -349,16 +333,6 @@ export const sessionHandlers = {
       return ok(changes);
     }
     if (kinds.kinds) {
-      if (
-        args.knownStage !== undefined &&
-        args.knownStage !== null &&
-        typeof args.knownStage !== "string"
-      ) {
-        return ok({
-          error:
-            "knownStage must be a stage key or null — pass back `state.currentStage`.",
-        });
-      }
       const changes = await waitForSessionChanges({
         sessionId,
         userId,
@@ -366,7 +340,7 @@ export const sessionHandlers = {
         timeoutSeconds,
         kinds: kinds.kinds,
         ...(args.knownStage !== undefined
-          ? { knownStage: args.knownStage as string | null }
+          ? { knownStage: args.knownStage }
           : {}),
         stampReceipt,
         agentUserId,
@@ -417,8 +391,8 @@ export const sessionHandlers = {
           "Only an agent relays an answer — this key acts as the person, who answers in Synap.",
       });
     }
-    const sessionId =
-      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    // The id's uuid format is not in the schema: checked here.
+    const sessionId = args.sessionId.trim();
     if (!isUuid(sessionId)) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
@@ -488,17 +462,11 @@ export const sessionHandlers = {
       confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    // MCP tool schemas are ADVISORY — nothing validates the args server-side,
-    // so a non-uuid handle would reach `eq(focusSessions.id, …)` against a
-    // `uuid` column. Tell the agent what it may pass instead of letting the
-    // shape become a database error. (Hub REST validates the same field with
-    // `z.string().uuid()` — this is the MCP door catching up.)
-    const parentSessionIdArg = args.parentSessionId;
-    if (
-      parentSessionIdArg !== undefined &&
-      parentSessionIdArg !== null &&
-      (typeof parentSessionIdArg !== "string" || !isUuid(parentSessionIdArg))
-    ) {
+    // The input only ADVERTISES the uuid format, so a non-uuid handle would
+    // reach `eq(focusSessions.id, …)` against a `uuid` column (on a launch,
+    // `playbooks.run`'s raw uuid error). Tell the agent what it may pass
+    // instead, on a start and a launch alike.
+    if (args.parentSessionId !== undefined && !isUuid(args.parentSessionId)) {
       return ok({
         error:
           "parentSessionId must be a session UUID (the id of a session you own that you are pushing FROM).",
@@ -507,27 +475,28 @@ export const sessionHandlers = {
     // A LAUNCH runs the playbook through the shared run door; a start opens
     // a session the caller works, and takes none of the launch inputs.
     if (args.launch === true) return launchPlaybook(ctx);
-    const launchOnly = LAUNCH_ONLY_INPUTS.filter((k) => args[k] !== undefined);
+    const { only } = await launchInputs();
+    const launchOnly = Object.entries(args)
+      .filter(([k, v]) => v !== undefined && only.includes(k))
+      .map(([k]) => k);
     if (launchOnly.length > 0) {
-      return ok({
-        error: `${launchOnly.map((k) => `\`${k}\``).join(", ")} only with launch: true (RUN the playbook) — NOTHING WAS CHANGED. Add launch: true, or leave ${launchOnly.length > 1 ? "them" : "it"} out to start a session you work.`,
-      });
+      return toolError(
+        `${launchOnly.map((k) => `\`${k}\``).join(", ")} only with launch: true (RUN the playbook) — NOTHING WAS CHANGED. Add launch: true, or leave ${launchOnly.length > 1 ? "them" : "it"} out to start a session you work.`
+      );
     }
+    // Cross-field: required unless launch (the schema cannot say so).
     if (args.goal === undefined) {
       return ok({
         error:
           "goal is required — NOTHING WAS CHANGED: one outcome sentence for the session (or launch: true to run a playbook, whose goal it carries).",
       });
     }
-    // Same reason: the blockers are session handles — refused here in words,
-    // not as a uuid error (a title's length is the input's).
+    // Same reason: the blockers are session handles (their count and uuid
+    // format are not in the schema) — refused here in words.
     const blockedByArg = args.blockedBySessionIds;
     if (
       blockedByArg !== undefined &&
-      blockedByArg !== null &&
-      (!Array.isArray(blockedByArg) ||
-        blockedByArg.length > 20 ||
-        !blockedByArg.every((id) => typeof id === "string" && isUuid(id)))
+      (blockedByArg.length > 20 || !blockedByArg.every((id) => isUuid(id)))
     ) {
       return ok({
         error:
@@ -552,29 +521,8 @@ export const sessionHandlers = {
     // The step's time (B5), refused in words before anything is read.
     const stepTime = stepTimePatch(stepTimeArgs(args));
     if (!stepTime.ok) return ok({ error: stepDateRefusal(stepTime.invalid) });
-    // `subjectRef` (W2): an identity naming the subject — the same
-    // advisory-schema reason, refused in words.
-    const subjectRefArg = args.subjectRef;
-    if (
-      subjectRefArg !== undefined &&
-      subjectRefArg !== null &&
-      (typeof subjectRefArg !== "object" ||
-        Array.isArray(subjectRefArg) ||
-        Object.entries(subjectRefArg as Record<string, unknown>).some(
-          ([k, v]) =>
-            !["url", "externalId"].includes(k) ||
-            (v !== undefined && v !== null && typeof v !== "string")
-        ))
-    ) {
-      return ok({
-        error:
-          "subjectRef must be an object with `url` and/or `externalId` (strings) — an identity naming the entity this work is about.",
-      });
-    }
-    const subjectRef = (subjectRefArg ?? null) as {
-      url?: string | null;
-      externalId?: string | null;
-    } | null;
+    // `subjectRef` (W2): an identity naming the subject (its shape is the input's).
+    const subjectRef = args.subjectRef ?? null;
     const { createFocusSession } =
       await import("../../../services/focus-sessions/create-session.js");
     const { expectedOutputWireSchema, addOutputWireSchema } =
@@ -611,23 +559,18 @@ export const sessionHandlers = {
         // last rung of the space ladder (`resolveSessionWorkspacePlacement`,
         // W3 D1 a), below the playbook, subject, parent and project home.
         workspaceId: confinedWorkspaceId,
-        projectId: args.projectId as string | undefined,
-        trackId:
-          typeof args.trackId === "string" && args.trackId.trim()
-            ? args.trackId.trim()
-            : undefined,
-        trackStage:
-          typeof args.trackStage === "string" && args.trackStage.trim()
-            ? args.trackStage.trim()
-            : undefined,
-        subjectEntityId: args.subjectEntityId as string | undefined,
+        projectId: args.projectId,
+        // A blank trackId or trackStage reads as not given.
+        trackId: args.trackId?.trim() || undefined,
+        trackStage: args.trackStage?.trim() || undefined,
+        subjectEntityId: args.subjectEntityId,
         subjectRef,
-        title: typeof args.title === "string" ? args.title : null,
+        title: args.title ?? null,
         goal: args.goal,
         agentUserId,
-        correlationId: args.correlationId as string | undefined,
-        channelId: args.channelId as string | undefined,
-        agentIds: args.agentIds as string[] | undefined,
+        correlationId: args.correlationId,
+        channelId: args.channelId,
+        agentIds: args.agentIds,
         // `null` is the explicit opt-out of template matching; absent = match.
         templateId: readTemplateIdArg(args.templateId),
         matchTemplate: true,
@@ -649,10 +592,8 @@ export const sessionHandlers = {
           clientKey: requestClientKey(agentUserId),
           agentUserId,
           userId,
-          agentIds: Array.isArray(args.agentIds)
-            ? (args.agentIds as string[])
-            : null,
-          parentSessionId: args.parentSessionId as string | undefined,
+          agentIds: args.agentIds ?? null,
+          parentSessionId: args.parentSessionId,
           suspendedIntent: args.suspendedIntent,
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
@@ -666,13 +607,10 @@ export const sessionHandlers = {
         // believes a slot is, which is how the per-door shapes drifted in the
         // first place — and a cast narrows nothing while checking nothing.
         expectedOutputs: declared.expectedOutputs,
-        parentSessionId: args.parentSessionId as string | undefined,
+        parentSessionId: args.parentSessionId,
         suspendedIntent: args.suspendedIntent,
         forOutput: args.forOutput ?? null,
-        // Validated above (array of UUIDs), so this narrows nothing unchecked.
-        blockedBySessionIds: Array.isArray(blockedByArg)
-          ? (blockedByArg as string[])
-          : [],
+        blockedBySessionIds: blockedByArg ?? [],
         blockedByEntityIds,
         blockedByTrackIds,
         // P4: a step with blockers (or a date to come) is born planned unless
@@ -726,8 +664,7 @@ export const sessionHandlers = {
       !result.session.subjectEntityId &&
       !args.subjectEntityId &&
       !subjectRef &&
-      typeof args.title === "string" &&
-      args.title.trim()
+      args.title?.trim()
         ? await (
             await import("../../../services/focus-sessions/subject-ref.js")
           ).subjectCandidatesFor(userId, args.title)
@@ -797,47 +734,35 @@ export const sessionHandlers = {
       notDoneRefusal,
     } = await import("../../../services/focus-sessions/close-not-done.js");
     const reason = boundReason(args.reason);
-    // The executor's reader, refusing what it would drop: a word that is not
-    // `withdrawn` / `keep_as_owed` is never read as either.
-    const rawDispositions = args.questionDispositions;
-    let questionDispositions: CloseQuestionDisposition[] | undefined;
-    if (rawDispositions !== undefined) {
-      questionDispositions = readCloseQuestionDispositions(rawDispositions);
-      if (
-        !Array.isArray(rawDispositions) ||
-        questionDispositions.length !== rawDispositions.length
-      ) {
-        return ok({
-          error: `questionDispositions: each is {messageId, disposition: ${CLOSE_QUESTION_DISPOSITIONS.map((d) => `'${d}'`).join(" | ")}, note?}.`,
-        });
-      }
-    }
+    // Each disposition's word is the input's enum: only the keys the
+    // executor reads are passed on.
+    const questionDispositions: CloseQuestionDisposition[] | undefined =
+      args.questionDispositions?.map(({ messageId, disposition, note }) => ({
+        messageId,
+        disposition,
+        ...(note !== undefined ? { note } : {}),
+      }));
     let result: Awaited<ReturnType<typeof completeFocusSession>>;
     try {
       result = await completeFocusSession({
-        sessionId: args.sessionId as string,
+        sessionId: args.sessionId,
         userId,
         agentUserId,
-        summary: args.summary as string | undefined,
-        verificationReport: args.verificationReport as
-          Record<string, unknown> | undefined,
+        summary: args.summary,
+        verificationReport: args.verificationReport,
         // Every lifecycle exit, not just `closed`. The service has accepted this
         // since it was written; this door never forwarded it, so an agent could
         // record "I finished" but never "I abandoned" or "I could not" — and the
         // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
         // which derives from TERMINAL_SESSION_STATUSES.
-        terminalStatus: args.terminalStatus as
-          TerminalSessionStatus | undefined,
+        terminalStatus: args.terminalStatus,
         // The service matches each id against this agent's own open
         // questions and ignores the rest.
         questionDispositions,
         // One `reason` on the wire, routed by the exit it explains: why it was
         // cancelled, or why a `closed` with required work open is done anyway.
         // Never both from one value.
-        ...closeReasonFields(
-          args.terminalStatus as TerminalSessionStatus | undefined,
-          reason
-        ),
+        ...closeReasonFields(args.terminalStatus, reason),
       });
     } catch (err) {
       // Its own questions are still open: nothing closed, and the agent is
@@ -913,7 +838,8 @@ export const sessionHandlers = {
   synap_revert_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    // The id's uuid format is not in the schema: checked here.
+    const sessionId = args.sessionId;
     if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
@@ -927,10 +853,11 @@ export const sessionHandlers = {
     if (!session) {
       return ok({ error: `Focus session ${sessionId} not found` });
     }
+    // Their uuid format is not in the schema: a non-uuid names nothing.
     const asked = [
-      ...(Array.isArray(args.proposalIds) ? args.proposalIds : []),
+      ...(args.proposalIds ?? []),
       ...(args.proposalId !== undefined ? [args.proposalId] : []),
-    ].filter((id): id is string => typeof id === "string" && isUuid(id));
+    ].filter((id) => isUuid(id));
     const { proposals } = await import("@synap/database");
     const { ProposalStatus } = await import("@synap/database/schema");
     const { openLink } = await import("../../../utils/deep-links.js");
@@ -956,7 +883,7 @@ export const sessionHandlers = {
         "Reverting takes back work that was already approved, so it is the user's decision — nothing was changed. Give the user the links below: from the session room or a proposal they can undo everything, only some proposals, or one item (items edited since are skipped with the reason).",
       sessionId,
       goal: session.goal,
-      ...(typeof args.opKey === "string" ? { opKey: args.opKey } : {}),
+      ...(args.opKey !== undefined ? { opKey: args.opKey } : {}),
       revertable: revertable.map((p) => ({
         proposalId: p.id,
         proposalType: p.proposalType,
@@ -975,22 +902,14 @@ export const sessionHandlers = {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     const dryRun = args.dryRun === true;
     requireScope(apiKeyScopes, dryRun ? "mcp.read" : "mcp.write", toolName);
-    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    // The id's uuid format is not in the schema: checked here.
+    const sessionId = args.sessionId;
     if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
-    if (args.mode !== "replace" && args.mode !== "add") {
-      return ok({ error: "mode must be 'replace' or 'add'." });
-    }
-    const ids = Array.isArray(args.sourceDocumentIds)
-      ? args.sourceDocumentIds.filter(
-          (id): id is string => typeof id === "string" && isUuid(id)
-        )
-      : [];
-    const reasoning =
-      typeof args.reasoning === "string"
-        ? args.reasoning.slice(0, 2000)
-        : undefined;
+    // Their uuid format is not in the schema: a non-uuid names nothing.
+    const ids = (args.sourceDocumentIds ?? []).filter((id) => isUuid(id));
+    const reasoning = args.reasoning?.slice(0, 2000);
     const [{ rerunSession }, { createHubProtocolCallerContext }] =
       await Promise.all([
         import("../../../services/focus-sessions/rerun-session.js"),
@@ -1024,7 +943,8 @@ export const sessionHandlers = {
   synap_continue_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    // The id's uuid format is not in the schema: checked here.
+    const sessionId = args.sessionId;
     if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
@@ -1062,10 +982,8 @@ export const sessionHandlers = {
     // No id named ⇒ the SAME resolver a write is attributed through: this
     // client's own session, else the single unclaimed open work session.
     // Several unclaimed and none bound ⇒ no guess, said in words.
-    const explicitId =
-      typeof args.sessionId === "string" && args.sessionId.trim() !== ""
-        ? args.sessionId
-        : undefined;
+    // A blank sessionId reads as not given.
+    const explicitId = args.sessionId?.trim() ? args.sessionId : undefined;
     const ambient = explicitId
       ? undefined
       : await resolveAmbientSession(userId, agentUserId);
@@ -1108,18 +1026,13 @@ export const sessionHandlers = {
     // `detail` (C8): `full` (default, as ever) · `lean` (what a wake needs, no
     // other session's deploys) · `deploys` (the owner's deploys, by commit).
     // MCP schemas are ADVISORY, so an off-enum value is answered in words.
-    const detail = parseSessionReadDetail(args.detail);
-    if (detail === null) {
-      return ok({ error: SESSION_READ_DETAIL_ERROR(args.detail) });
-    }
+    const detail = args.detail ?? "full";
     if (detail === "deploys") {
       return ok(
         await readSessionDeploys(session, {
           userId,
-          commitSha:
-            typeof args.commitSha === "string" && args.commitSha.trim() !== ""
-              ? args.commitSha.trim()
-              : undefined,
+          // A blank commitSha reads as not given.
+          commitSha: args.commitSha?.trim() || undefined,
         })
       );
     }
@@ -1193,7 +1106,8 @@ export const sessionHandlers = {
     // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
     // listing sessions wants the runs and write receipts it just opened.
     const kindArg = args.kind ?? "all";
-    const idArg = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+    // "" reads as not given.
+    const idArg = (v: string | undefined) => v || undefined;
     const subjectEntityId = idArg(args.subjectEntityId);
     // The subject predicate compares as text, so a malformed id would match
     // nothing instead of failing: say so.
@@ -1221,12 +1135,9 @@ export const sessionHandlers = {
         workspaceLens: idArg(args.workspaceId),
         projectLens: idArg(args.projectId),
       },
-      status:
-        statusArg === "open"
-          ? [...OPEN_SESSION_STATUSES]
-          : (statusArg as SessionStatus | "all"),
+      status: statusArg === "open" ? [...OPEN_SESSION_STATUSES] : statusArg,
       lens: "all",
-      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      kind: kindArg,
       // Flow DEFINITION filters — the same two the tRPC and Hub REST doors
       // take. Each names a definition, never one execution. Pair with kind
       // 'run' or 'all': every flow-linked row classifies as a run.
@@ -1277,15 +1188,7 @@ export const sessionHandlers = {
     // read across many sessions (e.g. one playbook's runs: stages, outcomes)
     // costs what it needs, not the 62 KB `full` page. A name no row carries is
     // said in `unknownFields`, never silently dropped.
-    const named = Array.isArray(args.fields)
-      ? [
-          ...new Set(
-            (args.fields as unknown[]).filter(
-              (f): f is string => typeof f === "string" && f !== ""
-            )
-          ),
-        ]
-      : [];
+    const named = [...new Set((args.fields ?? []).filter((f) => f !== ""))];
     const known = new Set(rows.flatMap((r) => Object.keys(r)));
     const extra = rows.length ? named.filter((f) => known.has(f)) : named;
     const unknownFields = rows.length ? named.filter((f) => !known.has(f)) : [];
@@ -1320,8 +1223,8 @@ export const sessionHandlers = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // An off-vocabulary value is answered with the vocabulary, never silently
     // read as "nothing matches" (the enums are refused at the door).
-    const windowHours =
-      args.windowHours === undefined ? undefined : Number(args.windowHours);
+    // Its integer bounds are only advertised: checked here.
+    const windowHours = args.windowHours;
     if (
       windowHours !== undefined &&
       (!Number.isInteger(windowHours) ||
@@ -1335,16 +1238,14 @@ export const sessionHandlers = {
     // Agent-door defaults, as synap_list_sessions: every kind, every lens.
     const kindArg = args.kind ?? "all";
     const lensArg = args.lens ?? "all";
-    const trackIdArg = typeof args.trackId === "string" ? args.trackId : "";
-    const rootArg =
-      typeof args.rootSessionId === "string" ? args.rootSessionId : "";
+    const trackIdArg = args.trackId ?? "";
+    const rootArg = args.rootSessionId ?? "";
     if (trackIdArg && rootArg) {
       return ok({ error: "Pass trackId or rootSessionId, not both." });
     }
-    const playbookIdArg =
-      typeof args.playbookId === "string" ? args.playbookId : "";
-    const subjectEntityIdArg =
-      typeof args.subjectEntityId === "string" ? args.subjectEntityId : "";
+    const playbookIdArg = args.playbookId ?? "";
+    const subjectEntityIdArg = args.subjectEntityId ?? "";
+    // Their uuid format is not in the schema: checked here.
     for (const [name, value] of [
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
@@ -1484,7 +1385,9 @@ export const sessionHandlers = {
      * key or a failed read: refused in words, with the list when there is one.
      */
     let inferredSession: { sessionId: string; title: string } | undefined;
-    if (typeof args.sessionId !== "string" || args.sessionId.trim() === "") {
+    // The schema takes "": a blank sessionId reads as not given.
+    let sessionId = args.sessionId?.trim() ? args.sessionId : "";
+    if (!sessionId) {
       const { resolveClientOpenSession, requestClientKey } =
         await import("../../../services/focus-sessions/resolve-work-session.js");
       const found = await resolveClientOpenSession({
@@ -1493,7 +1396,8 @@ export const sessionHandlers = {
       });
       switch (found.status) {
         case "one":
-          args = { ...args, sessionId: found.sessionId };
+          sessionId = found.sessionId;
+          args = { ...args, sessionId };
           inferredSession = { sessionId: found.sessionId, title: found.title };
           break;
         case "several":
@@ -1565,7 +1469,6 @@ export const sessionHandlers = {
         await import("../../../services/focus-sessions/session-blocked-by.js");
       const { applyUnitBlockerEdits } =
         await import("../../../services/links/unit-blockers.js");
-      const sessionId = args.sessionId as string;
       const sessionLinks =
         blockerEdits.session.add.length > 0
           ? await addCreateTimeBlockers({
@@ -1629,30 +1532,31 @@ export const sessionHandlers = {
         .from(focusSessions)
         .where(
           and(
-            eq(focusSessions.id, String(args.sessionId)),
+            eq(focusSessions.id, sessionId),
             eq(focusSessions.userId, userId)
           )
         )
         .limit(1);
       if (!own) {
         return reply({
-          error: `Focus session ${String(args.sessionId)} not found`,
+          error: `Focus session ${sessionId} not found`,
         });
       }
       // A call that ONLY edits blockers never reaches the update membrane: an
       // empty patch there is a no-op at best and an empty proposal at worst.
       // `projectId` equal to the session's own is the URL lens, not a filing
       // (the service drops it for the same reason).
-      const given = args as Record<string, unknown>;
-      const asked = Object.keys(args).filter(
-        (k) =>
-          given[k] !== undefined &&
-          !NOT_A_FIELD_UPDATE.has(k) &&
-          !(k === "projectId" && given[k] === own.projectId)
-      );
+      const asked = Object.entries(args)
+        .filter(
+          ([k, v]) =>
+            v !== undefined &&
+            !NOT_A_FIELD_UPDATE.has(k) &&
+            !(k === "projectId" && v === own.projectId)
+        )
+        .map(([k]) => k);
       if (asked.length === 0) {
         return reply({
-          sessionId: args.sessionId,
+          sessionId,
           ...(await applyBlockerEdits()),
           message:
             "Only this session's blockers or served goals were changed — read each id's outcome: linked / exists / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
@@ -1685,7 +1589,7 @@ export const sessionHandlers = {
       const { resolveOutcomesUpdate } =
         await import("../../../services/focus-sessions/outcome-declarations.js");
       const resolved = await resolveOutcomesUpdate({
-        sessionId: args.sessionId as string,
+        sessionId,
         userId,
         outcomes: outcomes.list,
         expectedOutputs: slots.expectedOutputs,
@@ -1693,7 +1597,7 @@ export const sessionHandlers = {
       });
       if (!resolved) {
         return reply({
-          error: `Focus session ${String(args.sessionId)} not found`,
+          error: `Focus session ${sessionId} not found`,
         });
       }
       outcomeLists = resolved;
@@ -1708,12 +1612,13 @@ export const sessionHandlers = {
     // A runner for the stage being entered: only with that advance, and
     // refused when misspelled rather than dropped.
     if (args.stageRunner !== undefined && args.stageRunner !== null) {
-      if (typeof args.currentStage !== "string") {
+      if (args.currentStage === undefined) {
         return reply({
           error:
             "stageRunner names who works the stage you enter: send it with currentStage.",
         });
       }
+      // The input takes any runner (taught on demand); its shape is checked here.
       const parsed = stageRunnerSchema.safeParse(args.stageRunner);
       if (!parsed.success) {
         return reply({
@@ -1722,17 +1627,12 @@ export const sessionHandlers = {
       }
     }
     const result = await updateFocusSession({
-      sessionId: args.sessionId as string,
+      sessionId,
       userId,
       agentUserId,
-      // NARROWED like `subjectEntityId` below: `null` CLEARS, a string renames,
-      // anything else leaves the title alone. The length bound is the service's.
-      ...(args.title === null
-        ? { title: null }
-        : typeof args.title === "string"
-          ? { title: args.title }
-          : {}),
-      goal: args.goal as string | undefined,
+      // `null` CLEARS, a string renames. The length bound is the service's.
+      ...(args.title !== undefined ? { title: args.title } : {}),
+      goal: args.goal,
       // Validated by the service with the shared criteria schema (a bad list
       // comes back as `denied` with the reason, never stored half-right).
       ...(outcomeLists
@@ -1741,77 +1641,61 @@ export const sessionHandlers = {
           ? { criteria: args.criteria as unknown as SessionCriterion[] }
           : {}),
       // `forming` plans a started step back (P1); the service refuses it on
-      // anything not started. Any other value is not a move this door makes.
-      status:
-        args.status === "active" ||
-        args.status === "paused" ||
-        args.status === "forming"
-          ? args.status
-          : undefined,
+      // anything not started.
+      status: args.status,
       ...(expectedStatus ? { expectedStatus } : {}),
       // The step's time (B5): the service refuses a malformed date in words.
       ...stepTimeArgs(args),
       // A pause's hold and the move's time (W4), checked by the service.
       ...moveHoldToolArgs(args),
-      progress: args.progress as number | undefined,
-      currentStage: args.currentStage as string | undefined,
+      progress: args.progress,
+      currentStage: args.currentStage,
       // The stage the agent SAW (compare-and-set, W6): a string or null.
-      ...(typeof args.expectedStage === "string" || args.expectedStage === null
-        ? { expectedStage: args.expectedStage as string | null }
+      ...(args.expectedStage !== undefined
+        ? { expectedStage: args.expectedStage }
         : {}),
       ...(args.stageRunner !== undefined
-        ? { stageRunner: args.stageRunner as PlaybookRunner | null }
+        ? // Checked above against `stageRunnerSchema` (the input takes any).
+        { stageRunner: args.stageRunner as PlaybookRunner | null }
         : {}),
       addOutput: slots.addOutput,
-      completeOutput: args.completeOutput as string | undefined,
-      ...(typeof args.retireOutput === "string"
+      completeOutput: args.completeOutput,
+      ...(args.retireOutput !== undefined
         ? { retireOutput: args.retireOutput }
         : {}),
-      addAgentId: args.addAgentId as string | undefined,
-      // NARROWED, not cast: this field has THREE meanings on the wire and a
-      // blanket cast collapses two of them. `undefined` leaves the anchor,
-      // `null` is the CLEAR, a string re-points it. `as string | null |
-      // undefined` would let a number or an object through to the column.
-      // The visibility floor is NOT re-applied here — it lives in
+      addAgentId: args.addAgentId,
+      // THREE meanings on the wire: `undefined` leaves the anchor, `null` is
+      // the CLEAR, a string re-points it. The visibility floor is NOT re-applied here — it lives in
       // `updateFocusSession`, which is the one door every caller of this
       // service passes through; a second copy at this handler is exactly the
       // fork that made the output-ref check drift across doors.
-      ...(args.subjectEntityId === null
-        ? { subjectEntityId: null }
-        : typeof args.subjectEntityId === "string"
-          ? { subjectEntityId: args.subjectEntityId }
-          : {}),
+      ...(args.subjectEntityId !== undefined
+        ? { subjectEntityId: args.subjectEntityId }
+        : {}),
       // Validated above (entity UUIDs); the floors are the service's.
       ...(updateTargets ? { targets: updateTargets } : {}),
-      // NARROWED like the subject: `null` unfiles, a string files, anything
-      // else leaves it. The floor and the always-propose rule for an agent live
-      // in `updateFocusSession`.
-      ...(args.projectId === null
-        ? { projectId: null }
-        : typeof args.projectId === "string"
-          ? { projectId: args.projectId }
-          : {}),
+      // Like the subject: `null` unfiles, a string files. The floor and the
+      // always-propose rule for an agent live in `updateFocusSession`.
+      ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
       // MOVE into another Space (D12). A DISTINCT arg on purpose: the MCP URL
       // lens injects `workspaceId` into every call, so reusing that name would
       // file a move on every update. `null` = personal; the floor (room
       // members must belong) and the always-propose rule live in the service.
-      ...(typeof args.moveToWorkspaceId === "string"
+      ...(args.moveToWorkspaceId !== undefined
         ? { workspaceId: args.moveToWorkspaceId }
-        : args.moveToWorkspaceId === null
-          ? { workspaceId: null }
-          : {}),
-      // ADOPT into a track step, NARROWED like `projectId`: `null` unfiles, a
-      // string files, anything else leaves it. The rules (visible track, pinned
+        : {}),
+      // ADOPT into a track step, like `projectId`: `null` unfiles, a string
+      // files, a blank one leaves it. The rules (visible track, pinned
       // stage, same project) and the always-propose rule for an agent live in
       // `updateFocusSession` → `resolveSessionTrackFiling`.
       ...(args.trackId === null
         ? { trackId: null }
-        : typeof args.trackId === "string" && args.trackId.trim()
+        : args.trackId?.trim()
           ? { trackId: args.trackId.trim() }
           : {}),
       ...(args.trackStage === null
         ? { trackStage: null }
-        : typeof args.trackStage === "string" && args.trackStage.trim()
+        : args.trackStage?.trim()
           ? { trackStage: args.trackStage.trim() }
           : {}),
       // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
@@ -1819,25 +1703,21 @@ export const sessionHandlers = {
       // believes a slot is, which is how the per-door shapes drifted in the
       // first place — and a cast narrows nothing while checking nothing.
       expectedOutputs: outcomeLists?.expectedOutputs ?? slots.expectedOutputs,
-      // NARROWED like `subjectEntityId`, and for the same reason: this field
-      // has THREE meanings on the wire — `undefined` leaves the playbook alone,
-      // `null` RELEASES it, a string FOLLOWS it — and a blanket cast collapses
-      // two of them. The stage key, the visibility floor and the refusals all
-      // live in `followPlaybook`, the one door every caller reaches.
-      ...(args.followPlaybookId === null
-        ? { followPlaybookId: null }
-        : typeof args.followPlaybookId === "string"
-          ? { followPlaybookId: args.followPlaybookId }
-          : {}),
+      // THREE meanings on the wire, like `subjectEntityId`: `undefined` leaves
+      // the playbook alone, `null` RELEASES it, a string FOLLOWS it. The stage
+      // key, the visibility floor and the refusals all live in
+      // `followPlaybook`, the one door every caller reaches.
+      ...(args.followPlaybookId !== undefined
+        ? { followPlaybookId: args.followPlaybookId }
+        : {}),
+      // A null stage key reads as not given (the service takes a key only).
       ...(typeof args.followStageKey === "string"
         ? { followStageKey: args.followStageKey }
         : {}),
       // Answers to the followed playbook's declared params. Free-form on the
       // wire (the playbook owns the shape); `followPlaybook` validates them
       // against the declaration.
-      ...(args.params && typeof args.params === "object"
-        ? { params: args.params as Record<string, unknown> }
-        : {}),
+      ...(args.params ? { params: args.params } : {}),
     });
     // The field patch was refused ⇒ the blocker edits riding with it are not
     // applied either (say so; both are idempotent, so the retry is safe).
@@ -1850,7 +1730,7 @@ export const sessionHandlers = {
     switch (result.status) {
       case "not_found":
         return reply({
-          error: `Focus session ${args.sessionId as string} not found`,
+          error: `Focus session ${sessionId} not found`,
           ...blockersNotApplied,
         });
       case "conflict":

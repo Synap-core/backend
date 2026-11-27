@@ -398,11 +398,12 @@ function jsonRpcTimedOut(id: unknown, timeoutMs: number) {
  * hidden: it is logged, and the call is guarded like any other.
  */
 function mcpCallExemption(
-  toolName: string | undefined
+  toolName: string | undefined,
+  args: Record<string, unknown>
 ): HubGuardExemption | null {
   if (!toolName) return null;
   try {
-    return toolUntimed(toolName);
+    return toolUntimed(toolName, args);
   } catch (err) {
     logger.warn({ err }, "could not read the MCP tool definitions");
     return null;
@@ -749,17 +750,17 @@ mcpHttpApp.post("/", async (c) => {
     method?: string;
     params?: { name?: unknown; arguments?: unknown };
   } | null;
-  const calledName =
+  const called =
     rpc?.method === "tools/call"
-      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments).name
+      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments)
       : undefined;
-  const toolName = typeof calledName === "string" ? calledName : undefined;
+  const toolName = typeof called?.name === "string" ? called.name : undefined;
   const rpcId = rpc?.id ?? null;
   return runGuarded(
     {
       key: UNCOUNTED_KEY_TYPES.has(keyRecord.keyType) ? null : keyRecord.id,
       route: `MCP ${rpc?.method ?? "?"}${toolName ? ` ${toolName}` : ""}`,
-      exemption: mcpCallExemption(toolName),
+      exemption: mcpCallExemption(toolName, called?.args ?? {}),
     },
     () => mcpCall(),
     {

@@ -199,11 +199,12 @@ describe("synap_get_entities — sort", () => {
     expect(getEntities.mock.calls[0]![0]).not.toHaveProperty("orderBy");
   });
 
-  it("an unknown sortBy is an error, never a silently unsorted list", async () => {
-    getEntities.mockClear();
-    const out = await call({ sortBy: "dueDate" });
-    expect(out.error).toMatch(/Unsupported sort/);
-    expect(getEntities).not.toHaveBeenCalled();
+  it("an unknown sortBy is refused at the door, never a silently unsorted list", () => {
+    const out = parseToolArgs("synap_get_entities", { sortBy: "dueDate" });
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : JSON.stringify(out.result.content)).toMatch(
+      /invalid input[\s\S]*sortBy/
+    );
   });
 
   it("'who haven't I spoken to in a month' reaches the list door whole", async () => {

@@ -16,10 +16,6 @@ import {
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
 import { leanProposal } from "./proposal-lean.js";
 import {
-  REVIEW_PACKAGES,
-  isReviewPackage,
-} from "@synap-core/types/proposals/review-package";
-import {
   toProfileDigest,
   compactRelationTypes,
   PROFILES_DIGEST_NOTE,
@@ -46,7 +42,6 @@ import { classifyRoomAuthor } from "../../../services/focus-sessions/room-messag
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import {
   lastInteractionWindowWhere,
-  parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
 import { fullUuidError, toolError } from "../tool-errors.js";
@@ -86,6 +81,7 @@ import {
   PROFILES_PAGE_DEFAULT,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
+import type { ToolArgs } from "../define-tool.js";
 
 /**
  * The longest message a thread read carries whole; longer ones keep their
@@ -116,7 +112,8 @@ export const readHandlers = {
   synap_ask: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    if (typeof args.query !== "string" || args.query.trim() === "") {
+    // The schema takes "" (a blank question): refused here.
+    if (args.query.trim() === "") {
       return ok({ error: "query is required" });
     }
     // `detail` (decision B9a): an unknown one is refused at the door, never
@@ -135,10 +132,10 @@ export const readHandlers = {
     //    Hub and tRPC doors;
     //  - the agent's declared focus is a BOOST (re-orders, never hides); the
     //    explicit `workspaceId` / `projectId` args stay the filter.
-    const projectId = (args.projectId as string | undefined) ?? null;
+    const projectId = args.projectId ?? null;
     const { workspaceId, catalog, focus } = await resolveKnowledgeLens(
       userId,
-      args.workspaceId as string | undefined,
+      args.workspaceId,
       { projectId, agentUserId }
     );
     const compare = args.compare === true;
@@ -152,12 +149,12 @@ export const readHandlers = {
     if (!windowArg.ok) return toolError(windowArg.error);
     // Retrieve across all substrates (same call as /knowledge/search).
     const retrieved = await ask({
-      query: args.query as string,
+      query: args.query,
       userId,
       workspaceId,
       projectId,
       focus,
-      limit: (args.limit as number) || undefined,
+      limit: args.limit || undefined,
       catalog,
       compare: compare || undefined,
       detail,
@@ -188,7 +185,7 @@ export const readHandlers = {
     // instead of contradicting the pendingBlock surfaced right below it.
     const synthesis = await synthesizeAnswer(
       retrieved.answers,
-      args.query as string,
+      args.query,
       retrieved.routedTo,
       workspaceId,
       retrieved.pending?.matches?.length ?? 0,
@@ -300,33 +297,23 @@ export const readHandlers = {
   synap_get_entities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const profileSlug =
-      (args.profileSlug as string | undefined) ||
-      (args.type as string | undefined);
+    const profileSlug = args.profileSlug || args.type;
     const limit = pageLimit(args.limit, 50, ENTITIES_PAGE_MAX);
     const offset = pageOffset(args.offset);
-    // Sort is applied in SQL before paging. An unknown field or direction is an
-    // error the agent can act on, never a silently unsorted list.
-    const sortBy = args.sortBy as string | undefined;
-    const sortDir = args.sortDir as string | undefined;
-    let orderBy: EntityListOrderBy | undefined;
-    if (sortBy !== undefined || sortDir !== undefined) {
-      const parsed = parseEntityListSort(
-        `${sortBy ?? "createdAt"}${sortDir ? `:${sortDir}` : ""}`
-      );
-      if ("error" in parsed) return ok({ error: parsed.error });
-      orderBy = parsed.orderBy;
-    }
+    // Sort is applied in SQL before paging (both enums, refused at the door).
+    const orderBy: EntityListOrderBy | undefined =
+      args.sortBy !== undefined || args.sortDir !== undefined
+        ? { field: args.sortBy ?? "createdAt", dir: args.sortDir ?? "desc" }
+        : undefined;
     // "Who haven't I spoken to in a month": the last-interaction window. An
     // unparseable or inverted bound is an error, never an empty "nobody".
-    const bound = (key: string): Date | undefined | null => {
-      const raw = (args as Record<string, unknown>)[key];
-      if (raw === undefined || raw === null || raw === "") return undefined;
-      const d = new Date(String(raw));
+    const bound = (raw: string | undefined): Date | undefined | null => {
+      if (!raw) return undefined;
+      const d = new Date(raw);
       return Number.isNaN(d.getTime()) ? null : d;
     };
-    const lastInteractionAfter = bound("lastInteractionAfter");
-    const lastInteractionBefore = bound("lastInteractionBefore");
+    const lastInteractionAfter = bound(args.lastInteractionAfter);
+    const lastInteractionBefore = bound(args.lastInteractionBefore);
     if (lastInteractionAfter === null || lastInteractionBefore === null) {
       return ok({
         error:
@@ -355,18 +342,18 @@ export const readHandlers = {
     // Listed under a ROLE, a lean row's status is that role's facet status:
     // the list loads the facet rows for it (`projectLeanEntityList`).
     const listedUnder =
-      (args.detail as string | undefined) === "full"
+      args.detail === "full"
         ? undefined
         : await leanListedUnderRole(profileSlug || undefined);
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
-      ...(args.workspaceId ? { workspaceId: args.workspaceId as string } : {}),
+      ...(args.workspaceId ? { workspaceId: args.workspaceId } : {}),
       // Project-pinned MCP URL (?projectId=) auto-injects args.projectId, so a
       // focused agent's entity reads narrow to its project — same lens as ask.
-      ...(args.projectId ? { projectId: args.projectId as string } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       // Kind + Facets: narrow to entities carrying a live facet of this role.
-      ...(args.facetSlug ? { facetSlug: args.facetSlug as string } : {}),
+      ...(args.facetSlug ? { facetSlug: args.facetSlug } : {}),
       // PAGING (plan 9992207a, c-paging): one row past the page tells whether
       // another page exists — the hub forwarder returns rows, not a total.
       ...(orderBy ? { orderBy } : {}),
@@ -392,9 +379,9 @@ export const readHandlers = {
     // matching get_graph/list_capabilities; ok() forwards it verbatim.)
     const lens = [
       profileSlug ? `profileSlug=${profileSlug}` : null,
-      args.workspaceId ? `workspaceId=${String(args.workspaceId)}` : null,
-      args.projectId ? `projectId=${String(args.projectId)}` : null,
-      args.facetSlug ? `facetSlug=${String(args.facetSlug)}` : null,
+      args.workspaceId ? `workspaceId=${args.workspaceId}` : null,
+      args.projectId ? `projectId=${args.projectId}` : null,
+      args.facetSlug ? `facetSlug=${args.facetSlug}` : null,
       filters ? `filters=${JSON.stringify(filters)}` : null,
     ].filter(Boolean);
     const note =
@@ -403,7 +390,7 @@ export const readHandlers = {
         : undefined;
     // `detail: "full"` = today's rows, unprojected. LEAN (default) — see
     // `read-lean.ts` for the measured reason (70,138 chars for 50 notes).
-    if ((args.detail as string | undefined) === "full") {
+    if (args.detail === "full") {
       return ok({
         entities: result,
         count: result.length,
@@ -413,11 +400,7 @@ export const readHandlers = {
     }
     // `fields`: extra property keys or columns the caller names, returned
     // whole — a lean row never makes a value unreachable.
-    const named = Array.isArray(args.fields)
-      ? (args.fields as unknown[]).filter(
-          (f): f is string => typeof f === "string" && f.length > 0
-        )
-      : [];
+    const named = (args.fields ?? []).filter((f) => f.length > 0);
     // A lean row drops `facets` (it only names it in `omitted`); a caller that
     // asked for them with includeFacets must get them, whole.
     const fields = includeFacets
@@ -444,7 +427,7 @@ export const readHandlers = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const fetched = await caller.documents.getDocument({
       userId,
-      documentId: args.documentId as string,
+      documentId: args.documentId,
       ...(args.format === "readable" ? { format: "readable" as const } : {}),
     });
     // Body slicing, ONLY when the caller asked for a slice: a default cut would
@@ -498,19 +481,19 @@ export const readHandlers = {
     // the same listing as tRPC `comments.list` / Hub `GET /comments`, so an
     // agent reads a pin's place (`anchor.locator`) and whether it is resolved.
     if (args.object !== undefined) return objectComments(ctx);
-    if (typeof args.threadId !== "string") {
+    // threadId or object: one of the two (both optional in the schema).
+    if (args.threadId === undefined) {
       return toolError(
         `Tool '${toolName}' needs threadId (a thread) or object (an object's comment threads).`
       );
     }
     // `limit` used to reach nothing — every call returned 50 messages.
     // Clamped, not refused: an over-large ask still gets the cap.
+    // A cursor that is not a message id reads from the newest (uuid not enforced).
     const cursor =
-      typeof args.cursor === "string" && isUuid(args.cursor)
-        ? args.cursor
-        : undefined;
+      args.cursor !== undefined && isUuid(args.cursor) ? args.cursor : undefined;
     const result = await caller.context.getThreadContext({
-      threadId: args.threadId as string,
+      threadId: args.threadId,
       limit: pageLimit(args.limit, 50, 100),
       ...(cursor ? { cursor } : {}),
     });
@@ -581,8 +564,8 @@ export const readHandlers = {
   synap_get_proposal: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const raw =
-      typeof args.proposalId === "string" ? args.proposalId.trim() : "";
+    // The schema takes "": a blank id is refused here.
+    const raw = args.proposalId.trim();
     if (!raw) return ok({ error: "proposalId is required." });
     // `lean` (default) is one copy of the payload; `full` is the whole row.
     const detail = args.detail ?? "lean";
@@ -614,20 +597,18 @@ export const readHandlers = {
   synap_get_flow: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const profileSlug =
-      typeof args.profileSlug === "string" ? args.profileSlug.trim() : "";
+    // The schema takes "": a blank slug is refused here.
+    const profileSlug = args.profileSlug.trim();
     if (!profileSlug)
       return ok({
         error: "profileSlug is required: a kind or role (synap_list_profiles).",
       });
-    const projectId =
-      typeof args.projectId === "string" && args.projectId
-        ? args.projectId
-        : "";
+    // uuid is only advertised by the schema: checked here.
+    const projectId = args.projectId ?? "";
     if (projectId && !isUuid(projectId))
       return ok({ error: `projectId is not a valid id: ${projectId}` });
     const firstN =
-      typeof args.firstN === "number" && Number.isFinite(args.firstN)
+      args.firstN !== undefined
         ? Math.min(50, Math.max(0, Math.floor(args.firstN)))
         : undefined;
     const callerCtx = await createHubProtocolCallerContext(
@@ -667,10 +648,8 @@ export const readHandlers = {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const view = args.view ?? "home";
-    const projectId =
-      typeof args.projectId === "string" && args.projectId
-        ? args.projectId
-        : "";
+    // uuid is only advertised by the schema: checked here.
+    const projectId = args.projectId ?? "";
     if (projectId && !isUuid(projectId))
       return ok({ error: `projectId is not a valid id: ${projectId}` });
     if (view === "home" && ctx.keyWorkspaceId)
@@ -692,7 +671,7 @@ export const readHandlers = {
     if (view === "home")
       return ok(await caller.home(projectId ? { projectId } : {}));
     const limit =
-      typeof args.limit === "number" && Number.isFinite(args.limit)
+      args.limit !== undefined
         ? Math.min(100, Math.max(1, Math.floor(args.limit)))
         : 30;
     return ok(
@@ -714,19 +693,17 @@ export const readHandlers = {
   synap_read_board: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const viewId = typeof args.viewId === "string" ? args.viewId.trim() : "";
+    // The schema takes "": a blank id is refused here.
+    const viewId = args.viewId.trim();
     if (!viewId)
       return toolError(
         `Tool '${toolName}': viewId is required: the whiteboard view's id (synap_list_views).`
       );
     const badId = fullUuidError(toolName, "viewId", viewId);
     if (badId) return badId;
-    const num = (v: unknown) =>
-      typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : undefined;
-    const frameId =
-      typeof args.frameId === "string" && args.frameId.trim()
-        ? args.frameId.trim()
-        : undefined;
+    const num = (v: number | undefined) =>
+      v === undefined ? undefined : Math.floor(v);
+    const frameId = args.frameId?.trim() || undefined;
     const { readBoardScene, BoardSceneReadError } =
       await import("../../../services/whiteboards/read-board-scene.js");
     const offset = Math.max(0, num(args.offset) ?? 0);
@@ -801,18 +778,13 @@ export const readHandlers = {
   synap_find_surfaces: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const { ANCHOR_KINDS } = await import("@synap-core/types/surfaces");
-    const kind = typeof args.kind === "string" ? args.kind : "";
-    const id = typeof args.id === "string" ? args.id.trim() : "";
-    if (!(ANCHOR_KINDS as readonly string[]).includes(kind) || !id) {
-      return toolError(
-        `Tool '${toolName}': pass the anchor {kind, id}, kind one of ${ANCHOR_KINDS.join(", ")}.`
-      );
+    const { kind } = args;
+    // The schema takes "": a blank id is refused here.
+    const id = args.id.trim();
+    if (!id) {
+      return toolError(`Tool '${toolName}': pass the anchor {kind, id}.`);
     }
-    const requested =
-      typeof args.workspaceId === "string" && args.workspaceId
-        ? args.workspaceId
-        : undefined;
+    const requested = args.workspaceId || undefined;
     if (requested) {
       const badId = fullUuidError(toolName, "workspaceId", requested);
       if (badId) return badId;
@@ -823,7 +795,7 @@ export const readHandlers = {
       const found = await surfacesForObject(
         { userId, access: AccessContext.agent({ userId, agentUserId }) },
         {
-          kind: kind as (typeof ANCHOR_KINDS)[number],
+          kind,
           id,
           // A key confined to one space reads that space only.
           workspaceId: ctx.confinedWorkspaceId ?? requested ?? null,
@@ -854,19 +826,14 @@ export const readHandlers = {
   synap_inspect_surface: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const { INSPECT_SURFACE_KINDS, inspectSurface } =
+    const { inspectSurface } =
       await import("../../../services/surfaces/inspect.js");
-    const kind = typeof args.kind === "string" ? args.kind : "";
-    const str = (v: unknown) =>
-      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    const { kind } = args;
+    // The schema takes "": a blank string reads as not given.
+    const str = (v: string | undefined) => v?.trim() || undefined;
     const id = str(args.id);
     const typeKey = str(args.typeKey);
     const requested = str(args.workspaceId);
-    if (!(INSPECT_SURFACE_KINDS as readonly string[]).includes(kind)) {
-      return toolError(
-        `Tool '${toolName}': pass kind, one of ${INSPECT_SURFACE_KINDS.join(", ")}.`
-      );
-    }
     if (!id && !(kind === "cell" && typeKey)) {
       return toolError(
         `Tool '${toolName}': pass the surface's id (or, for a cell type, its typeKey).`
@@ -886,13 +853,13 @@ export const readHandlers = {
         { userId, access: AccessContext.agent({ userId, agentUserId }) },
         {
           surface: {
-            kind: kind as (typeof INSPECT_SURFACE_KINDS)[number],
+            kind,
             id,
             typeKey,
           },
           // A key confined to one space reads that space only.
           workspaceId: ctx.confinedWorkspaceId ?? requested ?? null,
-          days: typeof args.days === "number" ? args.days : undefined,
+          days: args.days,
         }
       );
       const fence =
@@ -941,10 +908,10 @@ export const readHandlers = {
   synap_needs_you: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const str = (v: unknown) =>
-      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    // The schema takes "": a blank string reads as not given.
+    const str = (v: string | undefined) => v?.trim() || undefined;
     const limit =
-      typeof args.limit === "number" && Number.isFinite(args.limit)
+      args.limit !== undefined
         ? Math.min(200, Math.max(1, Math.floor(args.limit)))
         : undefined;
     const callerCtx = await createHubProtocolCallerContext(
@@ -974,29 +941,20 @@ export const readHandlers = {
   synap_list_proposals: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    // A package nobody knows is refused in words, never read as "no filter".
-    if (args.package !== undefined && !isReviewPackage(args.package)) {
-      return ok({
-        error: `Unknown package '${String(args.package)}'. Valid values: ${REVIEW_PACKAGES.join(", ")}.`,
-      });
-    }
     const { listCreatedProposals } =
       await import("../../../services/proposals/proposals-service.js");
     const result = await listCreatedProposals({
       // `createdBy` is the ONLY user floor this service applies — a
       // model-supplied `args.userId` would list a foreign user's proposals.
       createdBy: userId,
-      workspaceId: args.workspaceId as string | undefined,
-      // Gate 2: session proposal pack filter
-      sessionId:
-        typeof args.sessionId === "string" && args.sessionId.trim() !== ""
-          ? args.sessionId
-          : undefined,
-      status: args.status as string | undefined,
+      workspaceId: args.workspaceId,
+      // Gate 2: session proposal pack filter ("" reads as no filter).
+      sessionId: args.sessionId?.trim() ? args.sessionId : undefined,
+      status: args.status,
       // One row past the page tells whether another page exists.
       limit: pageLimit(args.limit, 20, LIST_PAGE_MAX) + 1,
       offset: pageOffset(args.offset),
-      package: isReviewPackage(args.package) ? args.package : undefined,
+      package: args.package,
     });
     const propLimit = pageLimit(args.limit, 20, LIST_PAGE_MAX);
     const propOffset = pageOffset(args.offset);
@@ -1047,7 +1005,7 @@ export const readHandlers = {
     // the two drifted in the first place.
     const { toProposalBasic, withProposalClass } =
       await import("../../hub-protocol/rest/_codecs/proposal.js");
-    if ((args.detail as string) === "full") {
+    if (args.detail === "full") {
       // `detail:"full"` answers with the whole `data` JSONB, as Hub
       // `view=full`: the class, the fate, and the AGENT-ONLY failure fields
       // stripped (`data.failure.detail` is the redacted raw executor error and
@@ -1093,34 +1051,19 @@ export const readHandlers = {
       await import("../../../services/diagnose/index.js");
     const result = await diagnoseRouter({
       userId,
-      agentId: args.agentId as string | undefined,
-      id: args.id as string | undefined,
-      type: args.type as
-        | "proposal"
-        | "session"
-        | "capability"
-        | "agent"
-        | "entity"
-        | "run"
-        | "workspace"
-        | "usage"
-        | undefined,
-      workspaceId: (args.workspaceId as string | undefined) ?? undefined,
-      since: args.since as string | undefined,
-      groupBy: args.groupBy as string[] | undefined,
-      apiKeyId: args.apiKeyId as string | undefined,
-      client: args.client as string | undefined,
-      stuckThresholdHours: args.stuckThresholdHours as number | undefined,
-      flowType: args.flowType as
-        | "automation"
-        | "playbook"
-        | "capture"
-        | "capability"
-        | "session"
-        | undefined,
-      flowId: args.flowId as string | undefined,
-      runId: args.runId as string | undefined,
-      limit: (args.limit as number) || undefined,
+      agentId: args.agentId,
+      id: args.id,
+      type: args.type,
+      workspaceId: args.workspaceId,
+      since: args.since,
+      groupBy: args.groupBy,
+      apiKeyId: args.apiKeyId,
+      client: args.client,
+      stuckThresholdHours: args.stuckThresholdHours,
+      flowType: args.flowType,
+      flowId: args.flowId,
+      runId: args.runId,
+      limit: args.limit || undefined,
     });
     return ok(result);
   },
@@ -1130,7 +1073,8 @@ export const readHandlers = {
     // Named HERE, by the tool's own input name: past this point it is the
     // router's `id`, and a call without it failed on a field called `id`,
     // which read as "you passed nothing" (ticket 2d61ff7c).
-    if (typeof args.entityId !== "string" || args.entityId.trim() === "") {
+    // The schema takes "": a blank id is refused here, in words.
+    if (args.entityId.trim() === "") {
       return toolError(
         `${toolName} needs \`entityId\`: the entity's id (synap_ask or synap_get_entities find one).`
       );
@@ -1139,14 +1083,14 @@ export const readHandlers = {
     const entityCallerCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,
-      (args.workspaceId as string) || undefined,
+      args.workspaceId || undefined,
       undefined,
       undefined,
       agentUserId
     );
     const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
     const entityResult = await entityCaller.get({
-      id: args.entityId as string,
+      id: args.entityId,
       includeProfile: true,
     });
     // Graph by default: embed a capped typed-neighbour summary so the agent
@@ -1158,7 +1102,7 @@ export const readHandlers = {
         userId,
         apiKeyScopes,
         "entity",
-        args.entityId as string,
+        args.entityId,
         20
       );
     } catch {
@@ -1166,7 +1110,7 @@ export const readHandlers = {
     }
     // `detail: "full"` returns TODAY'S payload, byte-identical — this is the
     // pre-existing expression, untouched.
-    if ((args.detail as string | undefined) === "full") {
+    if (args.detail === "full") {
       return ok(
         graph
           ? { ...(entityResult as Record<string, unknown>), graph }
@@ -1245,14 +1189,12 @@ export const readHandlers = {
   synap_list_profiles: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const wsId = args.workspaceId as string | undefined;
-    const wantFull = (args.detail as string | undefined) === "full";
+    const wsId = args.workspaceId;
+    const wantFull = args.detail === "full";
     // Filter to these kind slugs (the Hub `profileSlugs` filter).
-    const slugList = Array.isArray(args.slugs)
-      ? args.slugs
-          .filter((s): s is string => typeof s === "string" && s.length > 0)
-          .slice(0, 50)
-      : [];
+    const slugList = (args.slugs ?? [])
+      .filter((s) => s.length > 0)
+      .slice(0, 50);
     const slugFilter = slugList.length ? { profileSlugs: slugList } : {};
 
     /**
@@ -1433,7 +1375,7 @@ export const readHandlers = {
   synap_get_relations: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const entityId = args.entityId as string;
+    const { entityId } = args;
     // Newest `limit` edges (the read's own cap is 100): said in the schema, so
     // a hub node is bounded here and not only by the global reply cap.
     const relLimit = pageLimit(args.limit, 50, 100);
@@ -1441,8 +1383,7 @@ export const readHandlers = {
     // entity's OWN workspace (a "no relations" answer then reflects its real
     // home, not whichever member workspace sorted first).
     const relWsId =
-      (args.workspaceId as string | undefined) ??
-      (await entityHomeWorkspaceId(entityId));
+      args.workspaceId ?? (await entityHomeWorkspaceId(entityId));
     // No lens at all: a POD-WIDE entity (NULL workspace), or one that is
     // deleted or missing. Its edges live in whatever workspaces they were
     // drawn in, so ONE picked member workspace (the old `ids[0]` fallback)
@@ -1471,25 +1412,22 @@ export const readHandlers = {
   synap_get_graph: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const gKind = (args.type as string | undefined) ?? "entity";
-    let gId = args.id as string | undefined;
+    const gKind = args.type ?? "entity";
+    let gId = args.id;
     // Name-addressing: fetch the graph by NAME instead of id. Resolve the name
     // to an object first; ambiguous names return the candidates to pick from.
     if (!gId && args.name) {
       const matches = await resolveByName(
         userId,
         gKind,
-        args.name as string,
-        args.subtype as string | undefined
+        args.name,
+        args.subtype
       );
       if (matches.length === 0) {
         // The name matched no entity of this kind — but it may be a
         // profile/role type name. Probe profiles and route the caller to the
         // right tool instead of dead-ending.
-        const profileHits = await resolveProfileByName(
-          userId,
-          args.name as string
-        );
+        const profileHits = await resolveProfileByName(userId, args.name);
         if (profileHits.length > 0) {
           return ok({
             error: `'${args.name}' is a profile/role, not a ${gKind}. get_graph resolves entities, not types.`,
@@ -1570,15 +1508,16 @@ export const readHandlers = {
     // point (a caller asking for a context channel wants one to exist), and a
     // near-identical sibling tool is exactly the overlap that degrades tool
     // selection.
-    const mode = args.mode as string;
+    const { mode } = args;
     if (mode === "person") {
       // A READ: the person's channels and each one's pending proposed
       // messages, through the caller's floor and key grant
       // (services/channels/person-channels.ts) — the same read as Hub
       // GET /entities/:id/channels + /channels/:id/proposed-messages.
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      // Required for this mode only (optional in the schema); uuid not enforced there.
       const entityId = args.entityId;
-      if (typeof entityId !== "string" || !isUuid(entityId)) {
+      if (!entityId || !isUuid(entityId)) {
         return ok({
           error:
             "entityId (the record's full UUID) is required for mode 'person'",
@@ -1602,7 +1541,8 @@ export const readHandlers = {
       return ok({ entityId, channels });
     }
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const wsId = args.workspaceId as string;
+    // Required for these modes only (optional in the schema).
+    const wsId = args.workspaceId;
     if (!wsId) {
       return ok({ error: `workspaceId is required for mode '${mode}'` });
     }
@@ -1613,6 +1553,7 @@ export const readHandlers = {
       });
       return ok(result);
     }
+    // Required for mode 'by-context' only (optional in the schema).
     if (!args.contextObjectType || !args.contextObjectId) {
       return ok({
         error:
@@ -1623,8 +1564,8 @@ export const readHandlers = {
       userId,
       workspaceId: wsId,
       channelType: "thread" as const,
-      contextObjectType: args.contextObjectType as "entity" | "document",
-      contextObjectId: args.contextObjectId as string,
+      contextObjectType: args.contextObjectType,
+      contextObjectId: args.contextObjectId,
     });
     return ok(result);
   },
@@ -1637,16 +1578,18 @@ export const readHandlers = {
  * caller, or any agent, wrote are fenced (`untrusted`) and clipped like a
  * room's messages; the anchor (a pin's `locator`) is the pod's own data.
  */
-async function objectComments(ctx: McpToolContext): Promise<CallToolResult> {
+async function objectComments(
+  ctx: McpToolContext<ToolArgs<"synap_get_thread_context">>
+): Promise<CallToolResult> {
   const { toolName, args, userId } = ctx;
   if (args.threadId !== undefined) {
     return toolError(
       `Tool '${toolName}': pass either threadId (a thread) or object (an object's comment threads), not both.`
     );
   }
-  const object = args.object as { type?: unknown; id?: unknown } | null;
-  const type = object?.type;
-  const id = object?.id;
+  // `object` is a free record in the schema: its shape is checked here.
+  const type = args.object?.type;
+  const id = args.object?.id;
   if (
     (type !== "entity" && type !== "document") ||
     typeof id !== "string" ||
@@ -1657,11 +1600,6 @@ async function objectComments(ctx: McpToolContext): Promise<CallToolResult> {
     );
   }
   const state = args.state ?? "open";
-  if (state !== "open" && state !== "resolved") {
-    return toolError(
-      `Tool '${toolName}': state is 'open' (default) or 'resolved'.`
-    );
-  }
   const { listObjectComments } =
     await import("../../../services/comments/comments.js");
   const listing = await listObjectComments({

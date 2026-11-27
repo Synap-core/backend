@@ -89,6 +89,9 @@ const call = async (name: string, args: Record<string, unknown>) =>
     )
   ).result;
 
+const text = (r: CallToolResult) =>
+  (r.content[0] as { type: "text"; text: string }).text;
+
 const body = (r: CallToolResult) =>
   JSON.parse((r.content[0] as { type: "text"; text: string }).text) as Record<
     string,
@@ -159,7 +162,8 @@ describe("synap_run_playbook answers as synap_start_session launch: true", () =>
       templateId: PB,
       runner: { agentId: AGENT },
     });
-    expect(body(refused).error).toMatch(/`runner` only with launch: true/);
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toMatch(/`runner` only with launch: true/);
     expect(h.runs).toHaveLength(1);
     expect(h.starts).toEqual([]);
   });
@@ -171,7 +175,23 @@ describe("synap_run_playbook answers as synap_start_session launch: true", () =>
       goal: "My own goal",
       criteria: [{ key: "k", statement: "s" }],
     });
-    expect(body(result).error).toMatch(/does not take `goal`, `criteria`/);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/does not take `goal`, `criteria`/);
+    expect(h.runs).toEqual([]);
+  });
+
+  it("6. a launch's parentSessionId that is not a uuid is refused in words, nothing run", async () => {
+    for (const name of ["synap_run_playbook", "synap_start_session"]) {
+      const result = await call(name, {
+        ...(name === "synap_start_session"
+          ? { launch: true, templateId: PB }
+          : { playbookId: PB }),
+        parentSessionId: "my-parent",
+      });
+      expect(body(result).error).toMatch(
+        /^parentSessionId must be a session UUID/
+      );
+    }
     expect(h.runs).toEqual([]);
   });
 });

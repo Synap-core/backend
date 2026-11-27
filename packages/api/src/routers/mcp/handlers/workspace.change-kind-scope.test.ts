@@ -1,7 +1,8 @@
 /**
  * `synap_change_kind_scope` (D13) — the REAL handler forwards to
- * `changeKindScope` with the key's acting identity, and narrows the model's
- * args (an off-enum scope never reaches the service as a value). The service
+ * `changeKindScope` with the key's acting identity; the door's input parse
+ * narrows the model's args (an off-enum scope is refused before the handler,
+ * and never reaches the service). The service
  * (its gate, its owner/admin approval rule) is the only thing replaced; it has
  * its own suite.
  */
@@ -39,10 +40,13 @@ const WS_B = "99999999-9999-4999-8999-999999999999";
 const run = (
   args: Record<string, unknown>,
   scopes = ["mcp.read", "mcp.write"]
-) =>
-  workspaceHandlers.synap_change_kind_scope!({
+) => {
+  // The handler gets the door's parse of its input, as on the live call path.
+  const parsed = parseToolArgs("synap_change_kind_scope", args);
+  if (!parsed.ok) throw new Error("refused at the door");
+  return workspaceHandlers.synap_change_kind_scope!({
     toolName: "synap_change_kind_scope",
-    args,
+    args: parsed.args,
     userId: "u1",
     agentUserId: "agent-1",
     sessionId: "s-1",
@@ -53,6 +57,7 @@ const run = (
     lensCaller: {} as McpToolContext["lensCaller"],
     workspaceAccessible: false,
   } as McpToolContext);
+};
 
 const parse = (r: unknown) =>
   JSON.parse((r as { content: Array<{ text: string }> }).content[0]!.text);
@@ -67,7 +72,7 @@ describe("synap_change_kind_scope", () => {
       await run({
         profileId: PROFILE,
         scope: "shared",
-        allowedWorkspaceIds: [WS_B, 42],
+        allowedWorkspaceIds: [WS_B],
         entityScope: "pod",
         reasoning: "Brand needs this kind",
       })
@@ -92,9 +97,15 @@ describe("synap_change_kind_scope", () => {
     expect(out).toMatchObject({ status: "proposed", proposalId: "p-1" });
   });
 
-  it("an off-enum scope is dropped, not forwarded", async () => {
-    await run({ profileId: PROFILE, scope: "everywhere", entityScope: "pod" });
-    expect(h.calls[0]!.input.scope).toBeUndefined();
+  it("an off-enum scope or a non-string workspace id is refused at the door, never forwarded", () => {
+    for (const args of [
+      { profileId: PROFILE, scope: "everywhere", entityScope: "pod" },
+      { profileId: PROFILE, allowedWorkspaceIds: [WS_B, 42] },
+    ]) {
+      const r = parseToolArgs("synap_change_kind_scope", args);
+      expect(r.ok, JSON.stringify(args)).toBe(false);
+    }
+    expect(h.calls).toHaveLength(0);
   });
 
   it("no profileId → an error answer at the door, and the service is never called", () => {
