@@ -33,6 +33,10 @@ next-env.d.ts
 
 # Claude Code (worktrees, local settings, agent scratch state)
 .claude/
+# Per-machine MCP client config and Playwright MCP page snapshots: personal and
+# generated, never source.
+.mcp.json
+.playwright-mcp/
 
 # OS
 .DS_Store
