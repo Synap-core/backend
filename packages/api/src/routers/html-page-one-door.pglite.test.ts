@@ -386,7 +386,8 @@ describe("an agent's html cell is a document proposal; its approval places the c
       name: "Proposed page",
       reads: READS,
     });
-    expect(res.status).toBe(200);
+    // The governed reply: 202 Accepted (`jsonGoverned`), as before.
+    expect(res.status).toBe(202);
     expect(res.body.status).toBe("proposed");
     expect(typeof res.body.proposalId).toBe("string");
     expect(h.gates).toHaveLength(1);

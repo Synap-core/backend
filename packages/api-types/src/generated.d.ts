@@ -37525,6 +37525,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				html: string;
 				name?: string | undefined;
+				reads?: unknown;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
