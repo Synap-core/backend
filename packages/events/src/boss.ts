@@ -60,8 +60,11 @@ function createBoss(): PgBoss {
     monitorStateIntervalSeconds: 30,
     // Archive completed jobs after 7 days
     archiveCompletedAfterSeconds: 7 * 24 * 60 * 60,
-    // Delete archived jobs after 30 days
-    deleteAfterSeconds: 30 * 24 * 60 * 60,
+    // Delete archived jobs after 7 days (decision ce5fb987, 2026-11-27): at
+    // 30 days `pgboss.archive` held 1.46M rows, 1.4 GB, 31% of the pod's
+    // database, copied by every nightly backup. Nothing reads the archive.
+    // A finished job stays 7 days in `pgboss.job`, then 7 in the archive.
+    deleteAfterSeconds: 7 * 24 * 60 * 60,
     // Retry failed jobs up to 3 times
     retryLimit: 3,
     retryDelay: 5,
