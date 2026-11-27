@@ -46187,6 +46187,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
 					ruleId: string | null;
 				}[];
+				settingLimits: {
+					readonly "governance.own_work_fresh_hours": {
+						readonly default: 24;
+						readonly max: 168;
+						readonly min: 1;
+					};
+					readonly "governance.project_evidence_min": {
+						readonly default: 5;
+						readonly max: 50;
+						readonly min: 0;
+					};
+				};
 				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
 			};
 		}>;

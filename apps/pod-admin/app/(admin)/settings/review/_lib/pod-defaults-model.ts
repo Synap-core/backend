@@ -87,8 +87,9 @@ export function floorSave(
   pattern: string
 ): DialSave {
   const mine = save.variables?.pattern === pattern;
+  const saving = save.isPending && mine;
   return {
-    isPending: save.isPending && mine,
+    isPending: saving,
     variables: mine ? save.variables : undefined,
   };
 }
