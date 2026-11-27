@@ -291,3 +291,17 @@ export function useSetActionMode(
     defaults
   );
 }
+
+/**
+ * A host the pod's AIs may read open data from (`http.get_json`'s list):
+ * runs `http.allow_host` as the person (Security › Network).
+ */
+export function useAllowHost(
+  defaults?: ActionHandlers<typeof trpc.govConfig.allowHost.useMutation>
+) {
+  return useSensitiveAction(
+    "govConfig.allowHost",
+    trpc.govConfig.allowHost.useMutation(),
+    defaults
+  );
+}

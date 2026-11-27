@@ -10836,7 +10836,10 @@ export type RecordSessionSpawnResult = {
 export interface ProposalPartReach {
 	/**
 	 * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
-	 * webhook step's URL host, a provider verb's fixed base URL.
+	 * webhook step's URL host, a provider verb's fixed base URL, an
+	 * `http.get_json` step's URL host. {@link ANY_PUBLIC_HOST} (`*`, the host
+	 * lists' "any host" spelling, as in a computer manifest's `network`) when it
+	 * may read any public page (`web.read`).
 	 */
 	hosts: string[];
 	/**
@@ -35827,6 +35830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						id: string;
 						match?: TermMatch;
 						name: string;
+						reach?: ProposalPartReach;
 						workspaceId?: string | null;
 					}>;
 				};
@@ -45730,6 +45734,71 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		allowHost: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				host: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				reason?: string | undefined;
+			};
+			meta: object;
+			output: {
+				alreadyAllowed: boolean;
+				host: string;
+				status: "allowed";
+			};
+		}>;
+		allowedHosts: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				canManage: boolean;
+				hosts: {
+					addedAt: Date;
+					addedBy: {
+						id: string;
+						name: string;
+					} | null;
+					host: string;
+					id: string;
+					proposalId: string | null;
+					reason: string | null;
+					usedBy: {
+						id: string;
+						name: string;
+					}[];
+				}[];
+				unreadAutomations: number;
+			};
+		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				store: "config_settings" | "governance_ceilings" | "governance_rules";
@@ -55115,7 +55184,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.allowHost" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {

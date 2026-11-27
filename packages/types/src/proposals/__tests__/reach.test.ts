@@ -4,7 +4,12 @@
  * said as "reaches nothing".
  */
 import { describe, expect, it } from "vitest";
-import { canReachLine, existingConnections, partReachWords } from "../reach.js";
+import {
+  ANY_PUBLIC_HOST,
+  canReachLine,
+  existingConnections,
+  partReachWords,
+} from "../reach.js";
 
 describe("partReachWords", () => {
   it("names the hosts and the connections it uses", () => {
@@ -30,6 +35,25 @@ describe("partReachWords", () => {
     expect(
       partReachWords({ hosts: ["a.example"], connections: [], unreadSteps: 1 })
     ).toBe("a.example; not known for 1 step");
+  });
+
+  it("a part that reads any public page says so, never a raw marker", () => {
+    expect(
+      partReachWords({
+        hosts: [ANY_PUBLIC_HOST],
+        connections: [],
+        unreadSteps: 0,
+      })
+    ).toBe("Any public page");
+    expect(
+      partReachWords({
+        hosts: [ANY_PUBLIC_HOST, "api.example"],
+        connections: ["Apify"],
+        unreadSteps: 1,
+      })
+    ).toBe(
+      "Any public page, api.example, your existing Apify connection; not known for 1 step"
+    );
   });
 });
 
