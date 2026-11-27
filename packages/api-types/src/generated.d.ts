@@ -22130,6 +22130,19 @@ export interface PacketChildItem {
 	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
 	 */
 	skipped?: true;
+	/**
+	 * The key of the parent's output this child was spawned to deliver (W7:
+	 * `forOutput` on the start, recorded on the `spawned_from` edge as
+	 * `metadata.forOutput`; `lane-rollup.ts`). On `children` items only;
+	 * absent when it was spawned for no output.
+	 */
+	forOutput?: string;
+	/**
+	 * That output's label on the parent (`slotLabelForKey`), so a reader draws
+	 * "fills <label>" with no second read. Absent with `forOutput`, and when
+	 * the parent no longer declares that key (a withdrawn or renamed slot).
+	 */
+	forOutputLabel?: string;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
