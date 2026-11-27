@@ -49,6 +49,7 @@ import {
   links,
   focusSessions,
   automationRuns,
+  uuidFromTextSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -89,8 +90,14 @@ export async function readSessionInteractions(
   // TRIGGERED — run B ← its triggering event ← the session that wrote it.
   // Both run stamps are read: the automation executor's `automationRunId`
   // (→ `automation_runs.trigger_event_id`) and the playbook-run step's nested
-  // `automationChainContext.triggerEventId`. Compared as TEXT so a malformed
-  // metadata value is a non-match, never a uuid cast error.
+  // `automationChainContext.triggerEventId`. Both keys are probed as uuids
+  // (`uuidFromTextSql`), never `pk::text = <text>`: casting the key hides the
+  // primary-key index, so every probe scanned `automation_runs` and every
+  // chunk of `events`. A malformed metadata value is NULL there, a non-match,
+  // never a uuid cast error: the same rows the text compare matched.
+  // No time bound on `events`: nothing proves the triggering event's
+  // timestamp lies in a window this query can name, so each chunk's key
+  // index is probed instead.
   const triggerEventText = drizzleSql<string>`coalesce(${automationRuns.triggerEventId}::text, ${focusSessions.metadata}->'automationChainContext'->>'triggerEventId')`;
   const triggered = database
     .select({
@@ -103,11 +110,13 @@ export async function readSessionInteractions(
     .leftJoin(
       automationRuns,
       eq(
-        drizzleSql`${automationRuns.id}::text`,
-        drizzleSql`${focusSessions.metadata}->>'automationRunId'`
+        automationRuns.id,
+        uuidFromTextSql(
+          drizzleSql`${focusSessions.metadata}->>'automationRunId'`
+        )
       )
     )
-    .innerJoin(events, eq(drizzleSql`${events.id}::text`, triggerEventText))
+    .innerJoin(events, eq(events.id, uuidFromTextSql(triggerEventText)))
     .where(
       and(
         inArray(focusSessions.id, page),
