@@ -10298,6 +10298,7 @@ declare const DeviceConnectionSchema: z.ZodDiscriminatedUnion<[
 	}, z.core.$strip>,
 	z.ZodObject<{
 		driver: z.ZodString;
+		externalId: z.ZodOptional<z.ZodString>;
 		installationId: z.ZodOptional<z.ZodString>;
 		mode: z.ZodLiteral<"bridge">;
 		viaDeviceId: z.ZodString;
@@ -10314,6 +10315,7 @@ declare const DeviceConnectionSchema: z.ZodDiscriminatedUnion<[
 export type DeviceConnection = z.output<typeof DeviceConnectionSchema>;
 declare const DeviceIdentitySchema: z.ZodObject<{
 	arch: z.ZodOptional<z.ZodString>;
+	hardwareId: z.ZodOptional<z.ZodString>;
 	hostname: z.ZodOptional<z.ZodString>;
 	model: z.ZodOptional<z.ZodString>;
 	os: z.ZodOptional<z.ZodString>;
@@ -10351,6 +10353,7 @@ declare const DeviceManifestSchema: z.ZodObject<{
 	}, z.core.$strip>>;
 	identity: z.ZodOptional<z.ZodObject<{
 		arch: z.ZodOptional<z.ZodString>;
+		hardwareId: z.ZodOptional<z.ZodString>;
 		hostname: z.ZodOptional<z.ZodString>;
 		model: z.ZodOptional<z.ZodString>;
 		os: z.ZodOptional<z.ZodString>;

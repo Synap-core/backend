@@ -58551,6 +58551,14 @@
               }
             }
           },
+          "413": {
+            "description": "The body is over 128 KB",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
           "503": {
             "description": "The report was not recorded",
             "content": {
