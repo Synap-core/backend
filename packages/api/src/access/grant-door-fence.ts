@@ -453,6 +453,23 @@ export function sessionHolderReadable(
 }
 
 /**
+ * The person's devices beside the agent roster (`synap_list_agents`
+ * `devices[]`): `devices` rows, read under `installation` (GRANT_READ_SPECS).
+ * The roster's `computers[]` is not narrowed by a grant, so `devices[]` is
+ * given only to a key that reads it whole: one scope reading `installation`
+ * with no narrowing. Any other fenced key is told it is not granted, never
+ * handed an empty list.
+ */
+const DEVICES_READ = READS("installation");
+
+/** May this request's key read `devices[]` (null grant = a person, always)? */
+export function devicesReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(DEVICES_READ, grant!);
+}
+
+/**
  * What is installed on the person's computers (installations, 0409), read
  * under `installation` like a PERSON door: the person's own rows, which no
  * space holds. MCP `synap_list_installations` is exactly this door.

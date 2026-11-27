@@ -51,15 +51,15 @@ export const en = {
   "band.failed": "Couldn't load your setup progress.",
   offline: "You’re offline. This shows again when you’re back online.",
   "access.title": "My access",
-  "access.hint": "The spaces you are in, your computers and your keys",
+  "access.hint": "The spaces you are in, your devices and your keys",
   "access.spaces.empty":
     "You’re not in any space yet. A pod admin adds you to one.",
   "access.spaces.failed": "Couldn’t load your spaces.",
   "access.spaces.showAll": "Show all {n} spaces",
-  "access.computers": "Computers",
+  "access.computers": "Devices",
   "access.computers.count":
     "{n, plural, =0 {None connected yet} one {# connected} other {# connected}}",
-  "access.computers.failed": "Couldn’t load your computers.",
+  "access.computers.failed": "Couldn’t load your devices.",
   "access.keys": "Keys",
   "access.keys.count":
     "{n, plural, =0 {No key in use} one {# key in use} other {# keys in use}}",
@@ -119,15 +119,15 @@ export const fr: Catalog<typeof en> = {
   offline:
     "Vous êtes hors ligne. Ceci réapparaîtra une fois la connexion revenue.",
   "access.title": "Mes accès",
-  "access.hint": "Vos espaces, vos ordinateurs et vos clés",
+  "access.hint": "Vos espaces, vos appareils et vos clés",
   "access.spaces.empty":
     "Vous n’êtes encore dans aucun espace. Un administrateur du pod vous y ajoute.",
   "access.spaces.failed": "Impossible de charger vos espaces.",
   "access.spaces.showAll": "Voir les {n} espaces",
-  "access.computers": "Ordinateurs",
+  "access.computers": "Appareils",
   "access.computers.count":
     "{n, plural, =0 {Aucun connecté pour l’instant} one {# connecté} other {# connectés}}",
-  "access.computers.failed": "Impossible de charger vos ordinateurs.",
+  "access.computers.failed": "Impossible de charger vos appareils.",
   "access.keys": "Clés",
   "access.keys.count":
     "{n, plural, =0 {Aucune clé en service} one {# clé en service} other {# clés en service}}",

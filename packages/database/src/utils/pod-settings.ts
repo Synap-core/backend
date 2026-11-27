@@ -13,16 +13,23 @@
  */
 
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { OWN_ORGANISE_CLASS_PATTERN } from "@synap/governance-policy";
 import { configSettings } from "../schema/config-settings.js";
 
 type DbHandle = typeof import("../client-pg.js").db;
 
+/** `parameterOf`: the pod switch whose rule reads the setting (Settings draws it under that switch). */
 export const POD_NUMBER_SETTINGS = {
-  "governance.own_work_fresh_hours": { default: 24, min: 1, max: 168 },
+  "governance.own_work_fresh_hours": {
+    default: 24,
+    min: 1,
+    max: 168,
+    parameterOf: OWN_ORGANISE_CLASS_PATTERN,
+  },
   "governance.project_evidence_min": { default: 5, min: 0, max: 50 },
 } as const satisfies Record<
   string,
-  { default: number; min: number; max: number }
+  { default: number; min: number; max: number; parameterOf?: string }
 >;
 export type PodNumberSettingKey = keyof typeof POD_NUMBER_SETTINGS;
 export const POD_NUMBER_SETTING_KEYS = Object.keys(POD_NUMBER_SETTINGS) as [

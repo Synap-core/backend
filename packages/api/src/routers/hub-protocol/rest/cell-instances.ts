@@ -10,17 +10,17 @@
  *   GET    /cell-instances?workspaceId=&isTemplate=   — list
  *   GET    /cell-instances/:id                        — get
  *   POST   /cell-instances                            — create (governed)
- *   POST   /cell-instances/html                       — createHtmlCell (governed)
+ *   POST   /cell-instances/html                       — createHtmlCell: the page
+ *          through the Hub document door (governed `document/create`), the
+ *          cell a placement of it
  *   PATCH  /cell-instances/:id/config                 — updateConfig (governed)
  */
 
 import { z } from "zod";
 import { db, eq, and, desc, cellInstances } from "@synap/database";
+import { insertCellInstance } from "../../../services/cells/create-cell-instance.js";
 import {
-  createHtmlCellInstance,
-  insertCellInstance,
-} from "../../../services/cells/create-cell-instance.js";
-import {
+  getCaller,
   hasScope,
   logger,
   resolveActingContext,
@@ -50,6 +50,8 @@ const CreateHtmlBodySchema = z.object({
   workspaceId: z.string().uuid(),
   html: z.string(),
   name: z.string().optional(),
+  /** What the page reads through the frame bridge (checked by the page door). */
+  reads: z.unknown().optional(),
   userId: z.string().optional(),
   agentUserId: z.string().optional(),
   reasoning: z.string().optional(),
@@ -278,8 +280,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
   });
 
   /**
-   * POST /cell-instances/html — createHtmlCell (governed).
-   * Reuses the existing MinIO document path (see routers/documents.ts).
+   * POST /cell-instances/html — an html page placed as a cell.
+   *
+   * ONE HTML write door (founder decision, 27 Nov 2026): the page is written
+   * by the Hub document door (`documents.createDocument {type: "html"}`, the
+   * same code path as `synap_create_document`): its governance
+   * (`document/create`), its checks (size cap, declared reads) and its
+   * warnings. The html-embed cell is only a placement of that page, made by
+   * the same door (`placeAs`): at once when the write applies, on the
+   * proposal's approval when it is proposed. The response keeps its shape:
+   * the cell (applied), or the governed proposal.
    */
   app.post("/cell-instances/html", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -337,51 +347,77 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       return c.json({ error: actorResolution.error }, 400);
 
     try {
-      const { checkPermissionOrPropose } =
-        await import("../../../utils/permission-check.js");
-      const perm = await checkPermissionOrPropose({
-        userId,
-        agentUserId: resolvedAgentUserId,
+      const caller = await getCaller(c, {
         workspaceId,
-        subjectType: "cell",
-        action: "create",
-        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: "intelligence",
-        data: {
-          cellType: "html-embed",
-          name: body.name,
-          html: body.html,
-          userId,
-          workspaceId,
-          agentUserId: resolvedAgentUserId,
-        },
-        reasoning: body.reasoning,
+        userId,
         sourceMessageId: body.sourceMessageId,
       });
-      if ("denied" in perm && perm.denied) {
-        return c.json({ status: "denied", message: perm.reason }, 403);
-      }
-      if ("proposalId" in perm) {
+      const result = await caller.documents.createDocument({
+        userId,
+        workspaceId,
+        title: body.name?.trim() || "HTML Cell",
+        content: body.html,
+        type: "html",
+        ...(body.reads !== undefined ? { reads: body.reads } : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        // The cell id is reserved by the document door itself.
+        placeAs: {
+          kind: "html-embed-cell",
+          ...(body.name ? { name: body.name } : {}),
+        },
+      });
+      if (result.status === "proposed") {
         return jsonGoverned(c, {
           status: "proposed",
-          proposalId: perm.proposalId,
-          summary: perm.summary,
-          reasoning: perm.reasoning,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
+          proposalId: result.proposalId,
+          summary: result.summary,
+          reasoning: result.reasoning,
+          reviewPath: result.reviewPath,
+          reviewUrl: result.reviewUrl,
         });
       }
-
-      const row = await createHtmlCellInstance({
-        workspaceId,
-        userId,
-        html: body.html,
-        name: body.name,
-        agentUserId: resolvedAgentUserId,
+      const cellId = "cellInstanceId" in result ? result.cellInstanceId : null;
+      const [row] = cellId
+        ? await db
+            .select()
+            .from(cellInstances)
+            .where(eq(cellInstances.id, cellId))
+            .limit(1)
+        : [];
+      if (!row) {
+        // The page landed but no cell was placed: never reported as a cell.
+        logger.error(
+          { documentId: result.documentId },
+          "cellInstances.createHtmlCell: page written, cell not placed"
+        );
+        return c.json(
+          {
+            error: `The page was written (document ${result.documentId}) but its cell was not placed.`,
+          },
+          500
+        );
+      }
+      const warnings =
+        "warnings" in result && Array.isArray(result.warnings)
+          ? result.warnings
+          : [];
+      return c.json({
+        ...serialize(row),
+        ...(warnings.length > 0 ? { warnings } : {}),
       });
-
-      return c.json(serialize(row));
     } catch (err) {
+      // The document door's governance refusal (and an agent the key cannot
+      // act as) is FORBIDDEN: the route's `denied` shape, as before.
+      if ((err as { code?: unknown })?.code === "FORBIDDEN") {
+        return c.json(
+          {
+            status: "denied",
+            message: err instanceof Error ? err.message : "Forbidden",
+          },
+          403
+        );
+      }
       logger.error({ err }, "cellInstances.createHtmlCell failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

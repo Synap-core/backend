@@ -86,9 +86,9 @@ export function registerViewsRoutes(app: HubHono): void {
     method: "post",
     path: "/views/{viewId}/arrange",
     tags: ["Views"],
-    summary: "Reorder/arrange widgets in a bento view",
+    summary: "Reorder/arrange cells in a bento view",
     description:
-      "Replaces the widget arrangement for a bento-type view. Widget IDs must reference existing cell instances in the view.",
+      "Replaces the cell arrangement for a bento-type view. Cell IDs must reference existing cell instances in the view.",
     request: {
       params: z.object({ viewId: z.string() }),
       body: ArrangeViewRequestSchema,

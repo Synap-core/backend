@@ -5,8 +5,8 @@
  *
  *  - no request (or one cancelled): ask for a reset; a cancelled one says
  *    when, so a person who did not ask knows someone did and it was stopped;
- *  - waiting: when it can be finished, and Cancel (any signed-in device of
- *    theirs can cancel it until then);
+ *  - waiting: when it can be finished, and Cancel (they can cancel it
+ *    wherever they are signed in until then);
  *  - ready: Finish, which clears every proof factor (needs a fresh sign-in
  *    at the pod);
  *  - done: add a first factor again (a passkey; then a second way in).

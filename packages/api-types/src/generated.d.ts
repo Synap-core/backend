@@ -10292,6 +10292,164 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"compute_spend_daily_cents"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
+declare const DeviceConnectionSchema: z.ZodDiscriminatedUnion<[
+	z.ZodObject<{
+		mode: z.ZodLiteral<"agent">;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		driver: z.ZodString;
+		externalId: z.ZodOptional<z.ZodString>;
+		installationId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"bridge">;
+		viaDeviceId: z.ZodString;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		leaseId: z.ZodOptional<z.ZodString>;
+		mode: z.ZodLiteral<"provider">;
+		resourceId: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>,
+	z.ZodObject<{
+		mode: z.ZodLiteral<"manual">;
+	}, z.core.$strip>
+], "mode">;
+export type DeviceConnection = z.output<typeof DeviceConnectionSchema>;
+declare const DeviceIdentitySchema: z.ZodObject<{
+	arch: z.ZodOptional<z.ZodString>;
+	hardwareId: z.ZodOptional<z.ZodString>;
+	hostname: z.ZodOptional<z.ZodString>;
+	model: z.ZodOptional<z.ZodString>;
+	os: z.ZodOptional<z.ZodString>;
+	osVersion: z.ZodOptional<z.ZodString>;
+	vendor: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceIdentity = z.output<typeof DeviceIdentitySchema>;
+declare const DeviceLocationSchema: z.ZodObject<{
+	network: z.ZodOptional<z.ZodString>;
+	provider: z.ZodOptional<z.ZodString>;
+	region: z.ZodOptional<z.ZodString>;
+	site: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type DeviceLocation = z.output<typeof DeviceLocationSchema>;
+declare const DeviceHealthSchema: z.ZodObject<{
+	checkedAt: z.ZodOptional<z.ZodString>;
+	detail: z.ZodOptional<z.ZodString>;
+	state: z.ZodEnum<{
+		degraded: "degraded";
+		failing: "failing";
+		ok: "ok";
+	}>;
+}, z.core.$strip>;
+export type DeviceHealth = z.output<typeof DeviceHealthSchema>;
+declare const DeviceManifestSchema: z.ZodObject<{
+	capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	health: z.ZodOptional<z.ZodObject<{
+		checkedAt: z.ZodOptional<z.ZodString>;
+		detail: z.ZodOptional<z.ZodString>;
+		state: z.ZodEnum<{
+			degraded: "degraded";
+			failing: "failing";
+			ok: "ok";
+		}>;
+	}, z.core.$strip>>;
+	identity: z.ZodOptional<z.ZodObject<{
+		arch: z.ZodOptional<z.ZodString>;
+		hardwareId: z.ZodOptional<z.ZodString>;
+		hostname: z.ZodOptional<z.ZodString>;
+		model: z.ZodOptional<z.ZodString>;
+		os: z.ZodOptional<z.ZodString>;
+		osVersion: z.ZodOptional<z.ZodString>;
+		vendor: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	location: z.ZodOptional<z.ZodObject<{
+		network: z.ZodOptional<z.ZodString>;
+		provider: z.ZodOptional<z.ZodString>;
+		region: z.ZodOptional<z.ZodString>;
+		site: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	manifestVersion: z.ZodLiteral<1>;
+	parameters: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+	resources: z.ZodOptional<z.ZodObject<{
+		cpu: z.ZodOptional<z.ZodObject<{
+			cores: z.ZodOptional<z.ZodNumber>;
+			model: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>;
+		disks: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			freeMb: z.ZodNumber;
+			fs: z.ZodOptional<z.ZodString>;
+			mount: z.ZodString;
+			sizeMb: z.ZodNumber;
+			tier: z.ZodOptional<z.ZodString>;
+		}, z.core.$strip>>>;
+		gpus: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			model: z.ZodString;
+			vramMb: z.ZodOptional<z.ZodNumber>;
+		}, z.core.$strip>>>;
+		memoryMb: z.ZodOptional<z.ZodNumber>;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type DeviceManifest = z.output<typeof DeviceManifestSchema>;
+declare const DEVICE_STATUSES: readonly [
+	"online",
+	"offline",
+	"degraded",
+	"unknown",
+	"retired"
+];
+export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
+/** What a list row shows of a device's resources. Absent = not reported. */
+export interface DeviceResourcesSummary {
+	cpuModel: string | null;
+	cpuCores: number | null;
+	memoryMb: number | null;
+	gpus: Array<{
+		model: string;
+		vramMb: number | null;
+	}>;
+	/** Summed over the reported disks; null when none was reported. */
+	diskSizeMb: number | null;
+	diskFreeMb: number | null;
+	/** Whole percent used over the reported disks; null when none. */
+	diskUsedPct: number | null;
+}
+declare const DEVICE_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type DeviceBelongsTo = (typeof DEVICE_BELONGS_TO)[number];
+/** One device as `fleet.list` / `fleet.get` answer it. */
+export interface FleetDevice {
+	id: string;
+	kind: string;
+	name: string;
+	parentDeviceId: string | null;
+	/** The machine user when it runs the Synap runner (`computers[].agentUserId`). */
+	principalUserId: string | null;
+	ownerUserId: string;
+	workspaceId: string | null;
+	belongsTo: DeviceBelongsTo;
+	connection: DeviceConnection;
+	labels: string[];
+	status: DeviceStatus;
+	lastReportAt: string | null;
+	createdAt: string;
+	retiredAt: string | null;
+	identity: DeviceIdentity;
+	resources: DeviceResourcesSummary;
+	capabilities: string[];
+	location: DeviceLocation | null;
+	health: DeviceHealth | null;
+}
+/** A device in the tree: its children are the devices it hosts. */
+export type FleetDeviceNode = DeviceTreeNode<FleetDevice>;
+/** `fleet.get`: the device with its whole manifest, as last reported. */
+export interface FleetDeviceDetail extends FleetDevice {
+	manifest: DeviceManifest | null;
+}
+/** A device in a tree built by {@link buildDeviceTree}. */
+export type DeviceTreeNode<T> = T & {
+	children: DeviceTreeNode<T>[];
+};
 declare const CONFIG_SCOPE_KINDS: [
 	"default",
 	"bridge",
@@ -10836,7 +10994,10 @@ export type RecordSessionSpawnResult = {
 export interface ProposalPartReach {
 	/**
 	 * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
-	 * webhook step's URL host, a provider verb's fixed base URL.
+	 * webhook step's URL host, a provider verb's fixed base URL, an
+	 * `http.get_json` step's URL host. {@link ANY_PUBLIC_HOST} (`*`, the host
+	 * lists' "any host" spelling, as in a computer manifest's `network`) when it
+	 * may read any public page (`web.read`).
 	 */
 	hosts: string[];
 	/**
@@ -12416,6 +12577,11 @@ export interface ProposalMaterializedRecord {
 		winnerId: string;
 	};
 }
+declare const FLOOR_CLASS_PATTERNS: readonly [
+	"@agent-defines-kinds",
+	"@agent-builds-structure"
+];
+export type FloorClassPattern = (typeof FLOOR_CLASS_PATTERNS)[number];
 export interface ReversibleDefaultState {
 	enabled: boolean;
 	/** The active row, so a surface can open it; null when off. */
@@ -12426,6 +12592,7 @@ declare const POD_NUMBER_SETTINGS: {
 		readonly default: 24;
 		readonly max: 168;
 		readonly min: 1;
+		readonly parameterOf: "@own-organise";
 	};
 	readonly "governance.project_evidence_min": {
 		readonly default: 5;
@@ -13819,7 +13986,8 @@ declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"waits_on_output",
 	"triggered",
 	"updated",
-	"serves"
+	"serves",
+	"replaces"
 ];
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
@@ -14065,213 +14233,6 @@ export interface RevertSkip {
 export interface RevertPass {
 	startedAt: Date;
 	entityIds: Set<string>;
-}
-/**
- * Context Types
- *
- * Proper type definitions for tRPC context to avoid `any` types.
- */
-/**
- * Database client type
- *
- * Note: Using `any` here to preserve Drizzle's schema inference.
- * Attempting to use PostgresJsDatabase<any> loses the schema generic
- * and breaks db.query.tableName access patterns.
- */
-export type DatabaseClient = any;
-/**
- * Ory Kratos identity
- */
-export interface KratosIdentity {
-	id: string;
-	traits: {
-		email: string;
-		name?: string;
-		[key: string]: unknown;
-	};
-}
-/**
- * Ory Kratos session
- */
-export interface KratosSession {
-	identity: KratosIdentity;
-	active: boolean;
-	expires_at?: string;
-	authenticated_at?: string;
-	/** How it was authenticated (Kratos); the step-up clock reads it. */
-	authentication_methods?: Array<{
-		completed_at?: string;
-		method?: string;
-		provider?: string;
-	}>;
-	/**
-	 * Set ONLY when the person came in on a Synap app's device token
-	 * (`appSessionMiddleware`): the device it was minted
-	 * for, and when the person last really authenticated for it (`authTime`,
-	 * the step-up clock). Absent on a Kratos session. Such a session has no
-	 * `authenticated_at`, so account recovery never counts it as a recent
-	 * sign-in.
-	 */
-	device?: {
-		authTime: Date | null;
-		clientId: string;
-		id: string;
-	};
-}
-/**
- * User object (simplified from Kratos identity)
- */
-export interface User {
-	id: string;
-	email: string;
-	name?: string;
-}
-/**
- * Full tRPC context
- */
-export interface Context {
-	db: DatabaseClient;
-	authenticated: boolean;
-	userId?: string | null;
-	user?: User | null;
-	session?: KratosSession | null;
-	/**
-	 * What kind of PERSON session `session` is: a Kratos session (browser
-	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
-	 * `createContext`, from what the app session gate resolved from the row
-	 * (`middleware/app-session.ts`); null when there is no session. A credential
-	 * door takes a `person_device` session only shortly after a real sign-in
-	 * (`requireFreshAuthentication`, trpc.ts).
-	 */
-	sessionKind?: "kratos" | "person_device" | null;
-	req?: Request;
-	socketIO?: any;
-	workspaceId?: string | null;
-	/**
-	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
-	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
-	 * with the user-access floor, so a stale/forged id can never widen access.
-	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
-	 */
-	projectId?: string | null;
-	workspaceRole?: string | null;
-	/**
-	 * Request source — "intelligence" when the request comes from the Intelligence Hub
-	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
-	 */
-	source?: string | null;
-	/**
-	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
-	 * Cannot be spoofed by a human JWT session.
-	 */
-	isHubProtocol?: boolean;
-	/**
-	 * Set ONLY by a Hub door that acts as the person (their own app token,
-	 * past `rejectAgentReviewer`) on the caller context it builds: the session
-	 * roster of the human doors applies there (`rosterReadFor`). Never set from
-	 * a request; ignored with an acting agent.
-	 */
-	personRoster?: boolean;
-	/**
-	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
-	 * its workspace binding, threaded from api-key-auth middleware. They let the
-	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
-	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
-	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
-	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
-	 * `hub-protocol/guard.ts`.
-	 */
-	keyType?: string | null;
-	keyWorkspaceId?: string | null;
-	/**
-	 * The agent user ID acting on behalf of this request, when the caller is an
-	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
-	 * governance membrane: when present, mutations route through
-	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
-	 * operator/human-driven requests, which stay synchronous.
-	 */
-	agentUserId?: string | null;
-	/**
-	 * INTERNAL CHANNEL — never from a request. No context factory populates it
-	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
-	 * ever read this from a header or input would hand any caller an "assume my
-	 * write is already approved" primitive.
-	 *
-	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
-	 * `applyProposalApproval`'s composite caller … it arrives solely from that
-	 * internal object literal." That was FALSE on the day it was written. There
-	 * are TWO producers, and the omission mattered because the field is read as a
-	 * security carve-out (below), so the comment understated where that carve-out
-	 * applies:
-	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
-	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
-	 *     auto-apply composite caller (its existence is asserted by
-	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
-	 *
-	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
-	 * set this ONLY from an internal caller that has ALREADY obtained a
-	 * governance decision for the write it is about to make. It means "a decision
-	 * exists for this", not merely "an internal caller made this".
-	 *
-	 * Two load-bearing meanings:
-	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
-	 *    APPROVER via `proposals.reviewedBy`.
-	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
-	 *    re-entering the governance membrane. Without that skip the ladder falls
-	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
-	 *    edge is silently never created while the receipt reports it linked.
-	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
-	 *    executor): it gates on the APPROVER, while its `agentUserId` input
-	 *    still owns the session.
-	 *
-	 * Declared here rather than cast at each reader: it was read through
-	 * `(ctx as { governanceProposalId?: string })` in seven places across three
-	 * files, one of which now guards the security fix above — so renaming the
-	 * field would have broken all seven with ZERO typecheck signal.
-	 */
-	governanceProposalId?: string;
-	/**
-	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
-	 * A proposal executor calling a router through `createCaller` sets it when
-	 * `applyProposalApproval` already checked the proof of presence for this
-	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
-	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
-	 * which files set it.
-	 */
-	presenceChecked?: "applyProposalApproval";
-	/**
-	 * INTERNAL CHANNEL — never from a request. An approval executor replaying an
-	 * agent's create sets it to the agent that wrote the proposal: the row
-	 * records it as its actor. Governance never reads it (the replay carries no
-	 * `agentUserId`, so it applies instead of proposing again).
-	 */
-	approvedAuthorAgentUserId?: string | null;
-	/**
-	 * The message ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this message.
-	 */
-	sourceMessageId?: string | null;
-	/**
-	 * Session ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this session.
-	 */
-	sessionId?: string | null;
-	/**
-	 * `"sync"` when this request materializes a bulk mirror of an external source
-	 * (a connection sync, or the approval of its grouped import). Forwarded by the
-	 * entity/relation doors to `recordDomainMutation`, so event automations skip
-	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
-	 */
-	origin?: "sync";
-	/**
-	 * The enclosing session revert pass (`revertSession`), so each per-proposal
-	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
-	 * and it is never read from procedure input: a client must not be able to
-	 * exempt entities from the edit check.
-	 */
-	revertPass?: RevertPass;
 }
 declare const PROMOTE_TO_BODY_REFUSALS: readonly [
 	"not_body_property",
@@ -15106,6 +15067,230 @@ export interface CapturePlacement {
 		workspaceId: string;
 		workspaceName: string;
 	};
+}
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
+/** Counts per lifecycle category; a category with none is left out. */
+export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
+/** Which of `sessionIds` hold an open PR. Throws when the read fails. */
+export type OpenPrBlockingRead = (sessionIds: readonly string[]) => Promise<Set<string>>;
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
+	id: string;
+	traits: {
+		email: string;
+		name?: string;
+		[key: string]: unknown;
+	};
+}
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
+	identity: KratosIdentity;
+	active: boolean;
+	expires_at?: string;
+	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
+}
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
+	id: string;
+	email: string;
+	name?: string;
+}
+/**
+ * Full tRPC context
+ */
+export interface Context {
+	db: DatabaseClient;
+	authenticated: boolean;
+	userId?: string | null;
+	user?: User | null;
+	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
+	req?: Request;
+	socketIO?: any;
+	workspaceId?: string | null;
+	/**
+	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+	 * with the user-access floor, so a stale/forged id can never widen access.
+	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+	 */
+	projectId?: string | null;
+	workspaceRole?: string | null;
+	/**
+	 * Request source — "intelligence" when the request comes from the Intelligence Hub
+	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+	 */
+	source?: string | null;
+	/**
+	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+	 * Cannot be spoofed by a human JWT session.
+	 */
+	isHubProtocol?: boolean;
+	/**
+	 * Set ONLY by a Hub door that acts as the person (their own app token,
+	 * past `rejectAgentReviewer`) on the caller context it builds: the session
+	 * roster of the human doors applies there (`rosterReadFor`). Never set from
+	 * a request; ignored with an acting agent.
+	 */
+	personRoster?: boolean;
+	/**
+	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
+	 * its workspace binding, threaded from api-key-auth middleware. They let the
+	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
+	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
+	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
+	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
+	 * `hub-protocol/guard.ts`.
+	 */
+	keyType?: string | null;
+	keyWorkspaceId?: string | null;
+	/**
+	 * The agent user ID acting on behalf of this request, when the caller is an
+	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
+	 * governance membrane: when present, mutations route through
+	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
+	 * operator/human-driven requests, which stay synchronous.
+	 */
+	agentUserId?: string | null;
+	/**
+	 * INTERNAL CHANNEL — never from a request. No context factory populates it
+	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+	 * ever read this from a header or input would hand any caller an "assume my
+	 * write is already approved" primitive.
+	 *
+	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+	 * `applyProposalApproval`'s composite caller … it arrives solely from that
+	 * internal object literal." That was FALSE on the day it was written. There
+	 * are TWO producers, and the omission mattered because the field is read as a
+	 * security carve-out (below), so the comment understated where that carve-out
+	 * applies:
+	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+	 *     auto-apply composite caller (its existence is asserted by
+	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+	 *
+	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
+	 * set this ONLY from an internal caller that has ALREADY obtained a
+	 * governance decision for the write it is about to make. It means "a decision
+	 * exists for this", not merely "an internal caller made this".
+	 *
+	 * Two load-bearing meanings:
+	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+	 *    APPROVER via `proposals.reviewedBy`.
+	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+	 *    re-entering the governance membrane. Without that skip the ladder falls
+	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+	 *    edge is silently never created while the receipt reports it linked.
+	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
+	 *    executor): it gates on the APPROVER, while its `agentUserId` input
+	 *    still owns the session.
+	 *
+	 * Declared here rather than cast at each reader: it was read through
+	 * `(ctx as { governanceProposalId?: string })` in seven places across three
+	 * files, one of which now guards the security fix above — so renaming the
+	 * field would have broken all seven with ZERO typecheck signal.
+	 */
+	governanceProposalId?: string;
+	/**
+	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
+	 * A proposal executor calling a router through `createCaller` sets it when
+	 * `applyProposalApproval` already checked the proof of presence for this
+	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
+	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
+	 * which files set it.
+	 */
+	presenceChecked?: "applyProposalApproval";
+	/**
+	 * INTERNAL CHANNEL — never from a request. An approval executor replaying an
+	 * agent's create sets it to the agent that wrote the proposal: the row
+	 * records it as its actor. Governance never reads it (the replay carries no
+	 * `agentUserId`, so it applies instead of proposing again).
+	 */
+	approvedAuthorAgentUserId?: string | null;
+	/**
+	 * The message ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this message.
+	 */
+	sourceMessageId?: string | null;
+	/**
+	 * Session ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this session.
+	 */
+	sessionId?: string | null;
+	/**
+	 * `"sync"` when this request materializes a bulk mirror of an external source
+	 * (a connection sync, or the approval of its grouped import). Forwarded by the
+	 * entity/relation doors to `recordDomainMutation`, so event automations skip
+	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	origin?: "sync";
+	/**
+	 * The enclosing session revert pass (`revertSession`), so each per-proposal
+	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
+	 * and it is never read from procedure input: a client must not be able to
+	 * exempt entities from the edit check.
+	 */
+	revertPass?: RevertPass;
+	/**
+	 * The open-PR read of the enclosing needs-you read (`readAttention`,
+	 * `sharedOpenPrRead`), so `proposals.groups` classifies its pending rows
+	 * from the SAME one read the owed half and the clusters' order use.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	openPrRead?: OpenPrBlockingRead;
 }
 export interface PersistedCaptureResult {
 	messageId: string;
@@ -18774,12 +18959,6 @@ export interface ProposalCluster {
 	 */
 	attentionFloorCount: number;
 }
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 /** How many clusters out of the headline sit in each of the rule's folds. */
 export interface ClusterFoldCounts {
 	working: number;
@@ -22586,8 +22765,6 @@ export interface SessionsOwingGrade {
 		ungraded: number;
 	}>;
 }
-/** Counts per lifecycle category; a category with none is left out. */
-export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
 export interface GoalRollup {
 	/** When the goal entered its status (ISO); `sinceMeasured` false = created. */
 	since: string | null;
@@ -24692,6 +24869,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "cal_com";
 	};
 	readonly fireflies: {
@@ -24699,6 +24877,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "optional";
 		readonly toolName: "fireflies";
 	};
 	readonly mailgun: {
@@ -24707,6 +24886,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 			"secretVaultRef"
 		];
 		readonly setupStep: null;
+		readonly signingSecret: "required";
 		readonly toolName: "mailgun";
 	};
 	readonly postiz: {
@@ -24714,6 +24894,7 @@ declare const INBOUND_WEBHOOK_PROVIDERS: {
 		readonly requiredConfig: readonly [
 		];
 		readonly setupStep: "In Postiz, open Settings \u2192 Webhooks \u2192 Add a webhook, paste this URL, choose All integrations, and save.";
+		readonly signingSecret: "none";
 		readonly toolName: "postiz";
 	};
 };
@@ -24727,6 +24908,8 @@ export interface ProvisionedInboundWebhook {
 	rotated: boolean;
 	/** Keys the route still needs before it accepts a delivery. */
 	missingConfig: string[];
+	/** True when this call stored a signing secret (never the secret itself). */
+	signingSecretSet?: true;
 	/** The manual step on the provider's side, or null when unchecked. */
 	setupStep: string | null;
 }
@@ -26716,6 +26899,20 @@ export interface WriteActionModeResult {
 	changed: boolean;
 }
 /**
+ * One platform floor as Settings and the desktop list it. `switchedBy`: the
+ * pod switch that lets the other approval rules decide it (`floorClassOf`);
+ * absent, no switch lifts it.
+ */
+export interface PlatformFloor {
+	key: "admin" | "agent-builds-structure" | "agent-schema" | "agent-structure" | "destructive" | "force-propose";
+	label: string;
+	rung: string;
+	editable: false;
+	actions: readonly string[];
+	note?: string;
+	switchedBy?: FloorClassPattern;
+}
+/**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
  * `config_settings`. Sensitivity is enforced at the GATE (a loosening change
@@ -28094,6 +28291,14 @@ export interface WorkGraphWindow {
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
 export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {
 	/**
+	 * How it ended (`sessionClosedAs`, one derivation with the dependency rule:
+	 * `done`, or `not_done` for a close-anyway / a failed or cancelled end).
+	 * ABSENT = not ended (or a pod from before this field: a reader then reads a
+	 * closed step as done, as `deriveStepReadiness` does).
+	 */
+	closedAs?: SessionClosedAs;
+	dueBy?: string;
+	/**
 	 * Who has it now (`readSessionHolder`'s derivation, `attachSessionHolder`):
 	 * `unavailable` when a fact it needs could not be read, never "nobody".
 	 */
@@ -28101,6 +28306,11 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * The step's time, lifted off `metadata` (`stepTimeOf`; only a valid date).
+	 * ABSENT = none declared (or a pod from before these fields).
+	 */
+	plannedFor?: string;
 	/**
 	 * With the `playbookId` narrow, how this window node follows it: `session`
 	 * = its own `playbookId` is the playbook, `goal` = only through the method
@@ -28143,7 +28353,10 @@ declare const WORK_GRAPH_APP_NODE_FIELDS: readonly [
 	"viewerRole",
 	"inWindow",
 	"playbookMatch",
-	"skipped"
+	"skipped",
+	"plannedFor",
+	"dueBy",
+	"closedAs"
 ];
 export type WorkGraphAppNode = Pick<WorkGraphNode, (typeof WORK_GRAPH_APP_NODE_FIELDS)[number]>;
 declare const LANDED_DECISION_STATES: readonly [
@@ -35801,6 +36014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						id: string;
 						match?: TermMatch;
 						name: string;
+						reach?: ProposalPartReach;
 						workspaceId?: string | null;
 					}>;
 				};
@@ -37499,6 +37713,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				html: string;
 				name?: string | undefined;
+				reads?: unknown;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -42206,6 +42421,53 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	fleet: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: FleetDeviceDetail;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeRetired?: boolean | undefined;
+			} | undefined;
+			meta: object;
+			output: {
+				devices: FleetDeviceNode[];
+			};
+		}>;
+	}>>;
 	flow: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -45704,6 +45966,71 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		allowHost: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				host: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				reason?: string | undefined;
+			};
+			meta: object;
+			output: {
+				alreadyAllowed: boolean;
+				host: string;
+				status: "allowed";
+			};
+		}>;
+		allowedHosts: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				canManage: boolean;
+				hosts: {
+					addedAt: Date;
+					addedBy: {
+						id: string;
+						name: string;
+					} | null;
+					host: string;
+					id: string;
+					proposalId: string | null;
+					reason: string | null;
+					usedBy: {
+						id: string;
+						name: string;
+					}[];
+				}[];
+				unreadAutomations: number;
+			};
+		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				store: "config_settings" | "governance_ceilings" | "governance_rules";
@@ -46156,42 +46483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
-				alwaysPropose: ({
-					actions: readonly string[];
-					editable: false;
-					key: "admin";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-schema";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-structure";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "destructive";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "force-propose";
-					label: string;
-					note: string;
-					rung: string;
-				})[];
+				alwaysPropose: PlatformFloor[];
 				autoApproveFor: {
 					actions: readonly string[];
 					editable: false;
@@ -46212,7 +46504,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
 					ruleId: string | null;
 				}[];
-				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
+				settings: {
+					key: string;
+					max: number;
+					min: number;
+					parameterOf: string | null;
+					value: number;
+				}[];
 			};
 		}>;
 		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{
@@ -55089,7 +55387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.allowHost" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -62986,6 +63284,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				rotate?: boolean | undefined;
+				signingSecret?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -62997,6 +63296,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				provider: InboundWebhookProvider;
 				rotated: boolean;
 				setupStep: string | null;
+				signingSecretSet?: true;
 				status: "provisioned";
 				url: string;
 			};

@@ -70,3 +70,27 @@ describe("/open/document: the header", () => {
     }
   });
 });
+
+describe("/open/document: a body that reads here opens in the reader", () => {
+  beforeEach(() => setAmbientCatalogLocale("en"));
+
+  it("a note reads in the whole window at the document frame, no card", () => {
+    answer = doc("Just a note.", false);
+    const out = renderToStaticMarkup(<DocumentView id="d1" />);
+    expect(out).toContain('data-reader="document"');
+    expect(out).toContain("max-w-6xl");
+    expect(out).toMatch(/<h1[^>]*>Q3 plan<\/h1>/);
+    expect(out).toContain("Open in app");
+    expect(out).not.toContain("min-h-screen");
+    // The title is text, never a door: the only Home door is the mark.
+    expect(out).not.toMatch(/<a[^>]*>[^<]*Q3 plan/);
+  });
+
+  it("an empty document keeps its card, where its one sentence reads", () => {
+    answer = doc("   ", false);
+    const out = renderToStaticMarkup(<DocumentView id="d1" />);
+    expect(out).not.toContain("data-reader");
+    expect(out).toContain("min-h-screen");
+    expect(out).toContain("Nothing written here yet.");
+  });
+});

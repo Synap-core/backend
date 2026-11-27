@@ -703,7 +703,7 @@ export async function revokeOtherSessions(): Promise<number> {
     headers: { Accept: "application/json" },
   });
   if (!res.ok)
-    throw new Error(`Could not sign out other devices (${res.status})`);
+    throw new Error(`Could not sign out everywhere else (${res.status})`);
   try {
     const body = (await res.json()) as { count?: number };
     return typeof body.count === "number" ? body.count : 0;

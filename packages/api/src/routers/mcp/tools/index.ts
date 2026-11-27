@@ -1757,7 +1757,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`, on the ops it declares in `reads`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown): attach it with `attachTo`. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
+        "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`, on the ops it declares in `reads`; at most 2 MB: a bigger page is refused). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown): attach it with `attachTo`. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
       input: z.object({
         attachTo: z
           .looseObject({
@@ -3840,7 +3840,7 @@ export function toolDefinitions() {
           .string()
           .optional()
           .describe(
-            "Optional: only runs of this playbook DEFINITION. Pair with kind 'run' or 'all' — flow-linked rows are runs, so under the default nothing would match."
+            "Optional: only runs of this playbook DEFINITION. The default leaves out the runs an automation started; kind 'run' or 'all' includes them."
           ),
         automationId: z
           .string()
@@ -3852,7 +3852,7 @@ export function toolDefinitions() {
           .enum([...SESSION_KINDS, "all"])
           .optional()
           .describe(
-            "Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way."
+            "Which population. Omitted (default) = every kind EXCEPT the sessions an automation opened; name a kind, automationId or subjectEntityId to get those. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' = no filter, automation sessions included. Every row carries its own `kind` either way."
           ),
         limit: z
           .number()
@@ -3925,7 +3925,7 @@ export function toolDefinitions() {
           .enum([...SESSION_KINDS, "all"])
           .optional()
           .describe(
-            "Population of the window; 'all' (default). Far ends are any kind."
+            "Population of the window. Omitted (default) = every kind EXCEPT the sessions an automation opened (kept with subjectEntityId); 'all' = no filter, automation sessions included. Far ends are any kind."
           ),
         lens: z
           .enum(["default", "triage", "all"])
@@ -3990,7 +3990,7 @@ export function toolDefinitions() {
         openWorldHint: false,
       },
       description:
-        "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
+        "Who can take the person's work, and on which COMPUTER — read-only. `devices[]`: their devices (kind, status, resources; a computer's `principalUserId` is its agentUserId; `null` with `devicesError` when not granted or unreadable). `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
       input: z.object({
         limit: z.number().optional().describe("Page size, default 50, max 200"),
         offset: z.number().optional().describe("nextOffset of the prior reply"),
@@ -7128,6 +7128,10 @@ export function toolDefinitions() {
           .string()
           .optional()
           .describe("One computer's id (synap_list_agents)."),
+        deviceId: z
+          .string()
+          .optional()
+          .describe("Or that computer's device id (devices[])."),
         capabilityKey: z
           .string()
           .optional()
@@ -7153,7 +7157,7 @@ export function toolDefinitions() {
         openWorldHint: true,
       },
       description:
-        'Ask to install a capability on one of the person\'s computers, or on the pod. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
+        'Ask to install a capability on one of the person\'s computers, or on the pod. Name where with `computer` (or `device`, its device id): one of the two is required. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
       input: z.object({
         reasoning: z
           .string()
@@ -7166,8 +7170,15 @@ export function toolDefinitions() {
           ),
         computer: z
           .string()
+          .optional()
           .describe(
-            'One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.'
+            'Required unless `device` is given. One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.'
+          ),
+        device: z
+          .string()
+          .optional()
+          .describe(
+            "Required unless `computer` is given: that computer's device id (synap_list_agents `devices[]`)."
           ),
         action: z
           .enum(["install", "update", "verify", "remove"])

@@ -4225,7 +4225,7 @@
           "widgets": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/BentoWidget" },
-            "description": "Replacement widget arrangement for a bento view."
+            "description": "Replacement cell arrangement for a bento view."
           },
           "agentUserId": { "type": "string" },
           "reasoning": { "type": "string" },
@@ -7440,6 +7440,23 @@
           "agents",
           "unreadable"
         ]
+      },
+      "DeviceReportAck": {
+        "type": "object",
+        "properties": {
+          "recorded": { "type": "boolean" },
+          "deviceId": { "type": ["string", "null"] },
+          "manifest": {
+            "type": "string",
+            "enum": ["accepted", "absent", "refused"]
+          },
+          "error": { "type": "string" }
+        },
+        "required": ["recorded", "deviceId", "manifest"]
+      },
+      "ComputerReportBody": {
+        "type": "object",
+        "properties": { "manifest": {}, "reporter": { "type": "string" } }
       },
       "InstallationRequestApplied": {
         "anyOf": [
@@ -28937,8 +28954,8 @@
     "/views/{viewId}/arrange": {
       "post": {
         "tags": ["Views"],
-        "summary": "Reorder/arrange widgets in a bento view",
-        "description": "Replaces the widget arrangement for a bento-type view. Widget IDs must reference existing cell instances in the view.",
+        "summary": "Reorder/arrange cells in a bento view",
+        "description": "Replaces the cell arrangement for a bento-type view. Cell IDs must reference existing cell instances in the view.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -41753,7 +41770,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "List focus sessions for a workspace or a project",
-        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. With neither it lists pod-wide, except for a workspace-bound key, which reads its own workspace when it names none (another `workspaceId` is a 403). Rows are always floored at the sessions the caller can read. `offset` pages past `limit` (newest first, `id` breaks ties).",
+        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. With neither it lists pod-wide, except for a workspace-bound key, which reads its own workspace when it names none (another `workspaceId` is a 403). Rows are always floored at the sessions the caller can read. `offset` pages past `limit` (newest first, `id` breaks ties). With no `kind` (and no `automationId` or subject) it leaves out the sessions an automation opened; `kind=all` includes them.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -45580,7 +45597,13 @@
                             "type": ["string", "null"],
                             "enum": ["session", "goal", null]
                           },
-                          "skipped": { "type": "boolean", "enum": [true] }
+                          "skipped": { "type": "boolean", "enum": [true] },
+                          "plannedFor": { "type": "string" },
+                          "dueBy": { "type": "string" },
+                          "closedAs": {
+                            "type": "string",
+                            "enum": ["done", "not_done"]
+                          }
                         },
                         "required": [
                           "id",
@@ -45621,7 +45644,8 @@
                               "waits_on_output",
                               "triggered",
                               "updated",
-                              "serves"
+                              "serves",
+                              "replaces"
                             ]
                           },
                           "from": { "type": "string" },
@@ -58475,6 +58499,77 @@
         }
       }
     },
+    "/computers/me/report": {
+      "post": {
+        "tags": ["Computers"],
+        "summary": "A computer reports what it is (its device manifest)",
+        "description": "A connected computer's own key only (the device-flow key). Merges `manifest` (the device manifest v1, optional) into the computer's device, section by section, and moves its report time. `reporter` names the process (its capabilities are kept apart from the other processes' and expire 30 minutes after its last report). A manifest the pod cannot read is answered `manifest: \"refused\"` with the field in `error`, and the last good one is kept.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ComputerReportBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "device": { "$ref": "#/components/schemas/DeviceReportAck" }
+                  },
+                  "required": ["device"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not this computer's own key, or no hub-protocol.write",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 128 KB",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "503": {
+            "description": "The report was not recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/installations/request": {
       "post": {
         "tags": ["Installations"],
@@ -58640,7 +58735,7 @@
       "post": {
         "tags": ["HostJobs"],
         "summary": "Lease the next host job of an installation on this computer",
-        "description": "Answers `{ job: null }` when nothing is due. The job names the installation's kind (`service` | `tool`), its approved manifest and version. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "description": "Answers `{ job: null }` when nothing is due. The job names the installation's kind (`service` | `tool`), its approved manifest and version. Every lease is also the computer reporting: `manifest` (optional, the device manifest v1) is stored on its device, and `device` says what was recorded (`manifest`: accepted, absent or refused with `error`); it never fails the lease. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -58658,7 +58753,8 @@
                       "diskGb": { "type": "number", "minimum": 0 }
                     },
                     "additionalProperties": {}
-                  }
+                  },
+                  "manifest": {}
                 },
                 "additionalProperties": {}
               }
@@ -58667,7 +58763,7 @@
         },
         "responses": {
           "200": {
-            "description": "The leased job, or null",
+            "description": "The leased job, or null, and the device report",
             "content": {
               "application/json": {
                 "schema": {
@@ -58676,9 +58772,10 @@
                     "job": {
                       "type": ["object", "null"],
                       "additionalProperties": {}
-                    }
+                    },
+                    "device": { "$ref": "#/components/schemas/DeviceReportAck" }
                   },
-                  "required": ["job"]
+                  "required": ["job", "device"]
                 }
               }
             }

@@ -27,7 +27,7 @@ export const en = {
   "totp.remove": "Remove",
   "totp.remove.title": "Remove your authenticator app?",
   "totp.remove.consequence":
-    "Its codes stop confirming it’s you right away. Every device of yours is told.",
+    "Its codes stop confirming it’s you right away. You’re told everywhere you’re signed in.",
   "totp.remove.confirm": "Remove",
   "totp.failed": "Not changed.",
   "totp.reauth": "Sign in again",
@@ -55,7 +55,7 @@ export const fr: Catalog<typeof en> = {
   "totp.remove": "Retirer",
   "totp.remove.title": "Retirer votre app d’authentification ?",
   "totp.remove.consequence":
-    "Ses codes cessent aussitôt de confirmer que c’est vous. Chacun de vos appareils en est informé.",
+    "Ses codes cessent aussitôt de confirmer que c’est vous. Vous en êtes informé partout où vous êtes connecté.",
   "totp.remove.confirm": "Retirer",
   "totp.failed": "Rien n’a changé.",
   "totp.reauth": "Se reconnecter",

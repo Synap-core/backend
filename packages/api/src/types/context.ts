@@ -205,4 +205,11 @@ export interface Context {
    * exempt entities from the edit check.
    */
   revertPass?: import("../services/reversibility/safe-revert.js").RevertPass;
+  /**
+   * The open-PR read of the enclosing needs-you read (`readAttention`,
+   * `sharedOpenPrRead`), so `proposals.groups` classifies its pending rows
+   * from the SAME one read the owed half and the clusters' order use.
+   * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+   */
+  openPrRead?: import("../services/dev-loop/open-pr-blocking.js").OpenPrBlockingRead;
 }

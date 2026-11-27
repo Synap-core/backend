@@ -273,11 +273,23 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
+        // Devices (decision 78fc3fa1): the product word over every thing the
+        // pod reaches, a computer being one kind. The id stays `computers`
+        // (aliases, not a code rename: client links name the page by id).
+        // No `kind` until the registry has the `device` noun (backend#1342);
+        // `machine` still says "Computers".
         id: "computers",
-        href: "/computers",
-        label: "Computers",
+        href: "/devices",
+        label: "Devices",
         icon: "Laptop",
-        kind: "machine",
+        legacy: [
+          { source: "/computers" },
+          { source: "/computers/:id", destination: "/devices/:id" },
+          // A member's own list (outside the nav) moved with it, and this
+          // table is the console's one source of redirects.
+          { source: "/my-computers", destination: "/my-devices" },
+          { source: "/my-computers/:id", destination: "/my-devices/:id" },
+        ],
         audience: "admin",
       },
       {
@@ -470,7 +482,7 @@ export function navHref(
 /**
  * One computer's page in the console — the ONE spelling of "open this
  * computer", for every surface that names one (Keys, Agents, search, the
- * Computers list).
+ * Devices list). Its id is the computer's user id.
  */
 export function computerHref(id: string): string {
   return `${navHref("computers")}/${encodeURIComponent(id)}`;
@@ -646,7 +658,7 @@ export const SEARCH_DESTINATION: Readonly<
   },
   computer: {
     nav: "computers",
-    label: "Computers",
+    label: "Devices",
     href: computerHref,
   },
   issuer: {

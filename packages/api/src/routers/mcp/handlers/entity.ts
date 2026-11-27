@@ -583,6 +583,9 @@ export const entityHandlers = {
           spec: {
             ...(args.content !== undefined ? { content: args.content } : {}),
             ...(args.url !== undefined ? { url: args.url } : {}),
+            // An html page's declared reads: the surface door checks them
+            // with the HTML page door's checks (they were dropped here).
+            ...(args.reads !== undefined ? { reads: args.reads } : {}),
             ...(requestedWorkspaceId
               ? { workspaceId: requestedWorkspaceId }
               : {}),

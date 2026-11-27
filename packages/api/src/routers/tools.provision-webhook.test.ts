@@ -126,6 +126,32 @@ describe("tools.provisionWebhook is governed", () => {
   });
 });
 
+describe("tools.provisionWebhook — the webhook signing secret", () => {
+  const personCaller = () =>
+    toolsRouter.createCaller({
+      authenticated: true,
+      userId: "owner-1",
+    } as never);
+
+  it("an agent caller is refused BEFORE anything is filed: no proposal ever carries a secret", async () => {
+    h.verdict = { proposalId: "proposal-1" };
+    await expect(
+      caller().provisionWebhook({ id: ID, signingSecret: "whsec_x" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.gated).toHaveLength(0);
+    expect(h.minted).toHaveLength(0);
+  });
+
+  it("a person's secret reaches the mint door, and the gate's data never holds it", async () => {
+    h.verdict = { granted: true };
+    await personCaller().provisionWebhook({ id: ID, signingSecret: "whsec_x" });
+    expect(h.minted).toEqual([
+      { userId: "owner-1", toolId: ID, signingSecret: "whsec_x" },
+    ]);
+    expect(JSON.stringify(h.gated)).not.toContain("whsec_x");
+  });
+});
+
 describe("one door", () => {
   it("the Hub REST route replays the procedure and mints nothing itself", () => {
     const src = readFileSync(

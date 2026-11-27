@@ -2,6 +2,8 @@
  * Write an APPROVED document — the one writer behind the `document/create`
  * approval executor and a connected plan's `create_document` step.
  *
+ * An html page goes through the HTML page door (`createHtmlPage`).
+ *
  * Extracted verbatim from `executors/document.ts` so the plan does not grow a
  * second copy of "upload the body, then `DocumentRepository.create`". A body
  * goes through the ONE create door (`createDocumentWithContent`); an external
@@ -14,6 +16,7 @@ import {
   DocumentRepository,
   eventRepository,
   createDocumentWithContent,
+  createHtmlPage,
   type CreateDocumentInput,
   normalizeDocumentType,
 } from "@synap/database";
@@ -69,12 +72,30 @@ export async function materializeApprovedDocument(input: {
   }
 
   const docType = normalizeDocumentType(input.type || "markdown", "markdown");
-  const mimeType =
-    docType === "html"
-      ? "text/html"
-      : docType === "code"
-        ? "text/plain"
-        : "text/markdown";
+  const provenance = {
+    createdByKind: "human" as const,
+    ...(input.sourceProposalId
+      ? { sourceProposalId: input.sourceProposalId }
+      : {}),
+  };
+  // An html page: the HTML page door, which checks it again (size cap,
+  // declared reads) and stores its reads on `metadata.reads`.
+  if (docType === "html") {
+    const { reads, ...metadata } = input.metadata ?? {};
+    await createHtmlPage(db, eventRepository, {
+      id: input.documentId,
+      ownerUserId: input.userId,
+      workspaceId: input.workspaceId,
+      title,
+      content: input.content || "",
+      reads,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+      ...input.fields,
+      provenance,
+    });
+    return { id: input.documentId };
+  }
+  const mimeType = docType === "code" ? "text/plain" : "text/markdown";
   // The ONE create door: fresh-key upload + row + v1 checkpoint. (The row's
   // mimeType is now the body's real type; it used to say text/markdown for an
   // html/code body, which the claim door then re-uploaded under.)
@@ -88,12 +109,7 @@ export async function materializeApprovedDocument(input: {
     mimeType,
     ...(input.metadata ? { metadata: input.metadata } : {}),
     ...input.fields,
-    provenance: {
-      createdByKind: "human",
-      ...(input.sourceProposalId
-        ? { sourceProposalId: input.sourceProposalId }
-        : {}),
-    },
+    provenance,
   });
   return { id: input.documentId };
 }

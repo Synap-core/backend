@@ -1402,7 +1402,7 @@ export interface ListFocusSessionsOptions {
    * just opened, which a human `"default"` lens would hide.
    */
   lens?: "default" | "triage" | "all";
-  /** Population lens. Default here is `"all"` (differs from the human tRPC lens). */
+  /** Population lens. Absent = every kind but the sessions an automation opened (differs from the human tRPC lens, `work`); `"all"` includes them. */
   kind?: FocusSessionKind | "all";
   /** Narrow to the sessions of ONE flow definition. */
   playbookId?: string;
@@ -1432,7 +1432,7 @@ export interface GetWorkGraphOptions {
   projectId?: string;
   /** Settled sessions from this many hours back (1–720, default 72). Open ones whatever their age. */
   windowHours?: number;
-  /** Population of the window. Default here is `"all"` (the agent-door default). */
+  /** Population of the window. Absent = every kind but the sessions an automation opened; `"all"` includes them. */
   kind?: FocusSessionKind | "all";
   /** Triage lens of the window. Default here is `"all"`. */
   lens?: "default" | "triage" | "all";
@@ -1442,7 +1442,7 @@ export interface GetWorkGraphOptions {
   rootSessionId?: string;
 }
 
-/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator; `serves` from a session or goal to the goal it is done for. */
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator; `serves` from a session or goal to the goal it is done for; `replaces` from the replacement step to the step it replaces. */
 export interface HubWorkGraphEdge {
   kind:
     | "blocked_by"
@@ -1451,7 +1451,8 @@ export interface HubWorkGraphEdge {
     | "waits_on_output"
     | "triggered"
     | "updated"
-    | "serves";
+    | "serves"
+    | "replaces";
   from: string;
   to: string;
   /** Absent = `from` is a session. `track` = a goal in `goals`. */
@@ -1521,6 +1522,11 @@ export interface HubWorkGraphNode extends HubFocusSessionListItem {
   inWindow: boolean;
   /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
   skipped?: true;
+  /** The step's planned window and due date. Absent = none. */
+  plannedFor?: string;
+  dueBy?: string;
+  /** How it ended. Absent = not ended, or an older pod. */
+  closedAs?: "done" | "not_done";
 }
 
 /** GET /api/hub/focus-sessions/graph. */

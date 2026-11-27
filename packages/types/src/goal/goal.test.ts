@@ -230,6 +230,12 @@ describe("goal marks", () => {
     expect(line("pr:synap-core/backend#539", "closed")).toBe(
       "for 2h · resumes when backend#539 is closed"
     );
+    expect(line("pr:synap-core/backend#539", "checks_failed")).toBe(
+      "for 2h · resumes when the checks of backend#539 fail"
+    );
+    expect(line("pr:synap-core/backend#539", "checks_green")).toBe(
+      "for 2h · resumes when the checks of backend#539 pass"
+    );
     expect(line("main:synap-core/app-bases")).toBe(
       "for 2h · resumes when app-bases main is green"
     );

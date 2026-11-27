@@ -517,9 +517,21 @@ export const capabilityHandlers = {
           ? undefined
           : DEFAULT_QUERY_LIMIT
         : CAPABILITIES_PAGE_DEFAULT);
+    // LIVE REACH: a verb whose reach is pod state (`http.get_json` → the
+    // pod's allow-list) says it on its row, read only when such a row can be
+    // shown. Stamped by the fold after the dedupe, like `blocked`.
+    const { LIVE_REACH_VERBS, readLiveVerbReach } =
+      await import("../../../services/proposals/part-reach.js");
+    const liveNames = new Set<string>(LIVE_REACH_VERBS);
+    const liveReach = await readLiveVerbReach(
+      cappedInput.flatMap((c) =>
+        c.kind === "skill" && liveNames.has(c.name) ? [c.name] : []
+      )
+    );
     const sections = sectionCapabilities(cappedInput, {
       limit: pageLimitEff,
       offset,
+      liveReach,
     });
     const countRows = (x: {
       integrations: unknown[];

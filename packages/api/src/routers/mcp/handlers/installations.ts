@@ -28,6 +28,7 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import { fullUuidError } from "../tool-errors.js";
+import { computerFromDeviceArgs } from "../../../services/fleet/devices.js";
 
 /** Where a refused capability CAN go: its computer blocks, read once. */
 async function manifestFor(
@@ -62,8 +63,14 @@ export const installationHandlers = {
               "No live installation of the person has this id: list them without installationId.",
           });
     }
-    // A blank computerId reads as not given.
-    const computerId = ctx.args.computerId?.trim() || undefined;
+    // `deviceId` is an alias of `computerId`: a device's id answers its
+    // computer (a blank one reads as not given).
+    const named = await computerFromDeviceArgs(access, {
+      computer: ctx.args.computerId,
+      device: ctx.args.deviceId,
+    });
+    if (!named.ok) return ok({ error: named.error });
+    const computerId = named.computer;
     const capabilityKey = ctx.args.capabilityKey?.trim();
     // The slug's shape is not in the schema: checked here.
     if (capabilityKey !== undefined && !SLUG.test(capabilityKey)) {
@@ -87,8 +94,20 @@ export const installationHandlers = {
         error:
           "capabilityKey is a capability's catalog slug, e.g. media-ffmpeg: find one with synap_run_capability market.search.",
       });
-    // The schema takes "": a blank computer is refused below.
-    const target = ctx.args.computer.trim();
+    // `device` is an alias of `computer`. One of the two is required, a
+    // cross-field rule the schema does not carry (both are optional there):
+    // a blank or missing pair is refused below with COMPUTER_REQUIRED and
+    // the computers to choose from.
+    const named = await computerFromDeviceArgs(
+      AccessContext.agent({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId,
+      }),
+      { computer: ctx.args.computer, device: ctx.args.device }
+    );
+    if (!named.ok)
+      return ok({ status: "refused", code: "BAD_DEVICE", error: named.error });
+    const target = named.computer ?? "";
     const action = ctx.args.action ?? "install";
     // A blank version reads as not given.
     const version = ctx.args.version?.trim() || null;

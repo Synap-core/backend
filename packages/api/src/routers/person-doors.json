@@ -41,7 +41,6 @@
     "focusSessions.grantCapability",
     "focusSessions.startOrchestrator",
     "forms.update",
-    "govConfig.revoke",
     "governanceRules.setPodFloorDefault",
     "governanceRules.setPodSetting",
     "graph.addDependency",

@@ -57,7 +57,7 @@ export function pageShellClass(width: PageWidth): string {
  * The column every console page sits in — one width and one gutter for all
  * of them, so moving between pages never shifts the content edge.
  * `personal` is the narrower column of the self-service pages (Connected,
- * My vault, My computers), which sit outside the console's side nav. `wide`
+ * My vault, My devices), which sit outside the console's side nav. `wide`
  * is an object page that carries a rail beside its body.
  */
 export function PageShell({

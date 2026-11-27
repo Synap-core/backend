@@ -277,6 +277,8 @@ export * from "./renderer-bundles.js";
 // to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.
 export * from "./governance-ceilings.js";
 export * from "./compute-leases.js";
+// Devices (0461): the devices registry (`fleet`).
+export * from "./devices.js";
 // Realtime room tickets (0438): a pod app opens a live Yjs room.
 export * from "./realtime-room-tickets.js";
 

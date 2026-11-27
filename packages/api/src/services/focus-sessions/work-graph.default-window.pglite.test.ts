@@ -3,21 +3,25 @@
  * `buildWorkGraph` (the list's ONE WHERE, the real attach helpers) and the
  * REAL tRPC door (`focusSessions.graph`).
  *
- * 1. No `kind` named = every kind but CLOSED automation runs (founder
- *    default, 26 Nov 2026: one automation closed ~3,700 runs in 72 h and
- *    buried the map's ~400 other sessions under its 500 ceiling). Fixture rows
- *    sit where the candidate rules disagree:
+ * 1. No `kind` named = every kind but the sessions an AUTOMATION opened
+ *    (decision 90897bca, 27 Nov 2026: agents get no automation sessions until
+ *    they ask; it replaced the 26 Nov default, CLOSED automation runs only,
+ *    set when one automation closed ~3,700 runs in 72 h and buried the map's
+ *    ~400 other sessions under its 500 ceiling). Fixture rows sit where the
+ *    candidate rules disagree:
  *      - a closed run marked only by `metadata.automationId` (NULL origin): a
  *        rule reading `origin` alone keeps it;
  *      - a closed PERSON's session with a NULL origin: `NOT (origin IN …)`
  *        is NULL there, so a rule without `coalesce` drops it;
- *      - a closed playbook run: a rule dropping every closed `run` drops it;
- *      - a closed automation run a person ACCEPTED from triage (`work`): a
- *        rule on origin alone drops it;
- *      - open and failed automation runs: a rule on origin alone drops them;
+ *      - a closed playbook run: a rule dropping every `run` drops it;
+ *      - open and failed automation runs: the 26 Nov rule (closed only)
+ *        keeps them;
+ *      - a closed automation run a person ACCEPTED from triage (`work`: a
+ *        person took it on): a rule on origin or keys alone drops it;
  *      - a closed automation run at the far end of an open session's edge:
  *        a rule applied to the far ends loses the edge.
- *    `kind: "all"` and `kind: "run"` named explicitly keep the closed runs.
+ *    `kind: "all"` and `kind: "run"` named explicitly keep the automation
+ *    sessions. (Every agent door on the same rule: agent-doors-no-automation.)
  * 2. The tRPC door sends each node with the app fields only
  *    (`WORK_GRAPH_APP_NODE_FIELDS`), equal to the full node's, and none of
  *    the heavy row fields the service node carries.
@@ -213,21 +217,14 @@ beforeAll(async () => {
   );
 }, 60_000);
 
-describe("buildWorkGraph — the default window leaves out closed automation runs", () => {
-  it("no kind named: every other session stays, the closed automation runs do not", async () => {
+describe("buildWorkGraph — the default window leaves out what an automation opened", () => {
+  it("no kind named: every other session stays, the automation sessions do not", async () => {
     const g = await graph();
     expect(ids(g.nodes, true)).toEqual(
-      new Set([
-        S.workOpen,
-        S.workClosed,
-        S.autoOpen,
-        S.autoFailed,
-        S.playbookClosed,
-        S.autoAccepted,
-      ])
+      new Set([S.workOpen, S.workClosed, S.playbookClosed, S.autoAccepted])
     );
-    expect(g.nodes.map((n) => n.id)).not.toContain(S.autoClosed);
-    expect(g.nodes.map((n) => n.id)).not.toContain(S.autoKeyOnly);
+    for (const id of [S.autoClosed, S.autoKeyOnly, S.autoOpen, S.autoFailed])
+      expect(ids(g.nodes, true)).not.toContain(id);
     // Not counted as cut: the default window does not hold them.
     expect(g.window.truncated).toBe(false);
     expect(g.window.omitted).toBe(0);

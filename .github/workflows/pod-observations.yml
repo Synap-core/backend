@@ -5,7 +5,9 @@ name: Pod observations
 # posted as ONE observation to the pod's Hub door `observations.append`
 # (dev.pr_opened / dev.pr_merged / dev.pr_closed / ci.finished); the pod's
 # PR → session resolver moves the session that recorded the PR. The script
-# holds the event → observation map: scripts/pod-observation.mjs.
+# holds the event → observation map: scripts/pod-observation.mjs. A failed
+# run's ci.finished also carries where it broke (failing job, step and a
+# redacted log tail), read with this job's token: hence `actions: read`.
 #
 # Opt-in. The job runs only when the repo VARIABLE `SYNAP_POD_OBSERVATIONS`
 # is `on`, and it posts only when BOTH repo secrets are set:
@@ -33,6 +35,11 @@ permissions:
   contents: read
   # ci.finished reads the run's PR body for its `Pod session:` line.
   pull-requests: read
+  # A failed ci.finished reads the run's jobs and the failing job's log
+  # (GET .../actions/runs/{id}/jobs, .../actions/jobs/{id}/logs) for its
+  # `failure` excerpt. A permissions block sets every unlisted scope to none,
+  # so without this both reads are refused.
+  actions: read
 
 # DEBOUNCE (2026-10-29, lane cispeed): ~12 of ~50 queued backend runs at
 # 2026-10-28 22:20Z were this workflow, one per finished CI run, each waiting

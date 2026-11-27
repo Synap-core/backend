@@ -26,7 +26,12 @@ import { TRPCClientError } from "@trpc/client";
 import Link from "next/link";
 import { useState } from "react";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { useT } from "../../../lib/i18n/locale-provider";
+import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
+import {
+  OWN_ORGANISE_CLASS_PATTERN,
+  REVERSIBLE_CLASS_PATTERN,
+  podSwitchWords,
+} from "@synap-core/types/governance-rules";
 import { trpc } from "../../../lib/trpc";
 import {
   PresenceDeclined,
@@ -276,6 +281,12 @@ export function DefaultsStepForm() {
   );
 }
 
+/** The rows that are pod switches, by their pattern. */
+const SWITCH_OF_ROW = {
+  reversible: REVERSIBLE_CLASS_PATTERN,
+  ownOrganise: OWN_ORGANISE_CLASS_PATTERN,
+} as const;
+
 function DefaultSwitchRow({
   view,
   onChange,
@@ -293,15 +304,21 @@ function DefaultSwitchRow({
   factors: { note: FactorNote; onRetry: () => void } | null;
 }) {
   const t = useT(CATALOGS);
+  const locale = useConsoleLocale();
   const { row, state } = view;
-  const label = t(row === "presence" ? "presence.setting" : `${row}.label`);
-  const line =
-    row === "presence"
-      ? t("presence.line", {
-          sensitive: t("presence.sensitive"),
-          where: t("presence.where"),
-        })
-      : t(`${row}.line`);
+  // The two pod switches speak the one switch catalog, as Settings does.
+  const { label, line } =
+    row === "reversible" || row === "ownOrganise"
+      ? podSwitchWords(SWITCH_OF_ROW[row], { locale })
+      : row === "presence"
+        ? {
+            label: t("presence.setting"),
+            line: t("presence.line", {
+              sensitive: t("presence.sensitive"),
+              where: t("presence.where"),
+            }),
+          }
+        : { label: t(`${row}.label`), line: t(`${row}.line`) };
   return (
     <li className="flex flex-col gap-1.5 px-2 py-2.5">
       <div className="flex min-h-10 items-center gap-3">

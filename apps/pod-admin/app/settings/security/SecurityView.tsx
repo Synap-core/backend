@@ -20,7 +20,7 @@
  *     6. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`), for
  *        a member who joined another way. OMITTED when Cloud sign-in is not
  *        wired here or the owner turned it off.
- *     7. Signed-in devices — your other sessions; "Sign out other devices".
+ *     7. Your sign-ins — your other sessions; "Sign out everywhere else".
  *     8. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
  *        sign-in is not wired on this pod).
  *
@@ -176,7 +176,7 @@ export function SecurityView({
               {s && s.cloud.available && s.cloud.trust !== "off" ? (
                 <LinkCloudCard />
               ) : null}
-              <DevicesCard />
+              <SignInsCard />
               {s && s.cloud.available ? (
                 <CloudTrustCard
                   status={s}
@@ -691,7 +691,7 @@ function PasswordCard({
   );
 }
 
-// ─── 4. Devices ──────────────────────────────────────────────────────────
+// ─── 4. Sign-ins ─────────────────────────────────────────────────────────
 
 /**
  * Link this pod account to a Synap Cloud account: then the person can sign in
@@ -720,7 +720,7 @@ function LinkCloudCard() {
   );
 }
 
-function DevicesCard() {
+function SignInsCard() {
   const [load, setLoad] = useState<Load<number>>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
 
@@ -742,18 +742,21 @@ function DevicesCard() {
     try {
       const n = await revokeOtherSessions();
       addToast({
-        title: n === 1 ? "Signed out 1 device" : `Signed out ${n} devices`,
+        title:
+          n === 1
+            ? "Signed out 1 other sign-in"
+            : `Signed out ${n} other sign-ins`,
         color: "default",
       });
       await refresh();
     } catch (err) {
       // The sentence only; the detail is for the console, not the toast.
       console.warn(
-        "[security] sign out other devices failed:",
+        "[security] sign out everywhere else failed:",
         errorDetail(err)
       );
       addToast({
-        title: "Couldn't sign out other devices. Try again.",
+        title: "Couldn't sign out everywhere else. Try again.",
         color: "danger",
       });
     } finally {
@@ -763,14 +766,14 @@ function DevicesCard() {
 
   return (
     <SectionCard
-      title="Signed-in devices"
+      title="Your sign-ins"
       hint="Browsers and apps signed in to your account"
     >
       {load.kind === "loading" ? (
         <div className="h-10 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
       ) : load.kind === "failed" ? (
         <LoadFailed
-          message="Couldn't list your devices."
+          message="Couldn't list your sign-ins."
           detail={load.detail}
           onRetry={() => void refresh()}
         />
@@ -779,8 +782,8 @@ function DevicesCard() {
           <Laptop className="h-4 w-4 text-foreground/50" />
           <span className="flex-1 text-[13px] text-foreground/80">
             {load.data === 0
-              ? "Only this device"
-              : `This device and ${load.data} other${load.data === 1 ? "" : "s"}`}
+              ? "Only here"
+              : `Here and ${load.data} other sign-in${load.data === 1 ? "" : "s"}`}
           </span>
           {load.data > 0 ? (
             <Button
@@ -790,7 +793,7 @@ function DevicesCard() {
               isLoading={busy}
               onPress={() => void signOutOthers()}
             >
-              Sign out other devices
+              Sign out everywhere else
             </Button>
           ) : null}
         </div>

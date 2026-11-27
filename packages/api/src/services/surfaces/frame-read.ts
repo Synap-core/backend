@@ -155,10 +155,11 @@ async function loadCellSurface(
 }
 
 /**
- * A document that runs as a page in a frame: an `html` document, or the
- * source of an html-embed cell, which `cellInstances.createHtmlCell` (tRPC and
- * Hub REST) stores as a `text` document with mime type `text/html`. Nothing
- * wider: any other text document (markdown, plain text) is not a page.
+ * A document that runs as a page in a frame: an `html` document (what the
+ * HTML page door writes, for every entry point since 27 Nov 2026), or the
+ * source of an html-embed cell written before that, stored as a `text`
+ * document with mime type `text/html` (kept readable, never written again).
+ * Nothing wider: any other text document (markdown, plain text) is not a page.
  */
 export function isFramePage(doc: {
   type: string | null;

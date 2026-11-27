@@ -238,7 +238,7 @@ describe("hostComputerHref", () => {
   it("opens the computer it runs on; null off a computer", () => {
     expect(
       hostComputerHref(row({ hostComputer: { id: "c 1", name: "devbox" } }))
-    ).toBe("/computers/c%201");
+    ).toBe("/devices/c%201");
     expect(hostComputerHref(row({ hostComputer: null }))).toBeNull();
     expect(hostComputerHref(row({}))).toBeNull();
   });

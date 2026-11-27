@@ -606,6 +606,8 @@ export const SENSITIVE_ACTIONS = {
   // How a tool action runs for every AI (on its own / asks first / never).
   "governanceRules.setActionMode": "governance",
   "govConfig.set": "governance",
+  // A host the pod's AIs may read JSON from (`http.get_json`'s allow-list).
+  "govConfig.allowHost": "governance",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type SensitiveActionPath = keyof typeof SENSITIVE_ACTIONS;
@@ -691,6 +693,7 @@ export const SENSITIVE_ACTION_TOKENS = {
   "governanceRules.setPodSetting": { action: "update", objectKind: "rule" },
   "governanceRules.setActionMode": { action: "update", objectKind: "rule" },
   "govConfig.set": { action: "update", objectKind: "rule" },
+  "govConfig.allowHost": { action: "add", objectKind: "website" },
 } as const satisfies Record<
   SensitiveActionPath,
   { action: string; objectKind: string }

@@ -101,7 +101,7 @@ export const ArrangeViewRequestSchema = z
     workspaceId: uuidQueryParam.optional(),
     widgets: z
       .array(BentoWidgetSchema)
-      .describe("Replacement widget arrangement for a bento view."),
+      .describe("Replacement cell arrangement for a bento view."),
     agentUserId: z.string().optional(),
     reasoning: z.string().optional(),
     sourceMessageId: z.string().optional(),

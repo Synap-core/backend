@@ -354,7 +354,11 @@ function devHoldResumes(
     case "pr":
       return to === "closed"
         ? `resumes when ${name} is closed`
-        : `resumes when ${name} merges`;
+        : to === "checks_failed"
+          ? `resumes when the checks of ${name} fail`
+          : to === "checks_green"
+            ? `resumes when the checks of ${name} pass`
+            : `resumes when ${name} merges`;
     case "main":
       return `resumes when ${name} is green`;
     // A person reads the tests, never a devbox job's name (D-R4).

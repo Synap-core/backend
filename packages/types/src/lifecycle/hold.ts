@@ -85,7 +85,7 @@ export const HOLD_REQUIRED_MESSAGE =
  * another member's recorded `dev.pr_merged` must not resume it.
  */
 export const HOLD_DEV_MOVES_HELP =
-  "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict)";
+  "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging; 'checks_failed' | 'checks_green' = when its required checks end red | green); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict)";
 
 /**
  * The AI form of `until.moves`, said only when a pause is refused (and in
@@ -159,7 +159,9 @@ const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
  * A DEV FACT a hold can wait on (plan P1.4) — not a transition subject but a
  * fact a producer posts (`events/dev-loop.ts`):
  *  - `pr:<owner/name>#<n>`: the PR merged (`dev.pr_merged`), or with
- *    `to: "closed"` closed without merging (`dev.pr_closed`);
+ *    `to: "closed"` closed without merging (`dev.pr_closed`), or with
+ *    `to: "checks_failed" | "checks_green"` its required checks ended red |
+ *    green (the newest CI `ci.finished` of a ready PR after the pause began);
  *  - `main:<owner/name>`: the repo's main is green again — a
  *    `dev.repo_snapshot` observed after the pause began says `health: ok`;
  *  - `job:<name>`: the devbox job ended — its `ci.finished` (workflow
@@ -186,7 +188,7 @@ export const HOLD_AI_MOVES = "ai:available";
 
 /** The `until.to` each dev fact accepts; absent = the first (pr) or any (job). */
 export const HOLD_DEV_TO = {
-  pr: ["merged", "closed"],
+  pr: ["merged", "closed", "checks_failed", "checks_green"],
   main: [],
   job: ["passed", "failed"],
   ai: [],

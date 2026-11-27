@@ -438,7 +438,7 @@ function RedeemForm() {
         classNames={{ input: "font-mono tracking-wide" }}
       />
       <p className="text-[12px] text-foreground/65">
-        The code is used up, and your other devices are signed out.
+        The code is used up, and you’re signed out everywhere else.
       </p>
       <Button
         type="submit"

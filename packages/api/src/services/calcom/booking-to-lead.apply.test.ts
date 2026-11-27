@@ -174,9 +174,10 @@ function store() {
 
 async function applyBooking(
   s: ReturnType<typeof store>,
-  existingPersonId?: string
+  existingPersonId?: string,
+  options: Parameters<typeof mapBookingToGraph>[1] = {}
 ) {
-  const graph = mapBookingToGraph(BOOKING);
+  const graph = mapBookingToGraph(BOOKING, options);
   if (existingPersonId) {
     // What submitCaptureGraph's resolveIdentity step does on an email hit.
     graph.entities.find((e) => e.ref === "person")!.existingEntityId =
@@ -319,5 +320,52 @@ describe("Cal.com booking → lead (W15)", () => {
     seedPerson(b, "qualified");
     await applyBooking(b, "person-ada");
     expect(b.entityCaller.updateFacet).not.toHaveBeenCalled();
+  });
+});
+
+describe("Cal.com booking → attribution-event (founder, 26 Nov 2026)", () => {
+  const ATTRIBUTION = { attribution: { receivedAt: "2026-10-13T08:00:00Z" } };
+
+  it("lands ONE attribution-event, eventtype booking, linked to the NEW person by id", async () => {
+    const s = store();
+    await applyBooking(s, undefined, ATTRIBUTION);
+
+    const attributions = s.entityCaller.create.mock.calls
+      .map((c) => c[0] as { profileSlug: string; properties?: object })
+      .filter((i) => i.profileSlug === "attribution-event");
+    expect(attributions).toHaveLength(1);
+    expect(attributions[0]!.properties).toMatchObject({
+      source: "cal.com",
+      medium: "booking",
+      campaign: "(none)",
+      eventtype: "booking",
+      timestamp: "2026-10-13T08:00:00Z",
+    });
+
+    const person = [...s.entities.values()].find(
+      (e) => e.profileSlug === "person"
+    )!;
+    const attribution = [...s.entities.values()].find(
+      (e) => e.profileSlug === "attribution-event"
+    )!;
+    expect(s.relations).toContainEqual({
+      sourceId: attribution.id,
+      targetId: person.id,
+      type: "relates_to",
+    });
+  });
+
+  it("links it to the EXISTING person the email resolved to", async () => {
+    const s = store();
+    seedPerson(s, "qualified");
+    await applyBooking(s, "person-ada", ATTRIBUTION);
+    const attribution = [...s.entities.values()].find(
+      (e) => e.profileSlug === "attribution-event"
+    )!;
+    expect(s.relations).toContainEqual({
+      sourceId: attribution.id,
+      targetId: "person-ada",
+      type: "relates_to",
+    });
   });
 });

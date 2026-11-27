@@ -62,7 +62,7 @@ export const en = {
   "connected.untitled": "Untitled",
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Loading the surfaces on this…",
-  "surfaces.failed": "The surfaces on this couldn’t be read.",
+  "surfaces.failed": "Couldn’t load surfaces.",
   "surfaces.partial":
     "Some places couldn’t be read, so this list may be short.",
   "surfaces.untitled": "Untitled",
@@ -73,6 +73,11 @@ export const en = {
   "surfaces.notFound": "Not found",
   "surfaces.missing":
     "This surface isn’t on this page any more, or you can’t see it.",
+  "reader.share": "Share",
+  "reader.shareCopied": "Link copied",
+  "reader.share.aria": "Copy this page’s link",
+  "reader.more.aria": "More about {title}",
+  "reader.signedInAs": "Signed in as {who}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -130,7 +135,7 @@ export const fr: Catalog<typeof en> = {
   "connected.untitled": "Sans titre",
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Chargement des surfaces…",
-  "surfaces.failed": "Les surfaces n’ont pas pu être lues.",
+  "surfaces.failed": "Impossible de charger les surfaces.",
   "surfaces.partial":
     "Certains endroits n’ont pas pu être lus : la liste peut être incomplète.",
   "surfaces.untitled": "Sans titre",
@@ -141,6 +146,11 @@ export const fr: Catalog<typeof en> = {
   "surfaces.notFound": "Introuvable",
   "surfaces.missing":
     "Cette surface n’est plus sur cette page, ou vous ne pouvez pas la voir.",
+  "reader.share": "Partager",
+  "reader.shareCopied": "Lien copié",
+  "reader.share.aria": "Copier le lien de cette page",
+  "reader.more.aria": "Plus sur {title}",
+  "reader.signedInAs": "Connecté en tant que {who}",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

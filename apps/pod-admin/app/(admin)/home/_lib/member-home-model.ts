@@ -130,7 +130,7 @@ export interface CountRow {
   href: string;
 }
 
-export const MY_COMPUTERS_HREF = "/my-computers";
+export const MY_DEVICES_HREF = "/my-devices";
 export const MY_CONNECTIONS_HREF = "/my-connections";
 
 /**
@@ -138,7 +138,7 @@ export const MY_CONNECTIONS_HREF = "/my-connections";
  * it opens is where a computer is connected): never `null`.
  */
 export function computerRow(computers: readonly ComputerFacts[]): CountRow {
-  return { count: computers.length, href: MY_COMPUTERS_HREF };
+  return { count: computers.length, href: MY_DEVICES_HREF };
 }
 
 /** The viewer's live keys (a revoked or switched-off key gives no access). */

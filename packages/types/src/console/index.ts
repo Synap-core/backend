@@ -73,8 +73,10 @@ export const CONSOLE_PAGES = {
     focus: false,
     verb: "manage",
   },
+  // Devices (decision 78fc3fa1): the page moved to `/devices`, the old
+  // address redirects. The id stays `computers` so client links keep working.
   computers: {
-    path: "/computers",
+    path: "/devices",
     audience: "admin",
     focus: true,
     verb: "see-all",
@@ -232,7 +234,7 @@ export type ConsoleAppVia = (typeof CONSOLE_APP_VIAS)[number];
 export const CONSOLE_OBJECT_PAGES = {
   computer: { audience: "admin" },
   /**
-   * One of the person's OWN computers (`/my-computers/<id>`), the page a
+   * One of the person's OWN computers (`/my-devices/<id>`), the page a
    * member manages it on. `consoleLink` sends a non-admin's `computer` here.
    */
   myComputer: { audience: "member" },
@@ -310,11 +312,11 @@ export function consolePath(target: ConsoleTarget): string | null {
   switch (t.page) {
     case "computer": {
       const id = nonEmpty(t.id);
-      return id ? `/computers/${encodeURIComponent(id)}` : null;
+      return id ? `/devices/${encodeURIComponent(id)}` : null;
     }
     case "myComputer": {
       const id = nonEmpty(t.id);
-      return id ? `/my-computers/${encodeURIComponent(id)}` : null;
+      return id ? `/my-devices/${encodeURIComponent(id)}` : null;
     }
     case "agent": {
       const id = nonEmpty(t.id);
@@ -464,7 +466,7 @@ export function consoleLink(
 ): ConsoleLink | null {
   if (!target) return null;
   // A member manages their own computer on its member page; the pod's
-  // /my-computers/<id> reads a computer that is not theirs as not found.
+  // /my-devices/<id> reads a computer that is not theirs as not found.
   if (target.page === "computer" && (role ?? "member") !== "admin") {
     target = { page: "myComputer", id: target.id };
   }

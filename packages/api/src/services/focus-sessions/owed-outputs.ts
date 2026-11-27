@@ -377,6 +377,12 @@ export interface ListOwedSlotsParams {
    */
   withoutOpenPrFact?: boolean;
   /**
+   * The open-PR read to ask under `needsYouLens` (a needs-you read's ONE
+   * shared read, `sharedOpenPrRead`). Absent = `sessionIdsBlockingOpenPr`
+   * under the owner floor. A failed read THROWS.
+   */
+  openPrRead?: (sessionIds: readonly string[]) => Promise<Set<string>>;
+  /**
    * The caller never shows a need-you card (the waiting-on collector): skip
    * resolving the thing each ask holds up (`blockedThing`), which only the
    * card reads. The needs-you lens resolves it by default.
@@ -691,15 +697,18 @@ export async function listOwedSlots(
     .limit(limit);
 
   // The needs-you rule reads whether the session blocks an open PR: one read
-  // for the page, the same helper every other classifier calls.
+  // for the page, the same helper every other classifier calls (or the
+  // caller's shared read). A failed read THROWS: never "no open PR".
   const blocking =
     params.needsYouLens && !params.withoutOpenPrFact
-      ? await (
-          await import("../dev-loop/open-pr-blocking.js")
-        ).sessionIdsBlockingOpenPr(
-          { userId },
-          rows.map((r) => r.id)
-        )
+      ? params.openPrRead
+        ? await params.openPrRead(rows.map((r) => r.id))
+        : await (
+            await import("../dev-loop/open-pr-blocking.js")
+          ).sessionIdsBlockingOpenPr(
+            { userId },
+            rows.map((r) => r.id)
+          )
       : new Set<string>();
   const slots = rows
     .flatMap((r) => {
