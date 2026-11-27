@@ -12419,6 +12419,11 @@ export interface ProposalMaterializedRecord {
 		winnerId: string;
 	};
 }
+declare const FLOOR_CLASS_PATTERNS: readonly [
+	"@agent-defines-kinds",
+	"@agent-builds-structure"
+];
+export type FloorClassPattern = (typeof FLOOR_CLASS_PATTERNS)[number];
 export interface ReversibleDefaultState {
 	enabled: boolean;
 	/** The active row, so a surface can open it; null when off. */
@@ -12429,6 +12434,7 @@ declare const POD_NUMBER_SETTINGS: {
 		readonly default: 24;
 		readonly max: 168;
 		readonly min: 1;
+		readonly parameterOf: "@own-organise";
 	};
 	readonly "governance.project_evidence_min": {
 		readonly default: 5;
@@ -26727,6 +26733,20 @@ export interface WriteActionModeResult {
 	ruleId: string | null;
 	/** False when it was already set that way (nothing written). */
 	changed: boolean;
+}
+/**
+ * One platform floor as Settings and the desktop list it. `switchedBy`: the
+ * pod switch that lets the other approval rules decide it (`floorClassOf`);
+ * absent, no switch lifts it.
+ */
+export interface PlatformFloor {
+	key: "admin" | "agent-builds-structure" | "agent-schema" | "agent-structure" | "destructive" | "force-propose";
+	label: string;
+	rung: string;
+	editable: false;
+	actions: readonly string[];
+	note?: string;
+	switchedBy?: FloorClassPattern;
 }
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
@@ -46252,42 +46272,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
-				alwaysPropose: ({
-					actions: readonly string[];
-					editable: false;
-					key: "admin";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-schema";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "agent-structure";
-					label: string;
-					note: string;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "destructive";
-					label: string;
-					note?: undefined;
-					rung: string;
-				} | {
-					actions: readonly string[];
-					editable: false;
-					key: "force-propose";
-					label: string;
-					note: string;
-					rung: string;
-				})[];
+				alwaysPropose: PlatformFloor[];
 				autoApproveFor: {
 					actions: readonly string[];
 					editable: false;
@@ -46308,7 +46293,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
 					ruleId: string | null;
 				}[];
-				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
+				settings: {
+					key: string;
+					max: number;
+					min: number;
+					parameterOf: string | null;
+					value: number;
+				}[];
 			};
 		}>;
 		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{

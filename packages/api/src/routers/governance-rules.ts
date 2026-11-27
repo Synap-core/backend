@@ -62,6 +62,7 @@ import {
   setPodClassDefault,
   readPodNumberSetting,
   readPodNumberSettings,
+  POD_NUMBER_SETTINGS,
   POD_NUMBER_SETTING_KEYS,
 } from "@synap/database";
 import {
@@ -134,6 +135,9 @@ import {
   AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
   FLOOR_CLASS_PATTERNS,
   AGENT_DEFINES_KINDS_CLASS_PATTERN,
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+  floorClassOf,
+  type FloorClassPattern,
 } from "@synap/governance-policy";
 
 // The active-rule predicate, the pod∪workspace scope lens, and the agent-label
@@ -501,6 +505,27 @@ async function revokeRulesIn(
   return rows;
 }
 
+/**
+ * One platform floor as Settings and the desktop list it. `switchedBy`: the
+ * pod switch that lets the other approval rules decide it (`floorClassOf`);
+ * absent, no switch lifts it.
+ */
+export interface PlatformFloor {
+  key:
+    | "admin"
+    | "agent-schema"
+    | "agent-builds-structure"
+    | "agent-structure"
+    | "destructive"
+    | "force-propose";
+  label: string;
+  rung: string;
+  editable: false;
+  actions: readonly string[];
+  note?: string;
+  switchedBy?: FloorClassPattern;
+}
+
 export const governanceRulesRouter = router({
   /**
    * THE agent × work matrix (agent routing W2): every agent's verdict on every
@@ -775,11 +800,68 @@ export const governanceRulesRouter = router({
    *   - `autoApproveFor` — the DEFAULT_AUTO_APPROVE whitelist (rung 8 floor).
    *   - `alwaysPropose`  — the hard floors that always route to a proposal
    *     regardless of any rule: ADMIN (rung 2), AGENT-DEFINED SCHEMA (rung
-   *     2.08), DESTRUCTIVE (rung 2.5), and the forcePropose scope/identity floor
-   *     (rung 2.1, applied dynamically — not a fixed action list). Every entry
-   *     is read-only (not user-editable).
+   *     2.08), AGENT STRUCTURE (rung 2.09, split into the part a pod switch
+   *     lifts and the part none does), DESTRUCTIVE (rung 2.5), and the
+   *     forcePropose scope/identity floor (rung 2.1, applied dynamically — not
+   *     a fixed action list). Every entry is read-only (not user-editable); one
+   *     a pod switch lifts names it (`switchedBy`).
    */
   platformDefaults: protectedProcedure.query(async () => {
+    const alwaysPropose: PlatformFloor[] = [
+      {
+        key: "admin" as const,
+        label: "Administrative actions",
+        rung: "2",
+        editable: false as const,
+        actions: ADMIN_ACTIONS,
+      },
+      {
+        key: "agent-schema" as const,
+        label: "Agents defining kinds or roles",
+        rung: "2.08",
+        editable: false as const,
+        actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
+        note: "An agent defining a kind or role always goes to review, and no rule can widen it, unless the pod switch lets the other approval rules decide. A person defining one is unaffected.",
+        switchedBy: AGENT_DEFINES_KINDS_CLASS_PATTERN,
+      },
+      {
+        key: "agent-builds-structure" as const,
+        label:
+          "Agents creating playbooks, automations or spaces, or turning an automation on",
+        rung: "2.09",
+        editable: false as const,
+        actions: AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[],
+        note: "Always goes to review, and no rule can widen it, unless the pod switch lets the other approval rules decide. A person doing the same is unaffected.",
+        switchedBy: AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+      },
+      {
+        key: "agent-structure" as const,
+        label:
+          "Agents changing playbooks or automations, or adding cells and renderers",
+        rung: "2.09",
+        editable: false as const,
+        // The structure floor no switch lifts.
+        actions: AGENT_STRUCTURE_WRITE_EVENT_KEYS.filter(
+          (key) => floorClassOf(key) === null
+        ) as readonly string[],
+        note: "Always goes to review, and no rule or switch can widen it. A person doing the same is unaffected.",
+      },
+      {
+        key: "destructive" as const,
+        label: "Destructive actions (delete / archive / purge / merge)",
+        rung: "2.5",
+        editable: false as const,
+        actions: DESTRUCTIVE_ACTIONS,
+      },
+      {
+        key: "force-propose" as const,
+        label: "Scope / identity changes",
+        rung: "2.1",
+        editable: false as const,
+        actions: [] as readonly string[],
+        note: "Applied dynamically when a write alters a record's scope or identity (e.g. promote-to-global, change of profile kind) — not a fixed action list.",
+      },
+    ];
     return {
       autoApproveFor: {
         key: "default-auto-approve" as const,
@@ -788,46 +870,7 @@ export const governanceRulesRouter = router({
         editable: false as const,
         actions: DEFAULT_AUTO_APPROVE,
       },
-      alwaysPropose: [
-        {
-          key: "admin" as const,
-          label: "Administrative actions",
-          rung: "2",
-          editable: false as const,
-          actions: ADMIN_ACTIONS,
-        },
-        {
-          key: "agent-schema" as const,
-          label: "Agents defining kinds or roles",
-          rung: "2.08",
-          editable: false as const,
-          actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
-          note: "An agent defining a kind or role always goes to review, and no rule can widen it; only the pod switch @agent-defines-kinds lets the other approval rules decide. A person defining one is unaffected.",
-        },
-        {
-          key: "agent-structure" as const,
-          label: "Agents creating workspaces, cells, playbooks or automations",
-          rung: "2.09",
-          editable: false as const,
-          actions: AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[],
-          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it; only the pod switch @agent-builds-structure lets the other approval rules decide its playbook, automation and workspace creates and automation activations. A person doing the same is unaffected.",
-        },
-        {
-          key: "destructive" as const,
-          label: "Destructive actions (delete / archive / purge / merge)",
-          rung: "2.5",
-          editable: false as const,
-          actions: DESTRUCTIVE_ACTIONS,
-        },
-        {
-          key: "force-propose" as const,
-          label: "Scope / identity changes",
-          rung: "2.1",
-          editable: false as const,
-          actions: [] as readonly string[],
-          note: "Applied dynamically when a write alters a record's scope or identity (e.g. promote-to-global, change of profile kind) — not a fixed action list.",
-        },
-      ],
+      alwaysPropose,
     };
   }),
 
@@ -897,7 +940,8 @@ export const governanceRulesRouter = router({
   /**
    * The floors a pod may switch (`FLOOR_CLASS_PATTERNS`): each family's class
    * row state, the writes it covers, and the pod's number settings the
-   * governance reads (`POD_NUMBER_SETTINGS`). Read by Settings › Approvals.
+   * governance reads (`POD_NUMBER_SETTINGS`): each its value, its range and
+   * the switch it is a parameter of. Read by Settings › Approvals.
    */
   podFloorDefaults: protectedProcedure.query(async ({ ctx }) => {
     const families = await Promise.all(
@@ -910,9 +954,20 @@ export const governanceRulesRouter = router({
             : (AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[]),
       }))
     );
+    const values = await readPodNumberSettings(db);
     return {
       families,
-      settings: await readPodNumberSettings(db),
+      settings: POD_NUMBER_SETTING_KEYS.map((key) => {
+        const spec: { min: number; max: number; parameterOf?: string } =
+          POD_NUMBER_SETTINGS[key];
+        return {
+          key: key as string,
+          value: values[key] as number,
+          min: spec.min,
+          max: spec.max,
+          parameterOf: spec.parameterOf ?? null,
+        };
+      }),
       canManage: await isPodAdmin(ctx.userId),
     };
   }),
@@ -946,10 +1001,21 @@ export const governanceRulesRouter = router({
   setPodSetting: credentialProcedure
     .input(presenceInput)
     .input(
-      z.object({
-        key: z.enum(POD_NUMBER_SETTING_KEYS),
-        value: z.number().int(),
-      })
+      z
+        .object({
+          key: z.enum(POD_NUMBER_SETTING_KEYS),
+          value: z.number().int(),
+        })
+        .superRefine(({ key, value }, ctx) => {
+          const { min, max } = POD_NUMBER_SETTINGS[key];
+          if (value < min || value > max) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["value"],
+              message: `From ${min} to ${max}.`,
+            });
+          }
+        })
     )
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);

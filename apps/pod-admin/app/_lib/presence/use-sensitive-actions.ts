@@ -279,6 +279,32 @@ export function useSetOwnOrganiseDefault(
   );
 }
 
+/** A pod floor family's switch (`@agent-defines-kinds`, `@agent-builds-structure`). */
+export function useSetPodFloorDefault(
+  defaults?: ActionHandlers<
+    typeof trpc.governanceRules.setPodFloorDefault.useMutation
+  >
+) {
+  return useSensitiveAction(
+    "governanceRules.setPodFloorDefault",
+    trpc.governanceRules.setPodFloorDefault.useMutation(),
+    defaults
+  );
+}
+
+/** One of the pod's governance number settings. */
+export function useSetPodSetting(
+  defaults?: ActionHandlers<
+    typeof trpc.governanceRules.setPodSetting.useMutation
+  >
+) {
+  return useSensitiveAction(
+    "governanceRules.setPodSetting",
+    trpc.governanceRules.setPodSetting.useMutation(),
+    defaults
+  );
+}
+
 /** How a tool action runs for every AI (on its own / asks first / never). */
 export function useSetActionMode(
   defaults?: ActionHandlers<
