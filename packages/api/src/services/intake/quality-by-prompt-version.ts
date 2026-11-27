@@ -364,7 +364,11 @@ export async function gatherQualityByPromptVersion(params: {
           .select({
             sessionId: proposals.sessionId,
             status: proposals.status,
-            data: proposals.data,
+            // ONLY the key the disposition rule reads (`countRejectedDispositions`,
+            // `isPartiallyApprovedData`), in the stored shape, so the rule runs
+            // unchanged in JS. The whole `data` was ~39 MB for 10k rows on a live
+            // pod, read on every Home open (diagnose.global) for one empty key.
+            data: drizzleSql<unknown>`jsonb_build_object('dispositions', ${proposals.data} -> 'dispositions')`,
             reasonCode: proposals.reasonCode,
             rejectionReason: proposals.rejectionReason,
             revisionHistory: proposals.revisionHistory,
