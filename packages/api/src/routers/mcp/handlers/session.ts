@@ -16,7 +16,9 @@ import {
   stepTimePatch,
 } from "@synap-core/types/units";
 import { readRunCost } from "../../../services/runs/run-cost.js";
+import { createLogger } from "@synap-core/core";
 import { AccessContext } from "../../../access/index.js";
+import { devicesReadableByGrant } from "../../../access/grant-door-fence.js";
 import {
   agentDeviceRow,
   listFleetDevices,
@@ -56,7 +58,7 @@ import {
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { namedConversationOf } from "../../../services/focus-sessions/conversation-changes.js";
-import { getRequestClientKey } from "@synap/database";
+import { getRequestClientKey, getRequestGrant } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
   parseSessionReadDetail,
@@ -340,6 +342,8 @@ function readTemplateIdArg(raw: unknown): string | null | undefined {
     { code: "BAD_REQUEST" }
   );
 }
+
+const listAgentsLogger = createLogger({ module: "mcp/list-agents" });
 
 export const sessionHandlers: McpHandlerMap = {
   /**
@@ -1274,26 +1278,27 @@ export const sessionHandlers: McpHandlerMap = {
       LIST_PAGE_DEFAULT,
       LIST_PAGE_MAX
     );
-    // The person's devices (devices plan 767a5978 §4): kind, status and
-    // resources; a computer's `principalUserId` is its `computers[]`
-    // `agentUserId`. `computers[]` stays for two releases. A failed read is
-    // said (`devices: null` + `devicesError`), never an empty list, and never
-    // costs the roster above.
+    // The person's devices: kind, status and resources; a computer's
+    // `principalUserId` is its `computers[]` `agentUserId`. `computers[]`
+    // stays for two releases. A key whose grant does not read devices, or a
+    // failed read, is said (`devices: null` + `devicesError`), never an empty
+    // list beside a full `computers[]`, and never costs the roster above.
     let devices: ReturnType<typeof agentDeviceRow>[] | null = null;
     let devicesError: string | undefined;
-    try {
-      devices = (
-        await listFleetDevices(
-          AccessContext.agent({ userId, agentUserId: agentUserId ?? null })
-        )
-      ).map(agentDeviceRow);
-    } catch (err) {
-      const { createLogger } = await import("@synap-core/core");
-      createLogger({ module: "mcp/list-agents" }).warn(
-        { err },
-        "devices unreadable"
-      );
-      devicesError = "The devices could not be read. Try again.";
+    if (!devicesReadableByGrant(getRequestGrant())) {
+      devicesError =
+        "Not granted: this key's grant does not read devices (installation.read).";
+    } else {
+      try {
+        devices = (
+          await listFleetDevices(
+            AccessContext.agent({ userId, agentUserId: agentUserId ?? null })
+          )
+        ).map(agentDeviceRow);
+      } catch (err) {
+        listAgentsLogger.warn({ err }, "devices unreadable");
+        devicesError = "The devices could not be read. Try again.";
+      }
     }
     return ok({
       ...roster,
