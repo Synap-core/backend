@@ -10,9 +10,16 @@
  *     entity" would report A updated A;
  *   - a writer whose producer is OFF the page — a one-sided page filter would
  *     report a line the map cannot draw;
- *   - a malformed `automationRunId` — a uuid cast would throw the whole read.
+ *   - a malformed `automationRunId` — a uuid cast would throw the whole read;
+ *   - an UPPERCASE run id and trigger event id — a bare `::uuid` cast or a
+ *     case-insensitive pattern would match them; `pk::text = <text>` never
+ *     did (Postgres prints a uuid lowercase), so they must not match now;
+ *   - the triggered join's PLAN: `automation_runs` and `events` are probed by
+ *     their primary key (`uuidFromTextSql`), never `pk::text = <text>`, which
+ *     hides the key index and plans a Seq Scan (the defect this pins).
  *
- * NOT covered: `attachSessionInteractions`' unavailable branch (a thrown read).
+ * NOT covered: `attachSessionInteractions`' unavailable branch (a thrown read);
+ * TimescaleDB chunking (PGlite has none: `events` is one plain table here).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -23,6 +30,8 @@ const h = vi.hoisted(() => ({
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
+  /** Every statement drizzle sends, so a test can EXPLAIN the real SQL. */
+  seen: [] as Array<{ sql: string; params?: unknown[] }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -30,6 +39,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
   const client = new PGlite();
+  const query = client.query.bind(client);
+  (client as unknown as { query: unknown }).query = (
+    sql: string,
+    params?: unknown[],
+    opts?: unknown
+  ) => {
+    h.seen.push({ sql, params });
+    return query(sql, params, opts as never);
+  };
   h.client = client as unknown as typeof h.client;
   const pg = drizzle(client);
   return { ...actual, db: pg, getDb: async () => pg };
@@ -67,6 +85,8 @@ const S = {
   selfRun: randomUUID(), // run whose trigger event carries its OWN session
   editor: randomUUID(), // writes to writer's output
   broken: randomUUID(), // malformed automationRunId
+  upperRun: randomUUID(), // automationRunId = the run's id in UPPERCASE
+  upperEvent: randomUUID(), // chain-context triggerEventId in UPPERCASE
   offPageProducer: randomUUID(), // produced something editor touched; not on page
 };
 const ENTITY = randomUUID();
@@ -112,6 +132,9 @@ beforeAll(async () => {
   for (const t of [focusSessions, events, links, automationRuns]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // `events`' key is (id, timestamp) (a hypertable needs its time column in
+  // it); the column-level DDL above cannot see a composite key.
+  await h.client!.exec(`alter table events add primary key (id, timestamp);`);
 
   // writer's write fires an automation run (automation_runs.trigger_event_id)…
   const fired = await event({
@@ -140,6 +163,12 @@ beforeAll(async () => {
 
   // Malformed metadata must be a non-match, never a cast error.
   await session(S.broken, { automationRunId: "not-a-uuid" });
+  // Uppercase ids: `pk::text = <text>` never matched them, so neither may the
+  // uuid probe (a bare `::uuid` cast would).
+  await session(S.upperRun, { automationRunId: runRow.toUpperCase() });
+  await session(S.upperEvent, {
+    automationChainContext: { triggerEventId: fired.toUpperCase() },
+  });
 
   // writer PRODUCED the entity (its own create event above is excluded);
   // editor wrote to it twice.
@@ -152,9 +181,27 @@ beforeAll(async () => {
   await session(S.offPageProducer);
   await produced(S.offPageProducer, OFF_ENTITY);
   await event({ sessionId: S.editor, subjectId: OFF_ENTITY });
+
+  // Enough runs and events that a sequential probe costs more than a key one.
+  await h.client!.exec(`
+    insert into automation_runs (id) select gen_random_uuid() from generate_series(1, 5000);
+    insert into events (id, timestamp, type)
+      select gen_random_uuid(), now() - make_interval(mins => g), 'entities.update'
+      from generate_series(1, 5000) g;
+    analyze automation_runs; analyze events; analyze focus_sessions;
+  `);
 });
 
-const PAGE = [S.writer, S.run, S.pbRun, S.selfRun, S.editor, S.broken];
+const PAGE = [
+  S.writer,
+  S.run,
+  S.pbRun,
+  S.selfRun,
+  S.editor,
+  S.broken,
+  S.upperRun,
+  S.upperEvent,
+];
 
 describe("readSessionInteractions (PGlite)", () => {
   it("derives triggered (both run stamps) and updated, with no self-loops and nothing off the page", async () => {
@@ -183,6 +230,28 @@ describe("readSessionInteractions (PGlite)", () => {
           i.toSessionId === S.editor
       )
     ).toBe(true);
+  });
+
+  it("probes automation_runs and events by their primary key", async () => {
+    h.seen.length = 0;
+    await readSessionInteractions(PAGE, db);
+    // The triggered query is the one statement that reads automation_runs.
+    const triggered = h.seen.filter((s) => /"automation_runs"/.test(s.sql));
+    expect(triggered).toHaveLength(1);
+    const plan = (
+      await h.client!.query<Record<string, unknown>>(
+        `explain ${triggered[0]!.sql}`,
+        triggered[0]!.params
+      )
+    ).rows
+      .map((r) => String(r["QUERY PLAN"]))
+      .join("\n");
+    // Non-vacuity: the plan reaches both tables.
+    expect(plan).toMatch(/ on automation_runs/);
+    expect(plan).toMatch(/ on events/);
+    expect(plan).toMatch(/Index (Only )?Scan using automation_runs_pkey/);
+    expect(plan).toMatch(/Index (Only )?Scan using events_pkey/);
+    expect(plan).not.toMatch(/Seq Scan on (automation_runs|events)/);
   });
 
   it("reads nothing for a page of fewer than two sessions", async () => {

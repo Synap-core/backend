@@ -101,7 +101,14 @@ behavioural("playbook run reaper WHERE against a live Postgres", () => {
     await sql.unsafe(`CREATE SCHEMA ${SCHEMA}`);
     await sql.unsafe(`SET search_path TO ${SCHEMA}`);
     await sql.unsafe(`CREATE TABLE focus_sessions (
-      id text PRIMARY KEY, status text NOT NULL, updated_at timestamptz NOT NULL)`);
+      id text PRIMARY KEY, status text NOT NULL, updated_at timestamptz NOT NULL,
+      channel_id text)`);
+    // The room half of the exemption (founder Q14): no room here, so no post.
+    await sql.unsafe(`CREATE TABLE channels (
+      id text PRIMARY KEY, context_object_type text, context_object_id text)`);
+    await sql.unsafe(`CREATE TABLE messages (
+      id text PRIMARY KEY, channel_id text, timestamp timestamptz,
+      author_type text, deleted_at timestamptz, ephemeral boolean, metadata jsonb)`);
     await sql.unsafe(`CREATE TABLE playbook_runs (
       id text PRIMARY KEY, status text NOT NULL, session_id text,
       started_at timestamptz NOT NULL)`);

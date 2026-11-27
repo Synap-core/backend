@@ -123,6 +123,7 @@ import {
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
 import { PLAYBOOK_OFFERED_AT_KEY } from "./session-nudges.js";
+import { PARENT_PLAYBOOK_DECLINED_AT_METADATA_KEY } from "./follow-markers.js";
 // Types only: the writer is loaded lazily by `session-birth.ts`.
 import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
@@ -198,14 +199,21 @@ function readConversationCwd(metadata: unknown): string | null {
  * `templateId: null` is the caller's explicit "no playbook": recorded as the
  * offer already made (`PLAYBOOK_OFFERED_AT_KEY`), so a later update's nudge
  * does not offer the pod's playbooks again (ticket dddeb66c). Absent = the
- * caller said nothing, and the offer stays open.
+ * caller said nothing, and the offer stays open. On a door that binds on
+ * facts it also declines the parent's playbook
+ * (`PARENT_PLAYBOOK_DECLINED_AT_METADATA_KEY`), now and later (finding
+ * 42e4af30).
  */
 function playbookOptOutPatch(
-  templateId: string | null | undefined
+  templateId: string | null | undefined,
+  bindsOnFacts: boolean | undefined
 ): Record<string, string> {
-  return templateId === null
-    ? { [PLAYBOOK_OFFERED_AT_KEY]: new Date().toISOString() }
-    : {};
+  if (templateId !== null) return {};
+  const at = new Date().toISOString();
+  return {
+    [PLAYBOOK_OFFERED_AT_KEY]: at,
+    ...(bindsOnFacts ? { [PARENT_PLAYBOOK_DECLINED_AT_METADATA_KEY]: at } : {}),
+  };
 }
 
 /** `reasonCode` of an agent's start that declares no criterion. */
@@ -1424,7 +1432,7 @@ export async function createFocusSession(
               adoptedAt: new Date().toISOString(),
               ...stepTimeMeta,
               ...(params.governance ? { governance: params.governance } : {}),
-              ...playbookOptOutPatch(params.templateId),
+              ...playbookOptOutPatch(params.templateId, params.bindOnFacts),
               ...workspacePlacementPatch(workspacePlacement),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
@@ -1494,7 +1502,7 @@ export async function createFocusSession(
           // The agent that starts it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(agentUserId),
           ...(params.governance ? { governance: params.governance } : {}),
-          ...playbookOptOutPatch(params.templateId),
+          ...playbookOptOutPatch(params.templateId, params.bindOnFacts),
           ...workspacePlacementPatch(workspacePlacement),
           ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
           // The step's window and deadline (B5).
@@ -1849,7 +1857,10 @@ export async function createFocusSession(
           title: sessionOut.title ?? null,
           workspaceId: sessionOut.workspaceId ?? null,
           subjectEntityId: sessionOut.subjectEntityId ?? null,
-          parentSessionId,
+          // `templateId: null` declines the parent's playbook (finding
+          // 42e4af30): a lane opting out does not inherit it. Omitted = the
+          // lane follows its parent. A subject or `main red:` fact still binds.
+          parentSessionId: params.templateId === null ? null : parentSessionId,
         });
         binding = bound.line;
         if (bound.decision === "bind") {

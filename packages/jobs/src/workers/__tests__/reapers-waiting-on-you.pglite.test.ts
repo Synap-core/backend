@@ -33,6 +33,7 @@ vi.mock("../../utils/post-run-summary.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  channels,
   focusSessions,
   proposals,
   automationRuns,
@@ -142,6 +143,8 @@ const statusOf = async (table: string, id: string) =>
 
 beforeAll(async () => {
   for (const t of [
+    // The run reaper reads the session's room (a post is activity).
+    channels,
     focusSessions,
     proposals,
     automationRuns,

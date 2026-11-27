@@ -1634,6 +1634,21 @@ function recentFailureWhere(cols: {
 }
 
 /**
+ * A run that STOPPED at its budget within the health window: `budgetStopWhere`,
+ * dated and windowed exactly like `recentFailureWhere`, so the health read can
+ * name the flows that stopped over the same days it names the failing ones,
+ * and never count them as failing.
+ */
+function recentBudgetStopWhere(cols: {
+  status: AnyPgColumn;
+  stopReason: AnyPgColumn;
+  startedAt: AnyPgColumn;
+  completedAt: AnyPgColumn;
+}): SQL {
+  return drizzleSql`${budgetStopWhere(cols)} and coalesce(${cols.completedAt}, ${cols.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')`;
+}
+
+/**
  * The merged order of flows across the two ledgers: latest start descending,
  * then flow kind and flow id ascending (deterministic, keyset-safe).
  */
@@ -1861,6 +1876,61 @@ export async function listRecentlyFailingFlows(input: {
   ).flat();
   merged.sort(compareFlowsNewestFirst);
   return merged.slice(0, limit);
+}
+
+/** Flows that stopped at their budget within the health window. */
+export interface RecentlyStoppedFlows {
+  /** Distinct flows (automations + playbooks) with a budget stop. */
+  flows: number;
+  /** Their budget-stopped runs inside the window. */
+  runs: number;
+}
+
+/**
+ * The flows that STOPPED at their budget within the health window
+ * (`recentBudgetStopWhere`), under the same floor, lens and flow join as
+ * {@link listRecentlyFailingFlows}: the budget stops #1369 took out of the
+ * failing flows, counted apart so the health read can still name them. Counts
+ * only (the recent budget-stopped rows, one aggregate per ledger). THROWS on a
+ * failed read.
+ */
+export async function countRecentlyStoppedFlows(input: {
+  userId: string;
+  scope?: { workspaceId?: string };
+}): Promise<RecentlyStoppedFlows> {
+  const workspaceId = input.scope?.workspaceId;
+  const [automationRow, playbookRow] = await Promise.all([
+    db
+      .select({
+        flows: drizzleSql<number>`count(distinct ${automationRuns.automationId})::int`,
+        runs: drizzleSql<number>`count(*)::int`,
+      })
+      .from(automationRuns)
+      .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+      .where(
+        and(
+          runFloor(automationRuns.workspaceId, input.userId, workspaceId),
+          recentBudgetStopWhere(automationRuns)
+        )
+      ),
+    db
+      .select({
+        flows: drizzleSql<number>`count(distinct ${playbookRuns.playbookId})::int`,
+        runs: drizzleSql<number>`count(*)::int`,
+      })
+      .from(playbookRuns)
+      .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
+      .where(
+        and(
+          runFloor(playbookRuns.workspaceId, input.userId, workspaceId),
+          recentBudgetStopWhere(playbookRuns)
+        )
+      ),
+  ]);
+  return {
+    flows: (automationRow[0]?.flows ?? 0) + (playbookRow[0]?.flows ?? 0),
+    runs: (automationRow[0]?.runs ?? 0) + (playbookRow[0]?.runs ?? 0),
+  };
 }
 
 /** The grouper's floor + lens, on any copy of a ledger's `workspace_id`. */

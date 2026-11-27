@@ -118,6 +118,34 @@ describe("tripwire: diagnose's two surfaces agree", () => {
   });
 });
 
+describe("both surfaces mean ONE thing by a duplicate proposal", () => {
+  /*
+   * FIFTH divergence: the class door listed twins (`findProposalTwins`, the
+   * same change filed twice) while the global door still marked the review
+   * GROUPING (`collapseProposalsToClusters`), which keys every capability run
+   * on the capability: seven deletes of seven different notes raised the
+   * global "duplicate" mark as one group of 7 (findings 9ae52db7, fb1e620a).
+   */
+  it("both count duplicates with the twin key, never the review grouping", () => {
+    for (const [name, src] of [
+      ["global", globalSrc],
+      ["class", classSrc],
+    ] as const) {
+      expect(
+        src,
+        `${name} diagnose must count duplicate proposals with ` +
+          "findProposalTwins (services/proposals/twin-key.ts), the key the " +
+          "other surface and the agent duplicateRate use."
+      ).toContain("findProposalTwins(");
+      expect(
+        src.includes("collapseProposalsToClusters("),
+        `${name} diagnose calls collapseProposalsToClusters: that is the ` +
+          "review inbox's GROUPING, not a duplicate count. Use findProposalTwins."
+      ).toBe(false);
+    }
+  });
+});
+
 describe("the DISPLAY counts what the ENFORCER counts", () => {
   /*
    * FOURTH divergence in this one area across one session:

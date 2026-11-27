@@ -93,6 +93,11 @@ export async function automationDispatchFootprints(input: {
     .from(automationRuns)
     .innerJoin(
       focusSessions,
+      // The cast stays on purpose: `automation_runs` DRIVES this join (its
+      // rule ids and 7-day window), and the probe into `focus_sessions` is
+      // exactly the expression of `idx_focus_sessions_automation_run_id`
+      // (migration 0303). `uuidFromTextSql` on the metadata side would hide
+      // that index.
       drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${automationRuns.id}::text`
     )
     .innerJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))

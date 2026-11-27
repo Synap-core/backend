@@ -329,6 +329,44 @@ describe("summarizeGlobalHealth", () => {
     });
   });
 
+  it("names flows stopped at their budget as information: the section stays ok", () => {
+    const report = summarizeGlobalHealth(
+      { ...clean, budgetStopped: { flows: 2, runs: 5 } },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "failed_flows")!;
+    expect(section.status).toBe("ok");
+    expect(section.headline).toBe(
+      "No flow failed in the last 7 days; 2 flow(s) stopped at their budget (not failures)"
+    );
+    expect(section.detail).toMatchObject({
+      failingFlows: 0,
+      stoppedFlows: 2,
+      stoppedRuns: 5,
+    });
+    expect(report.status).toBe("ok");
+  });
+
+  it("marks duplicate proposals by twins, naming the copies", () => {
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        duplicateClusters: [
+          { targetLabel: "Delete note A", count: 2 },
+          { targetLabel: "Set status", count: 3 },
+        ],
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find(
+      (s) => s.key === "duplicate_proposals"
+    )!;
+    expect(section.status).toBe("attention");
+    expect(section.headline).toBe(
+      "2 pending proposal(s) filed more than once (5 copies)"
+    );
+  });
+
   it("rolls up to degraded when a run is stuck", () => {
     const report = summarizeGlobalHealth(
       {
