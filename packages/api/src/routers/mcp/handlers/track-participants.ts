@@ -71,7 +71,7 @@ function changeOf(args: Record<string, unknown>): unknown {
   };
 }
 
-export const trackParticipantHandlers: McpHandlerMap = {
+export const trackParticipantHandlers = {
   synap_set_track_participant: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const trackId = str(ctx.args.trackId);
@@ -113,4 +113,4 @@ export const trackParticipantHandlers: McpHandlerMap = {
       return ok({ error: err instanceof Error ? err.message : String(err) });
     }
   },
-};
+} satisfies McpHandlerMap;

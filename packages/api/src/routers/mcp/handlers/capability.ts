@@ -37,8 +37,6 @@ import {
   ok,
   requireScope,
   readReasoning,
-  type McpToolContext,
-  type CallToolResult,
   type McpHandlerMap,
   pageLimit,
   pageOffset,
@@ -47,11 +45,11 @@ import {
 } from "./shared.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 
-export const capabilityHandlers: McpHandlerMap = {
+export const capabilityHandlers = {
   // Governed FIELD retirement — the same door as capability verb
   // `property_def.propose_retire` / tRPC `propertyDefs.proposeRetire`: always
   // a pending proposal, or a refusal while the field holds values.
-  synap_retire_field: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_retire_field: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const propertyDefId = args.propertyDefId;
@@ -71,9 +69,7 @@ export const capabilityHandlers: McpHandlerMap = {
   // (`services/lifecycle/declare-kind-lifecycle.ts`): always a pending
   // proposal, or a refusal with every reason. Like synap_retire_field and
   // synap_change_kind_scope it has no Hub REST twin yet.
-  synap_declare_lifecycle: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_declare_lifecycle: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
@@ -105,9 +101,7 @@ export const capabilityHandlers: McpHandlerMap = {
   // (`services/lifecycle/change-lifecycle-options.ts`, fd146324): the person's
   // lifecycle door (tRPC `propertyDefs.changeLifecycleOptions`) filed as an
   // always-pending proposal, or a refusal in that door's own words.
-  synap_change_lifecycle_options: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_change_lifecycle_options: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
@@ -161,7 +155,7 @@ export const capabilityHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_define_role: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_define_role: async (ctx) => {
     const {
       toolName,
       args,
@@ -207,7 +201,7 @@ export const capabilityHandlers: McpHandlerMap = {
     );
     return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
-  synap_define_kind: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_define_kind: async (ctx) => {
     const {
       toolName,
       args,
@@ -273,7 +267,7 @@ export const capabilityHandlers: McpHandlerMap = {
     );
     return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
-  synap_governance: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_governance: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsId = args.workspaceId as string;
@@ -346,9 +340,7 @@ export const capabilityHandlers: McpHandlerMap = {
       ...(agentBudget ? { agentBudget } : {}),
     });
   },
-  synap_list_capabilities: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_capabilities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // OPTIONAL — absent means the POD lens, which is what "what can this pod
@@ -672,9 +664,7 @@ export const capabilityHandlers: McpHandlerMap = {
         : {}),
     });
   },
-  synap_run_capability: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_run_capability: async (ctx) => {
     const {
       toolName,
       args,
@@ -746,7 +736,7 @@ export const capabilityHandlers: McpHandlerMap = {
     }
     return ok(outcome);
   },
-  synap_create_verb: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_create_verb: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -852,9 +842,7 @@ export const capabilityHandlers: McpHandlerMap = {
       wiring,
     });
   },
-  synap_list_automations: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_automations: async (ctx) => {
     const {
       toolName,
       args,
@@ -898,9 +886,7 @@ export const capabilityHandlers: McpHandlerMap = {
       note: AUTOMATIONS_DIGEST_NOTE,
     });
   },
-  synap_trigger_automation: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_trigger_automation: async (ctx) => {
     const {
       toolName,
       args,
@@ -943,9 +929,7 @@ export const capabilityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_create_automation: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_automation: async (ctx) => {
     const {
       toolName,
       args,
@@ -1139,7 +1123,7 @@ export const capabilityHandlers: McpHandlerMap = {
    * `services/capabilities/find-intent.ts` for every founder decision it
    * encodes; this adapter only reads args and hands the result back whole.
    */
-  synap_find: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_find: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const intent = typeof args.intent === "string" ? args.intent.trim() : "";
@@ -1179,4 +1163,4 @@ export const capabilityHandlers: McpHandlerMap = {
     }
     return ok(found.result);
   },
-};
+} satisfies McpHandlerMap;

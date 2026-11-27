@@ -43,7 +43,7 @@ async function manifestFor(
 
 const SLUG = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
-export const installationHandlers: McpHandlerMap = {
+export const installationHandlers = {
   synap_list_installations: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const access = AccessContext.agent({
@@ -204,4 +204,4 @@ export const installationHandlers: McpHandlerMap = {
       throw err;
     }
   },
-};
+} satisfies McpHandlerMap;

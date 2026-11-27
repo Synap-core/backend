@@ -313,8 +313,8 @@ export function matchScopeNote(p: {
   return why + project;
 }
 
-export const buildHandlers: McpHandlerMap = {
-  synap_create_cell: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const buildHandlers = {
+  synap_create_cell: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // Validate the shape before trusting the cast args (defineCell handles the
@@ -461,9 +461,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok({ status: result.changeType, ...result });
   },
-  synap_promote_cell_to_renderer: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_promote_cell_to_renderer: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // ONE door for every renderer target (`renderer-targets.ts`): a kind's
@@ -558,9 +556,7 @@ export const buildHandlers: McpHandlerMap = {
    * link in one governed act (`surface/create`), through the service tRPC
    * `surfaces.create` and Hub `POST /surfaces` call.
    */
-  synap_create_surface: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_surface: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -589,9 +585,7 @@ export const buildHandlers: McpHandlerMap = {
    * Put an existing surface on one object, or take it off (`detach: true`):
    * `surface/attach` | `surface/detach`, the service tRPC and Hub REST call.
    */
-  synap_attach_surface: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_attach_surface: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -620,9 +614,7 @@ export const buildHandlers: McpHandlerMap = {
           });
     return surfaceAnswer(toolName, outcome);
   },
-  synap_propose_app_from_playbook: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_propose_app_from_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const playbookId =
@@ -675,9 +667,7 @@ export const buildHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_promote_session_to_playbook: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_promote_session_to_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // Governed via the regular `playbooks.promote` — agent → proposed,
@@ -690,9 +680,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_list_playbooks: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_playbooks: async (ctx) => {
     const { toolName, args, apiKeyScopes, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // ONE playbook, in full: the get door (`playbooks.get`, the same one Hub
@@ -843,9 +831,7 @@ export const buildHandlers: McpHandlerMap = {
       note: PLAYBOOKS_DIGEST_NOTE,
     });
   },
-  synap_match_playbooks: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_match_playbooks: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // REFUSE A SIGNAL-LESS MATCH. Ranking needs something to rank AGAINST:
@@ -944,9 +930,7 @@ export const buildHandlers: McpHandlerMap = {
     }
     return ok(result);
   },
-  synap_create_playbook: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
@@ -1060,9 +1044,7 @@ export const buildHandlers: McpHandlerMap = {
    * passed through for that procedure's `updateInputSchema` and the shared
    * definition check to validate: a malformed field is refused, never dropped.
    */
-  synap_update_playbook: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
@@ -1163,7 +1145,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
-  synap_create_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_create_view: async (ctx) => {
     const {
       toolName,
       args,
@@ -1255,7 +1237,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_list_views: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_views: async (ctx) => {
     const {
       toolName,
       args,
@@ -1299,9 +1281,7 @@ export const buildHandlers: McpHandlerMap = {
       note: VIEWS_DIGEST_NOTE,
     });
   },
-  synap_update_view_content: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_view_content: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const viewId =
@@ -1354,9 +1334,7 @@ export const buildHandlers: McpHandlerMap = {
    * pending for the person to keep); changing or removing shapes is a
    * proposal by default. A refusal is a tool error naming its `reason`.
    */
-  synap_place_on_board: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_place_on_board: async (ctx) => {
     const {
       toolName,
       args,
@@ -1414,7 +1392,7 @@ export const buildHandlers: McpHandlerMap = {
    * config against the view's type and, for a bento, the widget catalog,
    * BEFORE the gate, then files `view.update` (a proposal for an agent).
    */
-  synap_update_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_view: async (ctx) => {
     const {
       toolName,
       args,
@@ -1468,7 +1446,7 @@ export const buildHandlers: McpHandlerMap = {
   },
   // `synap_list_widgets` is its old name and answers through this same
   // handler (`tool-aliases.ts`).
-  synap_list_cells: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_cells: async (ctx) => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { discoverRenderables, discoverFences } =
@@ -1510,7 +1488,7 @@ export const buildHandlers: McpHandlerMap = {
             ],
     });
   },
-  synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_post_message: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // A COMMENT goes through the comments door (the object's ONE room,
@@ -1641,9 +1619,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_revise_proposal: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_revise_proposal: async (ctx) => {
     // `agentUserId` is the ACTING AGENT principal (RFC 8693 `act`) — the same
     // field every other `synap_*` write handler destructures, and the ONE this
     // one was missing. Without it the door could only ever present the HUMAN as
@@ -1711,9 +1687,7 @@ export const buildHandlers: McpHandlerMap = {
       ...revisionReplyFields(redecision),
     });
   },
-  synap_reject_proposal: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_reject_proposal: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // Accepts the 8-char short id `synap_list_proposals` / the CLI print, not
@@ -1802,7 +1776,7 @@ export const buildHandlers: McpHandlerMap = {
       status: "rejected",
     });
   },
-  synap_run_playbook: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_run_playbook: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const trimmed = (v: unknown) =>
@@ -1856,7 +1830,7 @@ export const buildHandlers: McpHandlerMap = {
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
-  synap_create_skill: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_create_skill: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -2005,7 +1979,7 @@ export const buildHandlers: McpHandlerMap = {
     }
     return ok(result);
   },
-  synap_update_skill: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_skill: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -2115,4 +2089,4 @@ export const buildHandlers: McpHandlerMap = {
     }
     return ok(result);
   },
-};
+} satisfies McpHandlerMap;

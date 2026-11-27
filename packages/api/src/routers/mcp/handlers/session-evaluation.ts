@@ -14,23 +14,15 @@
 
 import { z } from "zod";
 import { sessionEvidenceSchema } from "../../../schemas/session-criteria.js";
-import {
-  ok,
-  requireScope,
-  type McpToolContext,
-  type CallToolResult,
-  type McpHandlerMap,
-} from "./shared.js";
+import { ok, requireScope, type McpHandlerMap } from "./shared.js";
 
 export const EvaluateSessionArgsSchema = z.object({
   sessionId: z.string().uuid(),
   evidence: sessionEvidenceSchema.optional(),
 });
 
-export const sessionEvaluationHandlers: McpHandlerMap = {
-  synap_evaluate_session: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+export const sessionEvaluationHandlers = {
+  synap_evaluate_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const parsed = EvaluateSessionArgsSchema.safeParse(args);
@@ -73,4 +65,4 @@ export const sessionEvaluationHandlers: McpHandlerMap = {
       })),
     });
   },
-};
+} satisfies McpHandlerMap;

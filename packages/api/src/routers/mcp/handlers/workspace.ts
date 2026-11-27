@@ -58,12 +58,11 @@ import {
   LIST_PAGE_DEFAULT,
   LIST_PAGE_MAX,
   type McpToolContext,
-  type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
 
-export const workspaceHandlers: McpHandlerMap = {
-  synap_orient: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const workspaceHandlers = {
+  synap_orient: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // The narrow read a worker polls (every 30 s): the sessions handed to this
@@ -120,9 +119,7 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     return ok({ ...result, aiAvailability });
   },
-  synap_set_workspace_focus: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_set_workspace_focus: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (!agentUserId) {
@@ -253,9 +250,7 @@ export const workspaceHandlers: McpHandlerMap = {
    *
    * Ambiguity is reported, never guessed — see `focus-target-match.ts`.
    */
-  synap_set_project_focus: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_set_project_focus: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (!agentUserId) {
@@ -315,9 +310,7 @@ export const workspaceHandlers: McpHandlerMap = {
       message: `Focused on project ${match.target.name} — writes that don't pin their own project will declare it until you clear it.`,
     });
   },
-  synap_create_workspace: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_workspace: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const name = args.name as string | undefined;
@@ -445,9 +438,7 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(applied.warning ? { templateApplyWarning: applied.warning } : {}),
     });
   },
-  synap_declare_workspace_source: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_declare_workspace_source: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const workspaceId = args.workspaceId as string | undefined;
@@ -526,9 +517,7 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     return ok({ status: "updated", workspaceId, ...result });
   },
-  synap_create_project: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_project: async (ctx) => {
     const {
       toolName,
       args,
@@ -579,7 +568,7 @@ export const workspaceHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_get_project: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_project: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const projectId = args.projectId as string;
@@ -613,7 +602,7 @@ export const workspaceHandlers: McpHandlerMap = {
    * settings blob, nor the deprecated `projects` duplicate of `items`.
    * `synap_get_project` is the full read.
    */
-  synap_list_projects: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_projects: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const projectCtx = await createHubProtocolCallerContext(
@@ -670,9 +659,7 @@ export const workspaceHandlers: McpHandlerMap = {
    * settings projection (layouts, bento ids, renderer maps) is withheld — it
    * is UI state, and it is what made a workspace list too large to reason over.
    */
-  synap_list_workspaces: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_workspaces: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsCtx = await createHubProtocolCallerContext(
@@ -736,9 +723,7 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
   },
-  synap_update_project: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_project: async (ctx) => {
     const {
       toolName,
       args,
@@ -794,9 +779,7 @@ export const workspaceHandlers: McpHandlerMap = {
     return ok(result);
   },
   // An agent works where its person is a member: answers that membership.
-  synap_request_workspace_access: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_request_workspace_access: async (ctx) => {
     const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // The confined value: a bound service key cannot name another space.
@@ -805,9 +788,7 @@ export const workspaceHandlers: McpHandlerMap = {
     if (badId) return badId;
     return ok(await requestWorkspaceJoin({ userId, agentUserId, workspaceId }));
   },
-  synap_project_use_workspace: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_project_use_workspace: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -872,9 +853,7 @@ export const workspaceHandlers: McpHandlerMap = {
   },
   // ── Governed workspace operations (R8a) — thin: `workspace-ops-doors.ts`
   // forwards to the governed tRPC procedures; nothing is re-checked here.
-  synap_archive_workspace: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_archive_workspace: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const workspaceId = args.workspaceId;
@@ -889,9 +868,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_retire_workspace: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_retire_workspace: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(
       apiKeyScopes,
@@ -917,9 +894,7 @@ export const workspaceHandlers: McpHandlerMap = {
         : result
     );
   },
-  synap_update_workspace: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_workspace: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const workspaceId = args.workspaceId;
@@ -946,9 +921,7 @@ export const workspaceHandlers: McpHandlerMap = {
    * home. One door: `workspacesRouter.setPrimarySurface` (the browser's tRPC
    * route), which checks the surface opens in the space before its gate.
    */
-  synap_set_start_page: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_set_start_page: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const workspaceId = args.workspaceId;
@@ -992,9 +965,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_update_space_brief: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_space_brief: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const workspaceId = args.workspaceId;
@@ -1014,7 +985,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_move_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_move_entities: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const ids = (v: unknown) =>
@@ -1050,9 +1021,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_file_into_project: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_file_into_project: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const projectId = args.projectId;
@@ -1071,9 +1040,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_grant_profile_access: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_grant_profile_access: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
@@ -1112,9 +1079,7 @@ export const workspaceHandlers: McpHandlerMap = {
    * Rescope a kind (D13): which Spaces see it, and where its NEW records live.
    * Always a proposal for an agent (`changeKindScope` owns the gate).
    */
-  synap_change_kind_scope: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_change_kind_scope: async (ctx) => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (typeof args.profileId !== "string") {
@@ -1145,9 +1110,7 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_export_project_pack: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_export_project_pack: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const projectId = args.projectId as string;
@@ -1180,7 +1143,7 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
   },
-};
+} satisfies McpHandlerMap;
 
 /** The acting principal for a workspace-ops door, from the MCP context. */
 function opsActor(ctx: McpToolContext): WorkspaceOpsActor {

@@ -113,8 +113,8 @@ function isInvalidUuidInput(err: unknown): boolean {
   return false;
 }
 
-export const readHandlers: McpHandlerMap = {
-  synap_ask: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const readHandlers = {
+  synap_ask: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     if (typeof args.query !== "string" || args.query.trim() === "") {
@@ -303,7 +303,7 @@ export const readHandlers: McpHandlerMap = {
       ...windowBlock,
     });
   },
-  synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_entities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const profileSlug =
@@ -445,7 +445,7 @@ export const readHandlers: McpHandlerMap = {
       note: note ?? ENTITIES_LEAN_NOTE,
     });
   },
-  synap_get_document: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_document: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const fetched = await caller.documents.getDocument({
@@ -497,9 +497,7 @@ export const readHandlers: McpHandlerMap = {
       },
     });
   },
-  synap_get_thread_context: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_get_thread_context: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // An OBJECT's comment threads instead of a thread (plan 48854969 §10.1):
@@ -586,7 +584,7 @@ export const readHandlers: McpHandlerMap = {
    * projection (`projectProposalRowForViewer`) are the SAME ones every other
    * read door runs; this handler adds no predicate of its own.
    */
-  synap_get_proposal: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_proposal: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const raw =
@@ -624,7 +622,7 @@ export const readHandlers: McpHandlerMap = {
    * call `signals.needsYou`, so an agent and an outside reader see the same
    * rows by fold and the same count.
    */
-  synap_get_flow: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_flow: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const profileSlug =
@@ -676,7 +674,7 @@ export const readHandlers: McpHandlerMap = {
    * themselves (`homesGrantOf`). Home is every space, so a key bound to one
    * space is refused it, as on Hub; Moving reads the confined space.
    */
-  synap_get_home: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_home: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const view = args.view ?? "home";
@@ -728,7 +726,7 @@ export const readHandlers: McpHandlerMap = {
    * never an empty board. Shape and arrow text is what anyone on the board
    * wrote, so it reaches the model fenced as untrusted data.
    */
-  synap_read_board: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_read_board: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const viewId = typeof args.viewId === "string" ? args.viewId.trim() : "";
@@ -815,7 +813,7 @@ export const readHandlers: McpHandlerMap = {
    * not be read comes back in `unavailable`, never as "nothing there".
    * Titles are what people and agents named their surfaces: fenced.
    */
-  synap_find_surfaces: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_find_surfaces: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { ANCHOR_KINDS } = await import("@synap-core/types/surfaces");
@@ -868,9 +866,7 @@ export const readHandlers: McpHandlerMap = {
    * could not run is `unavailable` with its reason, never an empty pass.
    * The title and the found text are what an author wrote: fenced.
    */
-  synap_inspect_surface: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_inspect_surface: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { INSPECT_SURFACE_KINDS, inspectSurface } =
@@ -957,7 +953,7 @@ export const readHandlers: McpHandlerMap = {
       throw err;
     }
   },
-  synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_needs_you: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const str = (v: unknown) =>
@@ -990,9 +986,7 @@ export const readHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_list_proposals: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_proposals: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // A package nobody knows is refused in words, never read as "no filter".
@@ -1085,9 +1079,7 @@ export const readHandlers: McpHandlerMap = {
       note: "Compact rows. Call again with detail:'full' (and a small limit) to inspect a proposal's full payload.",
     });
   },
-  synap_template_health: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_template_health: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { listWorkspaceTemplateHealth } =
@@ -1104,7 +1096,7 @@ export const readHandlers: McpHandlerMap = {
       total: all.length,
     });
   },
-  synap_diagnose: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_diagnose: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // The THIRD door: mode derived from payload shape (like capture), not a
@@ -1147,7 +1139,7 @@ export const readHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_get_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_entity: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // Named HERE, by the tool's own input name: past this point it is the
@@ -1265,7 +1257,7 @@ export const readHandlers: McpHandlerMap = {
       },
     });
   },
-  synap_list_profiles: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_profiles: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsId = args.workspaceId as string | undefined;
@@ -1453,7 +1445,7 @@ export const readHandlers: McpHandlerMap = {
           }),
     });
   },
-  synap_get_relations: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_relations: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const entityId = args.entityId as string;
@@ -1491,7 +1483,7 @@ export const readHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_get_graph: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_graph: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const gKind = (args.type as string | undefined) ?? "entity";
@@ -1571,7 +1563,7 @@ export const readHandlers: McpHandlerMap = {
     );
     return ok({ ...envelope, neighbors: page, ...paging });
   },
-  synap_get_channel: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_channel: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     // GET-OR-CREATE, so this declares the WRITE scope despite the name.
     //
@@ -1651,7 +1643,7 @@ export const readHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-};
+} satisfies McpHandlerMap;
 
 /**
  * `synap_get_thread_context` with `object` (and `state`): the object's comment

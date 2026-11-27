@@ -13,6 +13,7 @@
  */
 
 export type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolArgs, ToolName } from "../define-tool.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { noteLimitClamped } from "../call-notices.js";
 import { hubProtocolRouter } from "../../hub-protocol/index.js";
@@ -1129,9 +1130,14 @@ export async function rejectMissingWriteWorkspace(
  * over as bare locals inside the giant switch. One object, one shape, so
  * every domain handler file destructures only the fields it actually uses.
  */
-export interface McpToolContext {
+export interface McpToolContext<A = any> {
   toolName: string;
-  args: Record<string, unknown>;
+  /**
+   * The tool's input as the door PARSED it (`parseToolArgs`): typed in a
+   * handler map (`McpHandlerMap`), untyped for a shared helper or a test that
+   * calls a handler directly.
+   */
+  args: A;
   userId: string;
   apiKeyScopes: string[];
   agentUserId?: string;
@@ -1156,5 +1162,13 @@ export interface McpToolContext {
 
 export type McpToolHandler = (ctx: McpToolContext) => Promise<CallToolResult>;
 
-/** A domain handler file's exported slice of the full tool → handler map. */
-export type McpHandlerMap = Partial<Record<string, McpToolHandler>>;
+/**
+ * A domain handler file's slice of the tool → handler map: keyed by a DEFINED
+ * tool name (any other key does not compile), each handler's `ctx.args` typed
+ * as its tool's parsed input (`ToolArgs`, define-tool.ts).
+ */
+export type McpHandlerMap = {
+  [N in ToolName]?: (
+    ctx: McpToolContext<ToolArgs<N>>
+  ) => Promise<CallToolResult>;
+};

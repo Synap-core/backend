@@ -26,7 +26,6 @@
  * (`needsYouPriority`); `urgency` can only lower it. The priority ranks; this
  * door changes no push behaviour (every ask notifies as before).
  */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import {
@@ -223,8 +222,8 @@ async function findDedupedAsk(input: {
   return slot ? { sessionId: row.id, slot } : null;
 }
 
-export const askPersonHandlers: McpHandlerMap = {
-  synap_ask_person: async (ctx): Promise<CallToolResult> => {
+export const askPersonHandlers = {
+  synap_ask_person: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
 
@@ -432,4 +431,4 @@ export const askPersonHandlers: McpHandlerMap = {
       next: `Wait for the answer with synap_wait_for_answer({sessionId: "${sessionId}"}); if the person answers you in this chat instead, relay their words with synap_relay_answer({sessionId: "${sessionId}", slotLabel: ${JSON.stringify(question)}, disposition: "answered", quote}).`,
     });
   },
-};
+} satisfies McpHandlerMap;

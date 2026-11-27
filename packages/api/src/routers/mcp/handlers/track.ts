@@ -124,7 +124,7 @@ async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   }
 }
 
-export const trackHandlers: McpHandlerMap = {
+export const trackHandlers = {
   synap_list_tracks: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const projectId = uuid(ctx.args.projectId);
@@ -539,4 +539,4 @@ export const trackHandlers: McpHandlerMap = {
       return domainNote ? { ...result, domainNote } : result;
     });
   },
-};
+} satisfies McpHandlerMap;

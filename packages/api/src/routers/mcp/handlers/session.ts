@@ -78,7 +78,6 @@ import {
   resolveAmbientSession,
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
-  type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
   pageLimit,
@@ -280,16 +279,14 @@ function readTemplateIdArg(raw: unknown): string | null | undefined {
   );
 }
 
-export const sessionHandlers: McpHandlerMap = {
+export const sessionHandlers = {
   /**
    * The bounded long-poll for the person's answer (V1 G4) — how an agent the
    * pod cannot wake keeps its turn alive after an ask. Contract:
    * `services/focus-sessions/wait-for-answers.ts`. Owner-floored like the
    * poll door; the acting agent's read stamps the "Picked up" receipt.
    */
-  synap_wait_for_answer: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_wait_for_answer: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, signal } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     if (
@@ -418,7 +415,7 @@ export const sessionHandlers: McpHandlerMap = {
    * what and the stakes rule). Agent keys only — the relay is labelled with
    * the agent that carried it.
    */
-  synap_relay_answer: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_relay_answer: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (!agentUserId) {
@@ -488,7 +485,7 @@ export const sessionHandlers: McpHandlerMap = {
     });
   },
 
-  synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_start_session: async (ctx) => {
     const {
       toolName,
       args,
@@ -808,9 +805,7 @@ export const sessionHandlers: McpHandlerMap = {
         : {}),
     });
   },
-  synap_complete_session: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_complete_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const {
@@ -938,9 +933,7 @@ export const sessionHandlers: McpHandlerMap = {
    * door that does it (session room / proposal). Agent-PROPOSED revert through a
    * governed executor is a follow-up, not this tool.
    */
-  synap_revert_session: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_revert_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
@@ -1001,7 +994,7 @@ export const sessionHandlers: McpHandlerMap = {
    * `proposed` outcome is the normal answer — but `replace` reverts approved
    * work and is refused by the service as a human decision.
    */
-  synap_rerun_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_rerun_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     const dryRun = args.dryRun === true;
     requireScope(apiKeyScopes, dryRun ? "mcp.read" : "mcp.write", toolName);
@@ -1051,9 +1044,7 @@ export const sessionHandlers: McpHandlerMap = {
    * `focusSessions.continueRun` and Hub `POST /focus-sessions/:id/continue`.
    * A person's move: an agent key is refused by the service with the reason.
    */
-  synap_continue_session: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_continue_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
@@ -1074,9 +1065,7 @@ export const sessionHandlers: McpHandlerMap = {
    * START AN ORCHESTRATOR (D5) — the same service and input schema as tRPC
    * `focusSessions.startOrchestrator` and Hub `POST /focus-sessions/orchestrate`.
    */
-  synap_start_orchestrator: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_start_orchestrator: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const { startOrchestrator } =
@@ -1090,7 +1079,7 @@ export const sessionHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_session: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // No id named ⇒ the SAME resolver a write is attributed through: this
@@ -1199,7 +1188,7 @@ export const sessionHandlers: McpHandlerMap = {
         : {}),
     });
   },
-  synap_list_agents: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_agents: async (ctx) => {
     const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // The roster for the PERSON the key acts for: whose work it is decides
@@ -1216,7 +1205,7 @@ export const sessionHandlers: McpHandlerMap = {
     );
     return ok({ ...roster, agents: page, ...paging });
   },
-  synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_list_sessions: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const statusArg = (args.status as string | undefined) ?? "open";
@@ -1373,9 +1362,7 @@ export const sessionHandlers: McpHandlerMap = {
       ...(hasMore ? { nextOffset: offset + limit } : {}),
     });
   },
-  synap_get_work_graph: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_get_work_graph: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // MCP schemas are ADVISORY — nothing validates args server-side — so an
@@ -1508,9 +1495,7 @@ export const sessionHandlers: McpHandlerMap = {
       window: graph.window,
     });
   },
-  synap_get_work_release: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_get_work_release: async (ctx) => {
     const { toolName, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // Loaded on call, like the work graph: the read pulls the liveness reads,
@@ -1520,7 +1505,7 @@ export const sessionHandlers: McpHandlerMap = {
     // An agent door reads sessions owner-only (decision C v1, `rosterReadFor`).
     return ok(await readWorkRelease({ userId, roster: false }));
   },
-  synap_get_timeline: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_timeline: async (ctx) => {
     const { toolName, userId, apiKeyScopes, agentUserId, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { readTimeline, timelineSubjectOf } =
@@ -1553,9 +1538,7 @@ export const sessionHandlers: McpHandlerMap = {
     }
     return ok(timeline);
   },
-  synap_update_session: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_session: async (ctx) => {
     const { toolName, userId, apiKeyScopes, agentUserId } = ctx;
     let args = ctx.args;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -2064,7 +2047,7 @@ export const sessionHandlers: McpHandlerMap = {
     // Defensive: an unhandled decision must NOT fall through — every
     // FocusSessionUpdateResult status is handled above (exhaustive switch).
   },
-};
+} satisfies McpHandlerMap;
 
 /** Test-only export of the wire coercion above. */
 export { readTemplateIdArg as __readTemplateIdArgForTest };

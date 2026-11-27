@@ -48,7 +48,7 @@ function notInlineReason(
   return null;
 }
 
-export const fileHandlers: McpHandlerMap = {
+export const fileHandlers = {
   synap_get_file: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const entityId =
@@ -115,4 +115,4 @@ export const fileHandlers: McpHandlerMap = {
       ],
     };
   },
-};
+} satisfies McpHandlerMap;

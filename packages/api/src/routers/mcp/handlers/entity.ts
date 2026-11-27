@@ -40,7 +40,6 @@ import {
   requireScope,
   readReasoning,
   type McpToolContext,
-  type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
 import { toolError, fullUuidError } from "../tool-errors.js";
@@ -321,8 +320,8 @@ export async function createEntityData(
   }
 }
 
-export const entityHandlers: McpHandlerMap = {
-  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const entityHandlers = {
+  synap_create_entity: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     // The pod refuses a title over the hard cap at `entities.create`; saying it
     // here names the length, where the nested refusal could not.
@@ -334,7 +333,7 @@ export const entityHandlers: McpHandlerMap = {
     }
     return ok(await createEntityData(ctx));
   },
-  synap_update_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_entity: async (ctx) => {
     const {
       toolName,
       args,
@@ -489,7 +488,7 @@ export const entityHandlers: McpHandlerMap = {
    * restore-delete). The hard delete (`adminDelete`, tRPC `documents.delete`)
    * is never reachable from here.
    */
-  synap_delete_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_delete_entity: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -539,9 +538,7 @@ export const entityHandlers: McpHandlerMap = {
    * that need review ride ONE pack. The hub re-validates with the strict zod
    * schema, so an unknown patch field is a 400, never dropped.
    */
-  synap_update_entities: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_entities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -564,9 +561,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_create_document: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_document: async (ctx) => {
     const {
       toolName,
       args,
@@ -717,9 +712,7 @@ export const entityHandlers: McpHandlerMap = {
    * base, ambiguous `replace_text`, a person's section, embed removal) come
    * back as errors whose message says what to do next.
    */
-  synap_update_document: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_document: async (ctx) => {
     const { toolName, args, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const result = await caller.documents.patchDocument({
@@ -741,9 +734,7 @@ export const entityHandlers: McpHandlerMap = {
    * bound to this user + agent + session. Same presigned lane as the REST/Hub
    * `/uploads` doors; `synap_store_file({uploadToken})` finalizes.
    */
-  synap_request_upload: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_request_upload: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -762,7 +753,7 @@ export const entityHandlers: McpHandlerMap = {
     const { ok: _ok, ...rest } = ticket;
     return ok(rest);
   },
-  synap_store_file: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_store_file: async (ctx) => {
     const {
       toolName,
       args,
@@ -1002,7 +993,7 @@ export const entityHandlers: McpHandlerMap = {
       status: "created",
     });
   },
-  synap_remember_fact: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_remember_fact: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1060,7 +1051,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_link_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_link_entities: async (ctx) => {
     const {
       toolName,
       args,
@@ -1094,7 +1085,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_attach_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_attach_facet: async (ctx) => {
     const {
       toolName,
       args,
@@ -1134,7 +1125,7 @@ export const entityHandlers: McpHandlerMap = {
     }
     return ok(result);
   },
-  synap_detach_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_detach_facet: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1154,7 +1145,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_update_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_facet: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1195,9 +1186,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok({ facetId, ...result });
   },
-  synap_resolve_identity: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_resolve_identity: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // Read-only identity pre-check via the ONE matcher. Same call the REST
@@ -1251,7 +1240,7 @@ export const entityHandlers: McpHandlerMap = {
     // learn "you already have this in your pending queue" before minting one.
     return ok(await buildIdentityResolveResponse(resolution, userId, signals));
   },
-};
+} satisfies McpHandlerMap;
 
 /**
  * The facet a role write targets: `args.facetId` (the handle attach returns),

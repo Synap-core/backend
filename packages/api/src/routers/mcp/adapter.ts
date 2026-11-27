@@ -46,6 +46,7 @@ import {
   pickAdvisoryWorkspaceId,
   resolveSessionHandle,
   type McpHandlerMap,
+  type McpToolHandler,
   type SessionAttributionReport,
 } from "./handlers/shared.js";
 import { readHandlers } from "./handlers/read.js";
@@ -74,11 +75,11 @@ export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
 /**
  * THE dispatch map — every tool `tools/index.ts` defines resolves to exactly
- * one handler here, merged from the per-domain files (pinned both ways by
- * `define-tool.tripwire.test.ts`). An old name (`aliases` on a definition)
- * dispatches to its tool's handler.
+ * one handler here, merged from the per-domain files: a defined tool with no
+ * handler, or a handler for no defined tool, does not compile. An old name
+ * (`aliases` on a definition) dispatches to its tool's handler.
  */
-export const TOOL_HANDLERS: McpHandlerMap = {
+export const TOOL_HANDLERS = {
   ...readHandlers,
   ...entityHandlers,
   ...captureHandlers,
@@ -95,11 +96,16 @@ export const TOOL_HANDLERS: McpHandlerMap = {
   ...fileHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
-};
+} satisfies Required<McpHandlerMap>;
 
-/** The handler a tool name dispatches to (undefined: an unknown tool). */
-export function mcpToolHandler(toolName: string) {
-  return TOOL_HANDLERS[canonicalToolName(toolName)];
+/**
+ * The handler a tool name dispatches to (undefined: an unknown tool). Its
+ * `ctx.args` is the door's parse of THAT tool's input (`parseToolArgs`).
+ */
+export function mcpToolHandler(toolName: string): McpToolHandler | undefined {
+  return (TOOL_HANDLERS as unknown as Record<string, McpToolHandler>)[
+    canonicalToolName(toolName)
+  ];
 }
 
 export async function executeMCPToolViaHubProtocol(

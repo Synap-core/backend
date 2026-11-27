@@ -67,7 +67,7 @@ function render<T>(
   }
 }
 
-export const workerHandlers: McpHandlerMap = {
+export const workerHandlers = {
   synap_list_workers: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const trackId = uuidArg(ctx.args.trackId);
@@ -153,4 +153,4 @@ export const workerHandlers: McpHandlerMap = {
       ctx.userId
     );
   },
-};
+} satisfies McpHandlerMap;
