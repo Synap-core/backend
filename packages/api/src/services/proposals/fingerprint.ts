@@ -440,7 +440,7 @@ const DEFAULT_SAMPLE_CAP = 20;
  * object's own name ("Acme Corp") is the sharper label, and the summary is the
  * sentence that already contains it.
  */
-function resolveTargetLabel(row: ProposalFingerprintInput): string {
+export function resolveTargetLabel(row: ProposalFingerprintInput): string {
   const heading = headingOf(row);
   if (heading) return heading;
   // Decoded here, not in `extractProposalName`/`extractProposalSummary`:
