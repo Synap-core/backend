@@ -139,9 +139,10 @@ function fullInput(def: ToolDefinition): ToolInput {
 
 interface RegisteredTool {
   def: ToolDefinition;
-  /** `input` plus the derived write inputs: what is advertised and parsed. */
-  input: ToolInput;
-  /** The validator: `input`, open to the lens keys the door injects. */
+  /**
+   * The validator: `input` plus the derived write inputs (what is also
+   * advertised), open to the lens keys the door injects.
+   */
   validator: ToolInput;
   /** The `tools/list` entry, without per-session teaching. */
   wire: Tool;
@@ -183,7 +184,6 @@ function reg(): Registry {
     const input = fullInput(def);
     byName.set(def.name, {
       def,
-      input,
       validator: input.loose(),
       wire: wireTool(def, input),
     });
