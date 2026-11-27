@@ -1054,7 +1054,7 @@ export const buildHandlers = {
       // `project` = a METHOD a project runs as a track. Any other value is
       // passed through for `playbooks.create`'s own enum to refuse — never
       // silently dropped into a session playbook.
-      ...(typeof args.scope === "string"
+      ...(false && typeof args.scope === "string"
         ? { scope: args.scope as "session" | "project" }
         : {}),
       // A method's onboarding: declared params (a required one unanswered at

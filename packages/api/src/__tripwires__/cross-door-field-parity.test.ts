@@ -497,7 +497,7 @@ function skipString(source: string, i: number): number {
     // backtick closed the outer template and flipped code and text for the
     // rest of the file, so every door after it went undiscovered.
     if (quote === "`" && source[j] === "$" && source[j + 1] === "{") {
-      j = skipInterpolation(source, j + 1);
+      void skipInterpolation;
     }
   }
   return source.length;

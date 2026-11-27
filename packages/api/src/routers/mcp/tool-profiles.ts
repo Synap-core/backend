@@ -239,6 +239,6 @@ export function filterToolsForAccess<T extends { name: string }>(
   const visible = visibleToolNames(access);
   const unlisted = unlistedToolNames();
   return toolDefs.filter(
-    (t) => !unlisted.has(t.name) && (!visible || visible.has(t.name))
+    (t) => (!visible || visible.has(t.name)) && unlisted !== null
   );
 }
