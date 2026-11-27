@@ -66,18 +66,24 @@ describe("tool profiles", () => {
     );
   });
 
-  it("legacy (NULL) and builder keys list every tool; an entry key lists 15 + its unlocked groups", () => {
+  it("legacy (NULL) and builder keys list every tool; an entry key reaches the 15 entry tools (+ their old names) and its unlocked groups", () => {
     expect(visibleToolNames({ profile: null, groups: [] })).toBeNull();
     expect(visibleToolNames({ profile: "builder", groups: [] })).toBeNull();
 
+    expect(entryToolNames()).toHaveLength(15);
+    const entry = entryToolNames(true);
+    // The old name of start_session's launch answers on every key.
+    expect(entry).toContain("synap_run_playbook");
     const entryOnly = visibleToolNames({ profile: "entry", groups: [] })!;
-    expect(entryOnly.size).toBe(15);
+    expect([...entryOnly].sort()).toEqual([...entry].sort());
 
     const withSchema = visibleToolNames({
       profile: "entry",
       groups: ["schema", "not-a-group"],
     })!;
-    expect(withSchema.size).toBe(15 + toolGroupMembers(true).schema.length);
+    expect(withSchema.size).toBe(
+      entry.length + toolGroupMembers(true).schema.length
+    );
     expect(withSchema.has("synap_define_kind")).toBe(true);
     // An unknown stored group is ignored, never widened.
     expect(withSchema.has("synap_create_view")).toBe(false);
