@@ -491,7 +491,7 @@ const readOnlyLogger = createLogger({ module: "mcp-read-only-tools" });
 export async function isReadOnlyTool(toolName: string): Promise<boolean> {
   try {
     const { readOnlyToolNames } = await import("../define-tool.js");
-    return (await readOnlyToolNames()).has(toolName);
+    return readOnlyToolNames().has(toolName);
   } catch (err) {
     readOnlyLogger.error(
       { err, toolName },

@@ -180,15 +180,19 @@ const sentenceActionSchema = z.object({
   config: z.record(z.string(), z.unknown()),
 });
 
-/**
- * Bound to `RuleSentenceValue` at compile time — see the file header. The
- * annotation is the drift guard; removing it removes the guarantee.
- */
-export const ruleSentenceSchema: z.ZodType<RuleSentenceValue> = z.object({
+/** The sentence's object, for a door that describes its fields (MCP). */
+export const ruleSentenceObject = z.object({
   trigger: sentenceTriggerSchema.nullable(),
   conditions: z.array(conditionRowSchema),
   actions: z.array(sentenceActionSchema),
 });
+
+/**
+ * Bound to `RuleSentenceValue` at compile time — see the file header. The
+ * annotation is the drift guard; removing it removes the guarantee.
+ */
+export const ruleSentenceSchema: z.ZodType<RuleSentenceValue> =
+  ruleSentenceObject;
 
 // ── Union parity: the half `z.ZodType<RuleSentenceValue>` cannot see ────────
 // Each resolves to `never` if the schema's enum and the shared union disagree in

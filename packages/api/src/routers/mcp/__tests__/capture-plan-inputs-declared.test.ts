@@ -25,7 +25,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { tools } from "../tools/index.js";
-import { declaredArgNames, undeclaredArgs } from "../undeclared-args.js";
+import { declaredArgNames, undeclaredArgs } from "../define-tool.js";
 import { CAPTURE_PLAN_KEYS } from "../../../services/capture-agent/capture-plan.js";
 import { buildCaptureGraphOperations } from "../../../services/capture-agent/submit-capture-graph.js";
 
@@ -47,7 +47,7 @@ describe("synap_capture declares every plan input it forwards", () => {
     expect(CAPTURE_PLAN_KEYS.length).toBeGreaterThan(10);
     expect(CAPTURE_PLAN_KEYS).toContain("edits");
     const args = Object.fromEntries(CAPTURE_PLAN_KEYS.map((k) => [k, []]));
-    const declared = (await declaredArgNames("synap_capture"))!;
+    const declared = declaredArgNames("synap_capture")!;
     expect(undeclaredArgs(args, declared)).toEqual([]);
     // Self-check: the same call still sees a key synap_capture does not take.
     expect(undeclaredArgs({ ...args, bogusPlan: [] }, declared)).toEqual([

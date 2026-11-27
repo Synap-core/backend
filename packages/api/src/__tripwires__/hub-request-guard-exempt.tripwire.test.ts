@@ -160,10 +160,10 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
     ).toEqual([]);
   });
 
-  it("MCP: every tool that declares openWorldHint is never timed", async () => {
+  it("MCP: every tool that declares openWorldHint is never timed", () => {
     // Read off the tools' own definitions (`define-tool.ts`), the set the
     // handler uses: a source scan of the definitions broke on their layout.
-    const openWorld = [...(await openWorldToolNames())];
+    const openWorld = [...openWorldToolNames()];
     expect(openWorld).toContain("synap_run_capability");
     // The handler reads them from the tools' own metadata
     // (`openWorldToolNames`); the classification honours that set.

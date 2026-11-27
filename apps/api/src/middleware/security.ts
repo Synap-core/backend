@@ -570,14 +570,13 @@ export function watchPodRateLimits(
   return () => clearInterval(timer);
 }
 
-/** Read-only MCP tool names, listed once; a failed listing is retried. */
-let readOnlyTools: Promise<Set<string>> | null = null;
-function mcpReadOnlyTools(): Promise<Set<string>> {
-  readOnlyTools ??= mcpReadOnlyToolNames().catch(() => {
-    readOnlyTools = null;
+/** Read-only MCP tool names (built once); a failed listing counts writes. */
+function mcpReadOnlyTools(): ReadonlySet<string> {
+  try {
+    return mcpReadOnlyToolNames();
+  } catch {
     return new Set<string>();
-  });
-  return readOnlyTools;
+  }
 }
 
 /**
@@ -597,7 +596,7 @@ async function crudRequestKind(c: Context): Promise<McpBodyKind> {
   }
   const body = await c.req.json().catch(() => undefined);
   if (body === undefined) return "write";
-  return classifyMcpBody(body, await mcpReadOnlyTools());
+  return classifyMcpBody(body, mcpReadOnlyTools());
 }
 
 /**

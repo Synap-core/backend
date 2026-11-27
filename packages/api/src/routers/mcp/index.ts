@@ -351,8 +351,8 @@ export function createMCPServer(
           );
         }
         // `synap_call_tool` (call-tool.ts) is unwrapped HERE, once, before
-        // anything judges the call: the fence, the shadow and `execute` below see
-        // only the INNER tool, exactly as its direct call. The dispatcher has no
+        // anything judges the call: the fence and `execute` below see only the
+        // INNER tool, exactly as its direct call. The dispatcher has no
         // authority of its own, so its name is never what is judged.
         const toolDefs = await tools.list();
         let name = request.params.name;

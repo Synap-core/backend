@@ -394,15 +394,12 @@ function jsonRpcTimedOut(id: unknown, timeoutMs: number) {
 
 /**
  * The tools that declare `openWorldHint` (static list). A failed read is not
- * cached and not hidden: it is logged, and the call is guarded like any other.
+ * hidden: it is logged, and the call is guarded like any other.
  */
-let openWorldTools: Promise<Set<string>> | undefined;
-async function mcpOpenWorldTools(): Promise<ReadonlySet<string>> {
+function mcpOpenWorldTools(): ReadonlySet<string> {
   try {
-    openWorldTools ??= openWorldToolNames();
-    return await openWorldTools;
+    return openWorldToolNames();
   } catch (err) {
-    openWorldTools = undefined;
     logger.warn({ err }, "could not read the open-world MCP tool list");
     return new Set();
   }
@@ -758,7 +755,7 @@ mcpHttpApp.post("/", async (c) => {
     {
       key: UNCOUNTED_KEY_TYPES.has(keyRecord.keyType) ? null : keyRecord.id,
       route: `MCP ${rpc?.method ?? "?"}${toolName ? ` ${toolName}` : ""}`,
-      exemption: classifyMcpToolCall(toolName, await mcpOpenWorldTools()),
+      exemption: classifyMcpToolCall(toolName, mcpOpenWorldTools()),
     },
     () => mcpCall(),
     {

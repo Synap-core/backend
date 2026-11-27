@@ -3,6 +3,10 @@
  * 7ed5d9ed). A tool is a `defineTool({...})` in `tools/index.ts`, and every
  * other fact about it is DERIVED here, never kept in a second list:
  *
+ *   - its input: a zod object (`input`), the one source of the validator, of
+ *     the handler's argument type (`ToolArgs`) and of the JSON Schema
+ *     `tools/list` advertises (`wireInputSchema`: what MCP clients, the token
+ *     budget and the control plane's manifest read);
  *   - the wire entry `tools/list` returns (name, description, inputSchema,
  *     annotations), and the manifest the control plane mirrors;
  *   - where it is listed: the entry surface or one group (`tool-profiles.ts`
@@ -12,16 +16,12 @@
  *   - its teaching keys (`teaches`), for the brief composer and skill render;
  *   - whether the claude.ai connector exposes it (`cpOmit` says why not),
  *     published in the manifest's `exposure` for the control plane;
- *   - the input check: unknown keys refused (`undeclared-args.ts`), then the
- *     arguments PARSED against the declared schema, and the handler receives
- *     the parsed value.
+ *   - the input check (`parseToolArgs`): unknown keys refused, then the
+ *     arguments PARSED, and the handler receives the parsed value.
  *
- * The input stays JSON Schema, the format MCP advertises, the token budget
- * measures and the control plane copies verbatim; the validator is compiled
- * from it (`z.fromJSONSchema`), so the two cannot disagree.
- *
- * Every derivation is lazy: `tools/index.ts` imports helpers from modules that
- * read this registry, so nothing here may run at import time.
+ * Every derivation is built once, lazily: `tools/index.ts` imports helpers
+ * from modules that read this registry, so nothing here may run at import
+ * time.
  */
 
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -29,7 +29,7 @@ import type { McpToolGroupName } from "@synap-core/types/agents";
 import { z } from "zod";
 import { toolDefinitions } from "./tools/index.js";
 import { toolError } from "./tool-errors.js";
-import { refuseUndeclaredArgs } from "./undeclared-args.js";
+import { wireInputSchema } from "./tool-input.js";
 import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import type { SkillDoor } from "./door-tool-names.build.js";
 import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
@@ -44,32 +44,64 @@ export interface ToolAlias {
   reason: string;
 }
 
-export interface ToolDefinition extends Tool {
+/** A tool's input: one zod object, its keys the tool's arguments. */
+export type ToolInput = z.ZodObject<
+  z.core.$ZodLooseShape,
+  z.core.$ZodObjectConfig
+>;
+
+export interface ToolDefinition<
+  N extends string = string,
+  I extends ToolInput = ToolInput,
+> extends Omit<Tool, "name" | "inputSchema"> {
+  name: N;
+  input: I;
   group: ToolPlacement;
   /** Callable, never listed: why it is kept (e.g. a frozen connector name). */
   hidden?: string;
-  aliases?: readonly ToolAlias[];
+  aliases?: ToolAlias[];
   /** Teaching keys beyond its own name: builtin verb ids, IS tool names. */
-  teaches?: readonly string[];
+  teaches?: string[];
   /** Only when it is NOT on the claude.ai connector: why. */
   cpOmit?: string;
   /**
    * Inputs it does not take that callers reach for, each with the sentence
    * that says where that change goes (refused before the generic refusal).
    */
-  refusedArgs?: Readonly<Record<string, string>>;
+  refusedArgs?: Record<string, string>;
 }
 
 const DEFINED = Symbol("defineTool");
 
 /** Declare one MCP tool. The only way a tool enters the list (tripwire). */
-export function defineTool(def: ToolDefinition): ToolDefinition {
+export function defineTool<N extends string, I extends ToolInput>(
+  def: ToolDefinition<N, I>
+): ToolDefinition<N, I> {
   return Object.defineProperty(def, DEFINED, { value: true });
 }
 
 export function isDefinedTool(tool: object): boolean {
   return (tool as Record<symbol, unknown>)[DEFINED] === true;
 }
+
+type Defined = ReturnType<typeof toolDefinitions>[number];
+/** Every defined tool name, as a type. */
+export type ToolName = Defined["name"];
+/** Keys the MCP door adds to every call (the URL lens): never unknown. */
+export const DOOR_INJECTED_ARGS = ["workspaceId", "projectId"] as const;
+/**
+ * What a tool's handler receives: its input, PARSED. The lens keys the door
+ * injects and the inputs derived on every write tool (`fullInput`) ride
+ * along, typed `unknown` when the tool does not declare them itself.
+ */
+export type ToolArgs<N extends ToolName> = z.output<
+  Extract<Defined, { name: N }>["input"]
+> & {
+  workspaceId?: unknown;
+  projectId?: unknown;
+  sessionId?: unknown;
+  supersedes?: unknown;
+};
 
 /**
  * The `sessionId` every ATTRIBUTED (non-read) tool declares, derived from
@@ -79,46 +111,56 @@ export function isDefinedTool(tool: object): boolean {
  * names in `attribution.filed` when the call named none. The idle window is
  * `RECEIPT_IDLE_WINDOW_HOURS` (pinned by `attributed-tools-declare-session`).
  */
-const ATTRIBUTED_SESSION_ID_PARAM = {
-  type: "string",
-  description:
-    "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
-} as const;
+const ATTRIBUTED_SESSION_ID_INPUT = z
+  .string()
+  .optional()
+  .describe(
+    "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+  );
 
 /** `supersedes`, declared on {@link SUPERSEDES_TOOLS} only (see there). */
-const SUPERSEDES_PARAM = {
-  type: "string",
-  description: "Failed proposal id",
-} as const;
+const SUPERSEDES_INPUT = z.string().optional().describe("Failed proposal id");
 
-/** A definition with the inputs every write tool takes added to its schema. */
-function withDerivedInputs(def: ToolDefinition): ToolDefinition {
-  if (def.annotations?.readOnlyHint === true) return def;
-  const properties = def.inputSchema.properties ?? {};
-  def.inputSchema = {
-    ...def.inputSchema,
-    properties: {
-      ...properties,
-      // A tool that declares its own (`synap_update_session`'s target) keeps it.
-      ...("sessionId" in properties
-        ? {}
-        : { sessionId: ATTRIBUTED_SESSION_ID_PARAM }),
-      ...(SUPERSEDES_TOOLS.includes(def.name)
-        ? { supersedes: SUPERSEDES_PARAM }
-        : {}),
-    },
-  };
-  return def;
+/** The input with what every write tool takes added (never mutating `def`). */
+function fullInput(def: ToolDefinition): ToolInput {
+  if (def.annotations?.readOnlyHint === true) return def.input;
+  return def.input.extend({
+    // A tool that declares its own (`synap_update_session`'s target) keeps it.
+    ...("sessionId" in def.input.shape
+      ? {}
+      : { sessionId: ATTRIBUTED_SESSION_ID_INPUT }),
+    ...(SUPERSEDES_TOOLS.includes(def.name)
+      ? { supersedes: SUPERSEDES_INPUT }
+      : {}),
+  });
 }
 
-/** Every tool's definition, complete, freshly built (callers may mutate it). */
-export function definedTools(): ToolDefinition[] {
-  return toolDefinitions().map(withDerivedInputs);
+// ── The registry: every derivation, built once ──────────────────────────────
+
+interface RegisteredTool {
+  def: ToolDefinition;
+  /** `input` plus the derived write inputs: what is advertised and parsed. */
+  input: ToolInput;
+  /** The validator: `input`, open to the lens keys the door injects. */
+  validator: ToolInput;
+  /** The `tools/list` entry, without per-session teaching. */
+  wire: Tool;
 }
+
+interface Registry {
+  byName: ReadonlyMap<string, RegisteredTool>;
+  aliasOf: ReadonlyMap<string, string>;
+  teaching: Readonly<Record<string, string[]>>;
+  readOnly: ReadonlySet<string>;
+  openWorld: ReadonlySet<string>;
+}
+
+let registry: Registry | undefined;
 
 /** The entry `tools/list` returns: the definition minus its registry fields. */
-export function wireTool(def: ToolDefinition): Tool {
+function wireTool(def: ToolDefinition, input: ToolInput): Tool {
   const {
+    input: _input,
     group: _group,
     hidden: _hidden,
     aliases: _aliases,
@@ -127,51 +169,24 @@ export function wireTool(def: ToolDefinition): Tool {
     refusedArgs: _refusedArgs,
     ...wire
   } = def;
-  return wire;
+  return { ...wire, inputSchema: wireInputSchema(input) };
 }
-
-/** An alias's wire entry: its tool's entry under the old name. */
-function aliasWireTool(def: ToolDefinition, alias: ToolAlias): Tool {
-  const title = def.annotations?.title;
-  return {
-    ...wireTool(def),
-    name: alias.name,
-    ...(def.annotations
-      ? {
-          annotations: {
-            ...def.annotations,
-            ...(title ? { title: `${title} (old name)` } : {}),
-          },
-        }
-      : {}),
-    description: `Old name of ${def.name}, kept so existing clients keep working: same parameters, same answer. Call ${def.name}.`,
-  };
-}
-
-/** Every name that answers: each tool, then each alias. */
-export function wireTools(defs: readonly ToolDefinition[]): Tool[] {
-  return [
-    ...defs.map(wireTool),
-    ...defs.flatMap((d) => (d.aliases ?? []).map((a) => aliasWireTool(d, a))),
-  ];
-}
-
-interface Registry {
-  byName: ReadonlyMap<string, ToolDefinition>;
-  aliasOf: ReadonlyMap<string, string>;
-}
-
-let registry: Registry | undefined;
 
 function reg(): Registry {
   if (registry) return registry;
-  const byName = new Map<string, ToolDefinition>();
+  const byName = new Map<string, RegisteredTool>();
   const aliasOf = new Map<string, string>();
-  for (const def of definedTools()) {
+  for (const def of toolDefinitions() as ToolDefinition[]) {
     if (byName.has(def.name) || aliasOf.has(def.name)) {
       throw new Error(`MCP tool ${def.name} is defined twice`);
     }
-    byName.set(def.name, def);
+    const input = fullInput(def);
+    byName.set(def.name, {
+      def,
+      input,
+      validator: input.loose(),
+      wire: wireTool(def, input),
+    });
     for (const alias of def.aliases ?? []) {
       if (byName.has(alias.name) || aliasOf.has(alias.name)) {
         throw new Error(`MCP tool alias ${alias.name} is taken`);
@@ -179,9 +194,27 @@ function reg(): Registry {
       aliasOf.set(alias.name, def.name);
     }
   }
-  registry = { byName, aliasOf };
+  const defs = [...byName.values()].map((t) => t.def);
+  const withHint = (hint: "readOnlyHint" | "openWorldHint") =>
+    new Set(
+      defs
+        .filter((d) => d.annotations?.[hint] === true)
+        .flatMap((d) => [d.name, ...(d.aliases ?? []).map((a) => a.name)])
+    );
+  registry = {
+    byName,
+    aliasOf,
+    teaching: Object.fromEntries(
+      defs.map((d) => [d.name, [...new Set([...(d.teaches ?? []), d.name])]])
+    ),
+    readOnly: withHint("readOnlyHint"),
+    openWorld: withHint("openWorldHint"),
+  };
   return registry;
 }
+
+const registered = (name: string) =>
+  reg().byName.get(canonicalToolName(name));
 
 /** The tool a name answers as: itself, or the tool an alias names. */
 export function canonicalToolName(name: string): string {
@@ -190,7 +223,7 @@ export function canonicalToolName(name: string): string {
 
 /** The definition a name answers with (an alias gives its tool's). */
 export function toolDefinition(name: string): ToolDefinition | undefined {
-  return reg().byName.get(canonicalToolName(name));
+  return registered(name)?.def;
 }
 
 /** Every defined tool name (aliases excluded). */
@@ -198,11 +231,40 @@ export function definedToolNames(): string[] {
   return [...reg().byName.keys()];
 }
 
+/**
+ * Every name that answers, each a fresh `tools/list` entry (callers append
+ * per-session teaching to a description): each tool, then each alias.
+ */
+export function wireTools(): Tool[] {
+  const tools = [...reg().byName.values()];
+  return [
+    ...tools.map((t) => ({ ...t.wire })),
+    ...tools.flatMap(({ def, wire }) =>
+      (def.aliases ?? []).map((alias) => {
+        const title = def.annotations?.title;
+        return {
+          ...wire,
+          name: alias.name,
+          ...(def.annotations
+            ? {
+                annotations: {
+                  ...def.annotations,
+                  ...(title ? { title: `${title} (old name)` } : {}),
+                },
+              }
+            : {}),
+          description: `Old name of ${def.name}, kept so existing clients keep working: same parameters, same answer. Call ${def.name}.`,
+        };
+      })
+    ),
+  ];
+}
+
 /** The listed entry tools. */
 export function entryToolNames(): string[] {
   return [...reg().byName.values()]
-    .filter((d) => d.group === "entry" && !d.hidden)
-    .map((d) => d.name);
+    .filter(({ def }) => def.group === "entry" && !def.hidden)
+    .map(({ def }) => def.name);
 }
 
 /**
@@ -214,7 +276,7 @@ export function toolGroupMembers(
   callable = false
 ): Record<McpToolGroupName, string[]> {
   const out = {} as Record<McpToolGroupName, string[]>;
-  for (const def of reg().byName.values()) {
+  for (const { def } of reg().byName.values()) {
     if (def.group === "entry") continue;
     const names = callable
       ? [def.name, ...(def.aliases ?? []).map((a) => a.name)]
@@ -229,19 +291,16 @@ export function toolGroupMembers(
 /** Names that answer but are never listed: hidden doors and aliases. */
 export function unlistedToolNames(): Set<string> {
   return new Set([
-    ...[...reg().byName.values()].filter((d) => d.hidden).map((d) => d.name),
+    ...[...reg().byName.values()]
+      .filter(({ def }) => def.hidden)
+      .map(({ def }) => def.name),
     ...reg().aliasOf.keys(),
   ]);
 }
 
 /** Each tool's teaching keys: what it `teaches`, then its own name. */
 export function toolTeachingKeys(): Readonly<Record<string, string[]>> {
-  return Object.fromEntries(
-    [...reg().byName.values()].map((d) => [
-      d.name,
-      [...new Set([...(d.teaches ?? []), d.name])],
-    ])
-  );
+  return reg().teaching;
 }
 
 export type { SkillDoor };
@@ -267,7 +326,7 @@ export function toolNameOnDoor(
  */
 export function toolExposure(): Record<string, Record<string, string>> {
   return Object.fromEntries(
-    definedTools().flatMap((d) => [
+    [...reg().byName.values()].flatMap(({ def: d }) => [
       [
         d.name,
         {
@@ -284,107 +343,115 @@ export function toolExposure(): Record<string, Record<string, string>> {
   );
 }
 
-/** Every name (aliases too) whose definition declares `hint: true`. */
-function namesWithHint(hint: "readOnlyHint" | "openWorldHint"): Set<string> {
-  return new Set(
-    [...reg().byName.values()]
-      .filter((d) => d.annotations?.[hint] === true)
-      .flatMap((d) => [d.name, ...(d.aliases ?? []).map((a) => a.name)])
-  );
-}
-
 /**
  * The read-only tools: what the pod edge counts against an agent's READ
  * budget (`crud_read`, apps/api middleware/security.ts), and the calls that
  * group no write under a session (`isReadOnlyTool`).
  */
-export async function readOnlyToolNames(): Promise<Set<string>> {
-  return namesWithHint("readOnlyHint");
+export function readOnlyToolNames(): ReadonlySet<string> {
+  return reg().readOnly;
 }
 
 /**
  * The tools that reach outside the pod (a capability, an automation, a
  * playbook run): the Hub request guard never times them out.
  */
-export async function openWorldToolNames(): Promise<Set<string>> {
-  return namesWithHint("openWorldHint");
+export function openWorldToolNames(): ReadonlySet<string> {
+  return reg().openWorld;
+}
+
+/** A tool's declared input names (an alias gives its tool's), or null. */
+export function declaredArgNames(name: string): string[] | null {
+  const wire = registered(name)?.wire;
+  return wire ? Object.keys(wire.inputSchema.properties ?? {}) : null;
 }
 
 /** Is this a pod tool name (a tool or an alias)? */
 export function isPodToolName(name: string): boolean {
-  return toolDefinition(name) !== undefined;
+  return registered(name) !== undefined;
 }
 
 // ── The input check ─────────────────────────────────────────────────────────
 
 /**
- * The schema the validator is compiled from: the advertised one minus what a
- * check must not do. `default` is dropped (a handler keeps its own defaults
- * and tells absent from given); `format` is dropped (the handlers and the
- * uuid door already check ids and urls with their own wording). Nested
- * objects stay open: their keys are data (an entity's `properties`), and an
- * unknown top-level key is refused by `refuseUndeclaredArgs` with a better
- * sentence than a schema error.
+ * REFUSE an argument a tool does not declare, instead of dropping it. For a
+ * WRITE door a dropped key is a lie told as a success. Live, 2026-10-21/22 on
+ * the founder's pod: `synap_update_session` with `reopenOutput: "spec"`
+ * returned `status: "updated"` and changed nothing; with `addOutputs` (the
+ * real input is `addOutput`, or `outcomes`) it returned "updated" and left
+ * `expectedOutputs` empty. The agent believed both, and so did the person.
+ * The valid set is the tool's own input, plus the lens the door injects.
  */
-function validationSchema(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(validationSchema);
-  if (!node || typeof node !== "object") return node;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "default" || key === "format" || key === "description") {
-      continue;
-    }
-    out[key] =
-      key === "properties" && value && typeof value === "object"
-        ? Object.fromEntries(
-            Object.entries(value).map(([k, v]) => [k, validationSchema(v)])
-          )
-        : validationSchema(value);
-  }
-  const isObject =
-    out.type === "object" ||
-    (Array.isArray(out.type) && out.type.includes("object"));
-  if (isObject && out.additionalProperties === undefined) {
-    out.additionalProperties = true;
-  }
-  return out;
-}
-
-const validators = new Map<string, z.ZodType>();
-
-/** The tool's validator, compiled once from its declared input schema. */
-export function inputValidator(def: ToolDefinition): z.ZodType {
-  let v = validators.get(def.name);
-  if (!v) {
-    v = z.fromJSONSchema(
-      validationSchema(def.inputSchema) as Parameters<
-        typeof z.fromJSONSchema
-      >[0]
-    );
-    validators.set(def.name, v);
-  }
-  return v;
+export function undeclaredArgs(
+  args: Record<string, unknown>,
+  declared: readonly string[]
+): string[] {
+  const known = new Set<string>([...declared, ...DOOR_INJECTED_ARGS]);
+  return Object.keys(args).filter((k) => !known.has(k));
 }
 
 /**
- * A top-level `null` for an optional input that does not take null reads as
- * "not given": models send it for a field they mean to leave out, and every
- * handler already treated it so.
+ * A declared name `key` was probably meant for: a prefix-variant (`addOutputs`
+ * → `addOutput`, `sort` → `sortBy`) or a camel-case tail (`id` → `entityId`).
+ * Required names are tried first: a call missing one is the likeliest miss.
  */
-function withoutNullOptionals(
+function nearMiss(
+  key: string,
+  declared: readonly string[],
+  required: readonly string[]
+): string | undefined {
+  const k = key.toLowerCase();
+  const tail = key.length >= 2 ? key[0]!.toUpperCase() + key.slice(1) : null;
+  return [...required, ...declared].find((d) => {
+    const dl = d.toLowerCase();
+    return (
+      dl !== k &&
+      (k.startsWith(dl) ||
+        dl.startsWith(k) ||
+        (tail !== null && d.endsWith(tail)))
+    );
+  });
+}
+
+/** The refusal sentence. Pure, so its wording is testable. */
+export function undeclaredArgsMessage(
+  toolName: string,
+  unknown: readonly string[],
+  declared: readonly string[],
+  required: readonly string[] = []
+): string {
+  const hints = unknown.flatMap((k) => {
+    const near = nearMiss(k, declared, required);
+    return near ? [`\`${k}\` → did you mean \`${near}\`?`] : [];
+  });
+  return (
+    `${toolName} does not take ${unknown.map((k) => `\`${k}\``).join(", ")} — NOTHING WAS CHANGED. ` +
+    (hints.length > 0 ? `${hints.join(" ")} ` : "") +
+    `Valid inputs: ${declared.join(", ")}. Resend with only these.`
+  );
+}
+
+/**
+ * A top-level value that reads as "not given": `null` for an optional input
+ * that does not take null, and `""` for an optional enum. Models send both for
+ * a field they mean to leave out, and every handler already read them so.
+ */
+function withoutAbsentValues(
   args: Record<string, unknown>,
   schema: Tool["inputSchema"]
 ): Record<string, unknown> {
   const required = new Set(schema.required ?? []);
   const props = (schema.properties ?? {}) as Record<
     string,
-    { type?: unknown }
+    { type?: unknown; enum?: unknown }
   >;
   return Object.fromEntries(
     Object.entries(args).filter(([key, value]) => {
-      if (value !== null || required.has(key)) return true;
-      const type = props[key]?.type;
-      return type === "null" || (Array.isArray(type) && type.includes("null"));
+      if (required.has(key) || (value !== null && value !== "")) return true;
+      const { type, enum: values } = props[key] ?? {};
+      return value === null
+        ? type === "null" || (Array.isArray(type) && type.includes("null"))
+        : !Array.isArray(values);
     })
   );
 }
@@ -395,29 +462,41 @@ export type ParsedToolArgs =
 
 /**
  * THE input check of a tool call: unknown keys refused, then the arguments
- * parsed against the tool's schema. An unknown tool passes through untouched
+ * parsed against the tool's input. An unknown tool passes through untouched
  * (the dispatch says it is unknown).
  */
-export async function parseToolArgs(
+export function parseToolArgs(
   name: string,
   args: Record<string, unknown>
-): Promise<ParsedToolArgs> {
-  const def = toolDefinition(name);
-  if (!def) return { ok: true, args };
+): ParsedToolArgs {
+  const tool = registered(name);
+  if (!tool) return { ok: true, args };
+  const { def, validator, wire } = tool;
   const refused = Object.keys(args).find((k) =>
     Object.hasOwn(def.refusedArgs ?? {}, k)
   );
   if (refused) {
     return { ok: false, result: toolError(def.refusedArgs![refused]!) };
   }
-  const undeclared = await refuseUndeclaredArgs(name, args);
-  if (undeclared) return { ok: false, result: undeclared };
-  const parsed = inputValidator(def).safeParse(
-    withoutNullOptionals(args, def.inputSchema)
-  );
-  if (parsed.success) {
-    return { ok: true, args: parsed.data as Record<string, unknown> };
+  const declared = declaredArgNames(name)!;
+  const unknown = undeclaredArgs(args, declared);
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      result: toolError(
+        undeclaredArgsMessage(
+          name,
+          unknown,
+          declared,
+          wire.inputSchema.required ?? []
+        )
+      ),
+    };
   }
+  const parsed = validator.safeParse(
+    withoutAbsentValues(args, wire.inputSchema)
+  );
+  if (parsed.success) return { ok: true, args: parsed.data };
   return {
     ok: false,
     result: toolError(

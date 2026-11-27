@@ -3,8 +3,8 @@
  * the tool it runs. ONE derivation for every layer that judges a `tools/call`
  * by its tool name:
  *
- *   - the tools/call door (`mcp/index.ts`): the call fence, the undeclared-args
- *     shadow and `tools.execute` run on the INNER tool;
+ *   - the tools/call door (`mcp/index.ts`): the call fence and
+ *     `tools.execute` (its input check included) run on the INNER tool;
  *   - the Hub request guard (`http-handler.ts`): a dispatched long-poll
  *     (`synap_wait_for_answer`) or model call is exempt from the 30 s timeout
  *     like the direct call;

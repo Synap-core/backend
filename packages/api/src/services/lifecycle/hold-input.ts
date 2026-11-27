@@ -59,26 +59,27 @@ export function moveHoldArgs(input: {
  */
 const AGENT_HOLD_ON = HOLD_ON.filter((on) => on !== "unspecified");
 
-/** Spread into an MCP tool's `inputSchema.properties` (a status door). */
-export const MOVE_HOLD_TOOL_PROPERTIES = {
-  hold: {
-    type: "object",
-    description: `Required when the move pauses. Say what it waits on. on: ${AGENT_HOLD_ON.join(" | ")}. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves; a dev fact: ${HOLD_DEV_MOVES_HELP}; a wait on the person: ${HOLD_WAIT_MOVES_HELP} (to sleep until the person answers your ask). reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.`,
-    properties: {
-      on: { type: "string", enum: AGENT_HOLD_ON },
-      ref: { type: ["string", "null"] },
-      reason: { type: ["string", "null"] },
-      until: { type: ["object", "null"] },
-      reviewBy: { type: ["string", "null"] },
-    },
-    required: ["on"],
-    additionalProperties: false,
-  },
-  occurredAt: {
-    type: "string",
-    description: `When the move really happened, if earlier than now (ISO date-time): at most ${OCCURRED_AT_MAX_PAST_DAYS} days back, never in the future. The move is recorded now and marked backdated.`,
-  },
-} as const;
+/** Spread into an MCP tool's `input` (a status door). */
+export const MOVE_HOLD_INPUT = {
+  hold: z
+    .strictObject({
+      on: z.enum(AGENT_HOLD_ON),
+      ref: z.string().nullable().optional(),
+      reason: z.string().nullable().optional(),
+      until: z.record(z.string(), z.unknown()).nullable().optional(),
+      reviewBy: z.string().nullable().optional(),
+    })
+    .optional()
+    .describe(
+      `Required when the move pauses. Say what it waits on. on: ${AGENT_HOLD_ON.join(" | ")}. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves; a dev fact: ${HOLD_DEV_MOVES_HELP}; a wait on the person: ${HOLD_WAIT_MOVES_HELP} (to sleep until the person answers your ask). reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.`
+    ),
+  occurredAt: z
+    .string()
+    .optional()
+    .describe(
+      `When the move really happened, if earlier than now (ISO date-time): at most ${OCCURRED_AT_MAX_PAST_DAYS} days back, never in the future. The move is recorded now and marked backdated.`
+    ),
+};
 
 /**
  * `{ hold, occurredAt }` from an MCP tool's raw args, shape-checked by the same

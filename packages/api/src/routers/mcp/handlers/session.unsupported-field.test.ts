@@ -36,8 +36,8 @@ describe("synap_update_session refuses what it cannot do", () => {
     expect(CODE).toMatch(/updateFocusSession/);
   });
 
-  it("REFUSES `stages` instead of accepting and dropping it, NOTHING WAS CHANGED, naming the door that can", async () => {
-    const out = await parseToolArgs("synap_update_session", {
+  it("REFUSES `stages` instead of accepting and dropping it, NOTHING WAS CHANGED, naming the door that can", () => {
+    const out = parseToolArgs("synap_update_session", {
       sessionId: "s1",
       stages: [],
     });

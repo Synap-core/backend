@@ -13,8 +13,8 @@
  *
  * HOW THE CALL IS JUDGED: the tools/call door (`mcp/index.ts`) unwraps a
  * dispatcher call ONCE, at its top (`effectiveToolCall`, `call-tool-name.ts`),
- * then runs the call fence (`toolCallRefusal`), the undeclared-args shadow and
- * `tools.execute` on the INNER tool, exactly as a direct call of it. The
+ * then runs the call fence (`toolCallRefusal`) and `tools.execute` (its input
+ * check included) on the INNER tool, exactly as a direct call of it. The
  * dispatcher has no authority of its own, so nothing judges its name.
  *
  * What the dispatcher adds on top of the direct call (this module, pure):
