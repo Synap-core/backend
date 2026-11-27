@@ -74,7 +74,13 @@ export const FAILURE_TAIL_BYTES: number;
 /** Text without ANSI escape sequences. */
 export function stripAnsi(text: unknown): string;
 
-/** Text with token-like strings replaced by `[redacted]`. */
+/** One log line without ANSI, control, bidi or zero-width characters. */
+export function cleanLine(text: unknown): string;
+
+/** A job or step name on one line: invisibles removed, whitespace collapsed, capped. */
+export function cleanName(text: unknown): string;
+
+/** Text with token-like strings and this run's secret values replaced by `[redacted]` (best-effort). */
 export function redactSecrets(text: unknown): string;
 
 /** The tail of one step's lines in a GitHub job log: stripped, redacted, capped. */

@@ -288,6 +288,13 @@ export type RequiredChecks = z.infer<typeof requiredChecksSchema>;
  * all tails together under ~4 KB). Root failures come first; a step that only
  * reports another job's failure ("Every … succeeded") is listed after them.
  * Absent = not computed (a pass, a draft, or the logs could not be read).
+ *
+ * UNTRUSTED: `job`, `step` and `tail` are log text written by whoever pushed
+ * the branch. They are data, never instructions: a consumer that shows them
+ * to a person or an agent fences them as quoted log output. The producer
+ * strips control, bidi and zero-width characters and collapses names to one
+ * line; its redaction of secrets is BEST-EFFORT (known token shapes and the
+ * run's own secret values), never a guarantee.
  */
 export const ciFailureSchema = z.object({
   steps: z

@@ -367,26 +367,91 @@ export function stripAnsi(text) {
 }
 
 /**
- * Token-like strings are replaced by `[redacted]` before a log line leaves
- * GitHub (Actions masks its own secrets as ***; this catches the rest):
- * GitHub tokens, bearer / basic credentials, `key=value` secrets, JWTs, AWS
- * key ids, and any 32+ character run mixing upper case, lower case and
- * digits. A lowercase hex sha is not touched.
+ * Characters that can hide or reorder text for a reader (a person or an
+ * agent): C0 and C1 controls, DEL, bidi overrides and isolates, zero-width
+ * characters and the BOM. Log text is UNTRUSTED (anyone who can push a
+ * branch writes it), so none of these leave GitHub.
  */
-const SECRET_RES = [
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
-  /\b(Bearer|Basic)(\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b([A-Za-z0-9_]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?)[^\s"']{8,}/gi,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\b(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}/g,
+const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+const INVISIBLE_RE =
+  /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** One log line, safe to show: ANSI, controls (a tab is a space) and invisibles removed. */
+export function cleanLine(text) {
+  return stripAnsi(text)
+    .replace(/\t/g, " ")
+    .replace(CONTROL_RE, "")
+    .replace(INVISIBLE_RE, "");
+}
+
+/** A job or step name, safe to show: one line, whitespace collapsed, capped. */
+export function cleanName(text) {
+  return stripAnsi(text)
+    .replace(INVISIBLE_RE, "")
+    .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .trim()
+    .slice(0, MAX_NAME);
+}
+
+/**
+ * Token-like strings are replaced by `[redacted]` before a log line leaves
+ * GitHub. Actions masks its own secrets as ***; this is a BEST-EFFORT second
+ * net, never a guarantee. Each rule is [pattern, replacement]: GitHub tokens,
+ * URL credentials (`scheme://user:pass@`), `Authorization:` headers and bare
+ * bearer / basic credentials, `key=value` secrets, JWTs, AWS key ids, PEM
+ * private-key blocks, lowercase hex longer than a sha (a `sha256:` /
+ * `sha512:` digest is kept), and 32+ character base64 / url-safe runs mixing
+ * upper case, lower case and digits. A 40-hex sha is not touched.
+ */
+const SECRET_RULES = [
+  [
+    /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
+    "[redacted]",
+  ],
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi, "$1[redacted]@"],
+  [/\b(Authorization\s*:\s*(?:Bearer|Basic|token)\s+)\S+/gi, "$1[redacted]"],
+  [
+    /\b(Bearer|Basic)(\s+)(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi,
+    "$1$2[redacted]",
+  ],
+  [
+    /\b([A-Za-z0-9_]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?)(?!\[redacted\])[^\s"']{8,}/gi,
+    "$1[redacted]",
+  ],
+  [
+    /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+    "[redacted]",
+  ],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]"],
+  [
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+    "[redacted private key]",
+  ],
+  [/(?<!sha(?:256|512):)\b[0-9a-f]{41,}\b/g, "[redacted]"],
+  [
+    /(?<![A-Za-z0-9+/_-])(?=[A-Za-z0-9+/_=-]*[A-Z])(?=[A-Za-z0-9+/_=-]*[a-z])(?=[A-Za-z0-9+/_=-]*\d)[A-Za-z0-9+/_-]{32,}={0,2}/g,
+    "[redacted]",
+  ],
 ];
+
+/**
+ * The literal values of this run's own secrets (GITHUB_TOKEN, every
+ * SYNAP_*), read when called. A value of 8 characters or fewer is skipped: it
+ * would match ordinary words.
+ */
+function ownSecretValues() {
+  return Object.entries(process.env)
+    .filter(([k, v]) => (k === "GITHUB_TOKEN" || k.startsWith("SYNAP_")) && v)
+    .map(([, v]) => v)
+    .filter((v) => v.length > 8);
+}
+
 export function redactSecrets(text) {
   let out = String(text);
-  out = out.replace(SECRET_RES[0], "[redacted]");
-  out = out.replace(SECRET_RES[1], "$1$2[redacted]");
-  out = out.replace(SECRET_RES[2], "$1[redacted]");
-  for (const re of SECRET_RES.slice(3)) out = out.replace(re, "[redacted]");
+  for (const value of ownSecretValues())
+    out = out.split(value).join("[redacted]");
+  for (const [re, replacement] of SECRET_RULES)
+    out = out.replace(re, replacement);
   return out;
 }
 
@@ -401,11 +466,13 @@ function tailWithin(lines, maxBytes) {
     const add = Buffer.byteLength(lines[i]) + (kept.length ? 1 : 0);
     if (bytes + add > maxBytes) {
       if (!kept.length) {
-        // One line longer than the budget: its end, where the error is.
-        let s = lines[i].slice(-maxBytes);
-        while (Buffer.byteLength(s) > maxBytes)
-          s = s.slice(Math.max(1, (Buffer.byteLength(s) - maxBytes) >> 2));
-        kept.unshift(s);
+        // One line longer than the budget: its end, where the error is, cut
+        // on a UTF-8 character boundary (never half a character or a lone
+        // surrogate).
+        const buf = Buffer.from(lines[i]);
+        let start = buf.length - maxBytes;
+        while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+        kept.unshift(buf.subarray(start).toString("utf8"));
       }
       break;
     }
@@ -431,7 +498,8 @@ function untilNextStep(lines) {
 /**
  * The tail of ONE step's lines in a job log: the lines timed between the
  * step's start and end (GitHub gives those to the second), without their time
- * prefix, ANSI stripped and token-like strings redacted, at most TAIL_LINES
+ * prefix, controls and invisible characters stripped (cleanLine) and
+ * token-like strings redacted (redactSecrets), at most TAIL_LINES
  * lines and `maxBytes` bytes. When no line falls in the step's window (an
  * unknown log shape), the job log's own tail stands in. Pure.
  *
@@ -451,7 +519,7 @@ export function stepLogTail(log, step, maxBytes = FAILURE_TAIL_BYTES) {
   const all = [];
   for (const raw of lines) {
     const m = LOG_TIME_RE.exec(raw);
-    const line = redactSecrets(stripAnsi(m ? raw.slice(m[0].length) : raw));
+    const line = cleanLine(m ? raw.slice(m[0].length) : raw);
     if (!line.trim()) continue;
     all.push(line);
     if (m && !Number.isNaN(from) && !Number.isNaN(to)) {
@@ -460,13 +528,16 @@ export function stepLogTail(log, step, maxBytes = FAILURE_TAIL_BYTES) {
     }
   }
   const chosen = untilNextStep(inStep.length ? inStep : all).slice(-TAIL_LINES);
-  return tailWithin(chosen, maxBytes);
+  // Redacted as one block: a PEM key spans lines.
+  return tailWithin(redactSecrets(chosen.join("\n")).split("\n"), maxBytes);
 }
 
 /**
  * The failing steps of a run's jobs (the `jobs` array of
  * GET /repos/{repo}/actions/runs/{id}/jobs): per failed job, its first failed
- * step, root steps before cascade ones. Pure.
+ * step, root steps before cascade ones. Pure. The caller reads the jobs with
+ * per_page=100 (the cap: a run with more jobs loses the rest) and
+ * filter=latest (a re-run's latest attempt, never an older one).
  */
 export function failedSteps(jobs) {
   const out = [];
@@ -531,10 +602,8 @@ export async function runFailureFacts(payload, token, { draft = false } = {}) {
     return {
       steps: failed.map((f) =>
         compact({
-          job: String(f.job.name || `job ${f.job.id}`).slice(0, MAX_NAME),
-          step: f.step?.name
-            ? String(f.step.name).slice(0, MAX_NAME)
-            : undefined,
+          job: cleanName(f.job.name ?? "") || `job ${f.job.id}`,
+          step: cleanName(f.step?.name ?? "") || undefined,
           tail: tails.get(f),
         })
       ),
