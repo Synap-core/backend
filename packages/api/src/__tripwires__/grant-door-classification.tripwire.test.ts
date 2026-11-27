@@ -222,9 +222,10 @@ const GATED_WRITE_ROUTES: Readonly<Record<string, Gate>> = {
   "POST /capture/draft-process": "assertWorkspaceWrite",
   // rest/commands.ts — running a command is a governed write.
   "POST /commands/execute": "checkPermissionOrPropose",
-  // rest/cell-instances.ts — create, create from HTML, reconfigure: governed.
+  // rest/cell-instances.ts — create, reconfigure: governed. (Create from HTML
+  // writes its page through the Hub document door, `documents.createDocument`,
+  // a gated tRPC mutation: classified `gated-trpc`.)
   "POST /cell-instances": "checkPermissionOrPropose",
-  "POST /cell-instances/html": "checkPermissionOrPropose",
   "PATCH /cell-instances/:id/config": "checkPermissionOrPropose",
 };
 

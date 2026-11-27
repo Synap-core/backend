@@ -7,9 +7,8 @@
  *
  * A cell instance is a concrete, addressable cell living in a workspace:
  *   - config-only cells (the common case), or
- *   - content cells whose versioned HTML/markdown lives in a `documents` row
- *     (`createHtmlCell` reuses the existing MinIO document path — it does NOT
- *     invent its own storage).
+ *   - placements of a page: an html-embed cell points at an html document
+ *     the HTML page door wrote (`createHtmlCell`); the cell holds no content.
  *
  * Polymorphic relations: `link` creates a relation with a CELL source endpoint
  * and an ENTITY target endpoint, exercising the additive polymorphic columns
@@ -39,6 +38,7 @@ import {
   entities,
 } from "@synap/database";
 import { requireUserId } from "../utils/user-scoped.js";
+import { assertHtmlPage } from "../services/document-patch/html-page-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   createHtmlCellInstance,
@@ -65,6 +65,8 @@ const CreateHtmlCellSchema = z.object({
   html: z.string(),
   name: z.string().optional(),
   workspaceId: z.string().uuid().optional(),
+  /** What the page reads through the frame bridge (checked by the page door). */
+  reads: z.unknown().optional(),
 });
 
 // ============================================================================
@@ -141,13 +143,14 @@ export const cellInstancesRouter = router({
     }),
 
   /**
-   * Create an HTML cell.
+   * Create an HTML cell: a person's page, placed as a cell.
    *
-   * Reuses the EXISTING document-creation path (MinIO via @synap/storage,
-   * mirroring `documents.create` in routers/documents.ts:90-143): build a
-   * storage key, upload the html to MinIO, insert a versioned `documents` row,
-   * then create a `cell_instances` row of cellType 'html-embed' referencing it.
-   * This is the canonical document/MinIO path — no bespoke blob storage.
+   * ONE HTML write door (founder decision, 27 Nov 2026): the page is written
+   * by the HTML page door (`createHtmlPage`: the same checks and stored shape
+   * as every html document, `type: "html"`, its reads on `metadata.reads`),
+   * and the html-embed cell is only a placement pointing at it. A person's
+   * own create is ungoverned, as `documents.create` is; a refused page is
+   * BAD_REQUEST before anything is written.
    */
   createHtmlCell: workspaceProcedure
     .input(CreateHtmlCellSchema)
@@ -166,13 +169,15 @@ export const cellInstancesRouter = router({
       // land in `workspaceId`, which the input may name. Editor+ there (F10).
       await assertWorkspaceWrite(db, userId, { workspaceId });
 
-      // The backing document goes through the ONE create door (fresh-key
-      // upload + row + v1 checkpoint), then the html-embed cell references it.
+      // The page door's checks, refused before any write; then the page
+      // (through the door, which checks again) and its placement cell.
+      const page = assertHtmlPage({ content: input.html, reads: input.reads });
       const row = await createHtmlCellInstance({
         workspaceId,
         userId,
         html: input.html,
         name: input.name,
+        ...(page.reads ? { reads: page.reads } : {}),
       });
 
       return serialize(row);
