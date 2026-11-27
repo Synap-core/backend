@@ -23,6 +23,7 @@ import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { loadFailure, notFound } from "../../_lib/object/load-failure";
+import type { ObjectCrumb } from "../../_lib/object/object-header";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import {
@@ -46,7 +47,14 @@ export function cellTitle(
   return keyName ? humanizeToken(keyName) : resolveObjectNoun("cell");
 }
 
-export function CellView({ id: key }: { id: string }) {
+export function CellView({
+  id: key,
+  breadcrumb,
+}: {
+  id: string;
+  /** The trail back, when this cell opened on an object (`?surface=`). */
+  breadcrumb?: ObjectCrumb[];
+}) {
   const query = trpc.widgetDefinitions.get.useQuery(
     { typeKey: key },
     { retry: false }
@@ -56,9 +64,25 @@ export function CellView({ id: key }: { id: string }) {
   const noun = resolveObjectNoun("cell");
   if (query.isLoading) return <OpenLoading />;
   const fail = loadFailure(query.error, noun);
-  if (fail) return <OpenFailure kind="cell" id={key} failure={fail} />;
+  if (fail) {
+    return (
+      <OpenFailure
+        kind="cell"
+        id={key}
+        failure={fail}
+        breadcrumb={breadcrumb}
+      />
+    );
+  }
   if (!query.data) {
-    return <OpenFailure kind="cell" id={key} failure={notFound(noun)} />;
+    return (
+      <OpenFailure
+        kind="cell"
+        id={key}
+        failure={notFound(noun)}
+        breadcrumb={breadcrumb}
+      />
+    );
   }
 
   const row = query.data as CellRow;
@@ -86,6 +110,7 @@ export function CellView({ id: key }: { id: string }) {
         header={{
           kind: "cell",
           title,
+          breadcrumb,
           summary: t("bounce.inApp"),
           status: { kind: "unknown", label: t("bounce.noWebPage") },
           primaryAction: openInApp,
@@ -101,6 +126,7 @@ export function CellView({ id: key }: { id: string }) {
       header={{
         kind: "cell",
         title,
+        breadcrumb,
         summary: description,
         secondaryActions: openInApp,
       }}

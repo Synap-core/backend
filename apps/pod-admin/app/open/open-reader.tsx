@@ -8,7 +8,9 @@
  * keeps the card (`open-shell.tsx`).
  *
  *   bar   left: the Synap mark (Home, only for a member or an admin:
- *         `canGoHome`), then the title and its kind noun. Right: Share (copy
+ *         `canGoHome`), then the trail back when the page opened from
+ *         another object (its parents, each a door: a surface opened on its
+ *         object), then the title and its kind noun. Right: Share (copy
  *         this page's link), the page's own doors ("Open in app"), and ⋯.
  *         The title is never a door: the mark is.
  *   ⋯     what the card showed around the content: its facts, who is signed
@@ -26,6 +28,7 @@
  */
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@heroui/react";
 import { MoreHorizontal } from "lucide-react";
 import { StatusPill } from "../(admin)/components/status-pill";
@@ -66,6 +69,8 @@ export function OpenReader({
   const { podHost, identity, canGoHome } = useReceiverIdentity();
   const href = usePageHref();
   const noun = header.noun ?? kindLabel(header.kind);
+  // The trail's last crumb is this page (its title is the h1).
+  const parents = (header.breadcrumb ?? []).slice(0, -1);
   const doors =
     header.primaryAction || header.secondaryActions ? (
       <>
@@ -91,6 +96,35 @@ export function OpenReader({
         />
         <span aria-hidden className="h-4 w-px shrink-0 bg-foreground/10" />
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {parents.length > 0 && (
+            <nav
+              aria-label={t("reader.trail.aria")}
+              className="flex min-w-0 max-w-[45%] shrink items-center gap-2"
+            >
+              {parents.map((crumb, i) => (
+                <span
+                  key={`${crumb.label}-${i}`}
+                  className="flex min-w-0 items-center gap-2"
+                >
+                  {crumb.href ? (
+                    <Link
+                      href={crumb.href}
+                      className="min-w-0 truncate rounded-sm text-[13px] text-foreground/65 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                    >
+                      {crumb.label}
+                    </Link>
+                  ) : (
+                    <span className="min-w-0 truncate text-[13px] text-foreground/65">
+                      {crumb.label}
+                    </span>
+                  )}
+                  <span aria-hidden className="shrink-0 text-foreground/35">
+                    /
+                  </span>
+                </span>
+              ))}
+            </nav>
+          )}
           <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">
             {header.title}
           </h1>
