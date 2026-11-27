@@ -513,7 +513,7 @@ describe("a placement is of the caller's own html page of the space, under the s
         emitProposalReviewed: vi.fn(),
         reportProposalOutcome: vi.fn(),
       },
-    } as never) as Promise<Record<string, unknown>>;
+    } as never) as unknown as Promise<Record<string, unknown>>;
   /** A page filed as a proposal through the cell route; its stored data. */
   const filed = async (title: string) => {
     h.verdict = "proposed";
