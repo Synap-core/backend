@@ -894,9 +894,10 @@ describe("ci-changes: a sibling pin bump runs the tests that read the sibling", 
     const d = pr(withPins(["sibling-pins.json"]));
     expect(d.scope).toBe("selected");
     expect(tests(d)).toEqual(expect.arrayContaining(CP_READERS));
-    const other = pr(["packages/governance-policy/src/index.ts"]);
-    expect(other.scope).toBe("selected");
-    expect(tests(other)).not.toContain(CP_READERS[0]);
+    // Every CP reader left is a tripwire (every PR runs it); before the
+    // door-tool-name mirror was deleted, a non-tripwire reader was pinned
+    // here as reached only through the pin.
+    expect(CP_READERS.every(isTripwire)).toBe(true);
   });
 
   it("CI's tier (tierOfCheckout) selects through it", () => {

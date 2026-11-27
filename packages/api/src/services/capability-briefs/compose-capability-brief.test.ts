@@ -16,7 +16,10 @@ const { mockDbSelect, mockDryRun, mockGetEffectiveAiPosture } = vi.hoisted(
   })
 );
 
-vi.mock("@synap/database", () => ({
+// The composer reads tool facts from the definitions (`define-tool.ts`),
+// whose modules need the rest of the package: only what it calls is mocked.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: { select: mockDbSelect },
   skills: {
     slug: "slug",
