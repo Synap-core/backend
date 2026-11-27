@@ -25,7 +25,18 @@
  *
  * ALIAS
  *   - `device` / `deviceId` name the same computer as `computer` /
- *     `computerId`, through the MCP door itself (`synap_list_installations`).
+ *     `computerId`, through the MCP door itself (`synap_list_installations`)
+ *     and `computer.run_recipe`'s capability door; another person's device
+ *     id passes through as it is (nothing of it leaks);
+ *
+ * LIFE OF A REPORT
+ *   - two processes reporting out of phase each keep their capabilities
+ *     alive past the TTL; `[]` replaces a reporter's set, no list keeps it;
+ *   - two reports at once lose neither manifest section nor entry;
+ *   - a device keeps at most 16 reporters, none past the TTL;
+ *   - a computer that only runs scripts reads online (`POST /box-runs/lease`);
+ *   - a revoked computer's device is retired, a reconnect brings it back with
+ *     its identity refreshed.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -37,6 +48,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  grant: null as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -47,21 +59,36 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  return {
+    ...actual,
+    db: h.db,
+    getDb: async () => h.db,
+    getRequestGrant: () => h.grant,
+  };
 });
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerComputerReportRoutes } from "../../routers/hub-protocol/rest/computer-report.js";
 import { registerHostJobsRoutes } from "../../routers/hub-protocol/rest/host-jobs.js";
+import { registerBoxRunsRoutes } from "../../routers/hub-protocol/rest/box-runs.js";
+import { effectiveDeviceCapabilities } from "@synap-core/types/device-manifest";
+import { resolveBuiltinParamAliases } from "../capabilities/builtin-verbs.js";
+import { ensureMachineAgent, revokeMachine } from "../machine-connect.js";
 import { fleetRouter } from "../../routers/fleet.js";
 import { installationHandlers } from "../../routers/mcp/handlers/installations.js";
+import { sessionHandlers } from "../../routers/mcp/handlers/session.js";
+import { devicesReadableByGrant } from "../../access/grant-door-fence.js";
 import { AccessContext } from "../../access/index.js";
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import type {
   HubHono,
   HubVariables,
 } from "../../routers/hub-protocol/rest/_shared.js";
-import { computerFromDeviceArgs, ensureComputerDevice } from "./devices.js";
+import {
+  computerFromDeviceArgs,
+  ensureComputerDevice,
+  recordDeviceReport,
+} from "./devices.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params).then((r) => r.rows);
@@ -73,6 +100,10 @@ const MAC = "machine-mac";
 const BOX_B = "machine-b";
 const AGENT = "agent-a";
 const HOSTED = "agent-on-devbox";
+const SCRIPTS = "machine-scripts";
+const TWO = "machine-two";
+const RACE = "machine-race";
+const OLD = "machine-old";
 const WS_SHARED = randomUUID();
 const WS_B = randomUUID();
 const PRINTER_SHARED = randomUUID();
@@ -96,6 +127,7 @@ function appAs(vars: {
   });
   registerComputerReportRoutes(app);
   registerHostJobsRoutes(app);
+  registerBoxRunsRoutes(app);
   return app;
 }
 const computer = (id: string, userId = A, scopes = WRITE) =>
@@ -152,6 +184,14 @@ beforeAll(async () => {
       ($5, 'bb@x', 'box-b', 'machine', $2, '{"hostname":"box-b"}', 'person'),
       ($6, 'c@x', 'Claude Code', 'claude-code', $1, NULL, NULL)`,
     [A, B, DEVBOX, MAC, BOX_B, AGENT]
+  );
+  await q(
+    `INSERT INTO users (id, email, name, agent_type, created_by_user_id, agent_metadata, computer_belongs_to) VALUES
+      ($1, 's@x', 'scripts', 'machine', $5, '{"hostname":"scripts"}', 'person'),
+      ($2, 't@x', 'two', 'machine', $5, '{"hostname":"two"}', 'person'),
+      ($3, 'r@x', 'race', 'machine', $5, '{"hostname":"race"}', 'person'),
+      ($4, 'o@x', 'old-box', 'machine', $5, '{"hostname":"old-box","platform":"linux","arch":"x64"}', 'person')`,
+    [SCRIPTS, TWO, RACE, OLD, A]
   );
   await q(
     `INSERT INTO users (id, email, name, agent_type, created_by_user_id, host_user_id)
@@ -219,7 +259,7 @@ describe("enrolment", () => {
 
   it("a reconnect reuses the device: never a twin", async () => {
     const before = await deviceRow(DEVBOX);
-    expect(await ensureComputerDevice(DEVBOX)).toBe(before.id);
+    expect((await ensureComputerDevice(DEVBOX))?.id).toBe(before.id);
     const [{ n }] = await q<{ n: number }>(
       `SELECT count(*)::int AS n FROM devices WHERE principal_user_id = $1`,
       [DEVBOX]
@@ -422,6 +462,57 @@ describe("device / deviceId: aliases of computer / computerId", () => {
     expect(printer.ok).toBe(false);
   });
 
+  it("another person's device id passes through as it is: no principal, no name", async () => {
+    const boxB = await deviceRow(BOX_B);
+    // B's computer, B's camera in a space A is not in, B's own printer in a
+    // space A shares: A reads none of them, so each id is just a value.
+    for (const id of [boxB.id, CAMERA_B, PRINTER_PERSON])
+      expect(await computerFromDeviceArgs(access(), { device: id })).toEqual({
+        ok: true,
+        computer: id,
+      });
+    const refused = await computerFromDeviceArgs(access(), {
+      computer: MAC,
+      device: boxB.id,
+    });
+    expect(refused.ok).toBe(false);
+    const said = JSON.stringify(refused);
+    for (const leak of [BOX_B, "box-b", "B-only camera"])
+      expect(said).not.toContain(leak);
+  });
+
+  it("computer.run_recipe takes `device` at the capability door, as `computer`", async () => {
+    const devbox = await deviceRow(DEVBOX);
+    const call = { capability: "media-ffmpeg", recipe: "loudness-normalize" };
+    expect(
+      await resolveBuiltinParamAliases(
+        "computer.run_recipe",
+        { ...call, device: devbox.id },
+        { userId: A }
+      )
+    ).toEqual({ ok: true, parameters: { ...call, computer: DEVBOX } });
+    // Two names for two computers: refused before anything is filed.
+    expect(
+      (
+        await resolveBuiltinParamAliases(
+          "computer.run_recipe",
+          { ...call, computer: MAC, device: devbox.id },
+          { userId: A }
+        )
+      ).ok
+    ).toBe(false);
+    // Without `device`, and for any other verb, the call is left as it is.
+    expect(
+      await resolveBuiltinParamAliases("computer.run_recipe", call, {
+        userId: A,
+      })
+    ).toEqual({ ok: true, parameters: call });
+    const other = { device: devbox.id };
+    expect(
+      await resolveBuiltinParamAliases("feed.post", other, { userId: A })
+    ).toEqual({ ok: true, parameters: other });
+  });
+
   it("synap_list_installations reads the same rows by deviceId as by computerId", async () => {
     await q(
       `INSERT INTO installations (id, user_id, kind, capability_key, machine_user_id, status, manifest, digests) VALUES
@@ -491,5 +582,270 @@ describe("two processes report one computer (waker and host runner)", () => {
       [BOX_B]
     );
     expect((await capsOf()).capabilities).toEqual(["wake.agent"]);
+  });
+});
+
+const reportsOf = async (principal: string) =>
+  (
+    await q<{
+      capability_reports: Record<
+        string,
+        { capabilities: string[]; at: string }
+      >;
+      manifest: Record<string, unknown> | null;
+      retired_at: string | null;
+    }>(
+      `SELECT capability_reports, manifest, retired_at FROM devices WHERE principal_user_id = $1`,
+      [principal]
+    )
+  )[0]!;
+
+describe("a live reporter keeps its capabilities", () => {
+  it("two processes reporting out of phase both outlive the TTL", async () => {
+    const t0 = Date.now();
+    const at = (ms: number) => new Date(t0 + ms);
+    await recordDeviceReport({
+      machineUserId: TWO,
+      reporter: "host",
+      manifest: { manifestVersion: 1, capabilities: ["serve.http"] },
+      now: at(0),
+    });
+    await recordDeviceReport({
+      machineUserId: TWO,
+      reporter: "waker",
+      manifest: { manifestVersion: 1, capabilities: ["wake.agent"] },
+      now: at(10_000),
+    });
+    // Both keep polling every 30 s, 10 s apart, with nothing new to say:
+    // within any minute only one of them could win a row-level slot.
+    let ms = 30_000;
+    for (; ms <= 32 * 60_000; ms += 30_000) {
+      await recordDeviceReport({
+        machineUserId: TWO,
+        reporter: "host",
+        now: at(ms),
+      });
+      await recordDeviceReport({
+        machineUserId: TWO,
+        reporter: "waker",
+        now: at(ms + 10_000),
+      });
+    }
+    const { capability_reports } = await reportsOf(TWO);
+    expect(effectiveDeviceCapabilities(capability_reports, at(ms))).toEqual([
+      "serve.http",
+      "wake.agent",
+    ]);
+  });
+
+  it("[] says the reporter has none; no list keeps its set and moves its time", async () => {
+    const t0 = Date.now() + 60 * 60_000;
+    await recordDeviceReport({
+      machineUserId: TWO,
+      reporter: "worker",
+      manifest: { manifestVersion: 1, capabilities: ["run.tool"] },
+      now: new Date(t0),
+    });
+    await recordDeviceReport({
+      machineUserId: TWO,
+      reporter: "worker",
+      now: new Date(t0 + 2 * 60_000),
+    });
+    let worker = (await reportsOf(TWO)).capability_reports.worker!;
+    expect(worker).toEqual({
+      capabilities: ["run.tool"],
+      at: new Date(t0 + 2 * 60_000).toISOString(),
+    });
+    await recordDeviceReport({
+      machineUserId: TWO,
+      reporter: "worker",
+      manifest: { manifestVersion: 1, capabilities: [] },
+      now: new Date(t0 + 4 * 60_000),
+    });
+    worker = (await reportsOf(TWO)).capability_reports.worker!;
+    expect(worker.capabilities).toEqual([]);
+  });
+});
+
+describe("two reports at once", () => {
+  it("lose neither manifest section nor reporter entry", async () => {
+    await ensureComputerDevice(RACE);
+    const [worker, waker] = await Promise.all([
+      recordDeviceReport({
+        machineUserId: RACE,
+        reporter: "worker",
+        manifest: {
+          manifestVersion: 1,
+          resources: { memoryMb: 4096 },
+          capabilities: ["run.tool"],
+        },
+      }),
+      recordDeviceReport({
+        machineUserId: RACE,
+        reporter: "waker",
+        manifest: {
+          manifestVersion: 1,
+          location: { site: "home" },
+          capabilities: ["wake.agent"],
+        },
+      }),
+    ]);
+    expect(worker).toMatchObject({ recorded: true, manifest: "accepted" });
+    expect(waker).toMatchObject({ recorded: true, manifest: "accepted" });
+    const row = await reportsOf(RACE);
+    expect(row.manifest).toMatchObject({
+      identity: { hostname: "race" },
+      resources: { memoryMb: 4096 },
+      location: { site: "home" },
+    });
+    expect(Object.keys(row.capability_reports).sort()).toEqual([
+      "waker",
+      "worker",
+    ]);
+  });
+
+  it("a device keeps at most 16 reporters, none past the TTL", async () => {
+    const t0 = Date.now() + 2 * 60 * 60_000;
+    for (let i = 0; i < 20; i++)
+      await recordDeviceReport({
+        machineUserId: RACE,
+        reporter: `p${i}`,
+        now: new Date(t0 + i * 1000),
+      });
+    const keys = Object.keys((await reportsOf(RACE)).capability_reports);
+    // The two at the start of the test are hours old: gone. Of the 20, the
+    // newest 16.
+    expect(keys).toHaveLength(16);
+    expect(keys).not.toContain("worker");
+    expect(keys).not.toContain("p0");
+    expect(keys).toContain("p19");
+  });
+});
+
+describe("POST /box-runs/lease is the computer reporting", () => {
+  it("a computer that only runs scripts reads online", async () => {
+    const res = await post(
+      computer(SCRIPTS, A, [...WRITE, "box.runner"]),
+      "/box-runs/lease",
+      {}
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { run: unknown }).run).toBeNull();
+    const { devices } = await fleetAs(A).list();
+    expect(devices.find((d) => d.name === "scripts")?.status).toBe("online");
+  });
+});
+
+describe("a revoked computer retires its device; a reconnect brings it back", () => {
+  it("revoke, then reconnect through the device flow's door", async () => {
+    await ensureComputerDevice(OLD);
+    await q(
+      `INSERT INTO api_keys (id, user_id, key_name, key_prefix, key_hash, key_type, scope, is_active, usage_count, created_at)
+       VALUES ($1, $2, 'old-box', 'synap_hub_live_', 'h', 'hub_inbound', '{hub-protocol.read}', true, 0, now())`,
+      [randomUUID(), OLD]
+    );
+    await revokeMachine({ machineUserId: OLD, by: A });
+    expect((await reportsOf(OLD)).retired_at).not.toBeNull();
+    const names = async (includeRetired: boolean) =>
+      (await fleetAs(A).list({ includeRetired })).devices.map((d) => d.name);
+    expect(await names(false)).not.toContain("old-box");
+    expect(await names(true)).toContain("old-box");
+
+    // The terminal comes back as another host on the same computer.
+    await ensureMachineAgent({
+      approverId: A,
+      reuseId: OLD,
+      name: "old-box",
+      hostname: "old-box-2",
+      platform: "darwin",
+    });
+    const back = await reportsOf(OLD);
+    expect(back.retired_at).toBeNull();
+    expect(back.manifest).toMatchObject({
+      identity: { hostname: "old-box-2", os: "darwin", arch: "x64" },
+    });
+    expect(await names(false)).toContain("old-box");
+  });
+
+  it("a reconnect that says nothing new writes nothing; a changed identity keeps the rest", async () => {
+    await recordDeviceReport({
+      machineUserId: OLD,
+      manifest: { manifestVersion: 1, resources: { memoryMb: 1024 } },
+    });
+    const [before] = await q<{ updated_at: string }>(
+      `SELECT updated_at::text AS updated_at FROM devices WHERE principal_user_id = $1`,
+      [OLD]
+    );
+    await ensureComputerDevice(OLD);
+    const [same] = await q<{ updated_at: string }>(
+      `SELECT updated_at::text AS updated_at FROM devices WHERE principal_user_id = $1`,
+      [OLD]
+    );
+    expect(same!.updated_at).toBe(before!.updated_at);
+    await q(
+      `UPDATE users SET agent_metadata = agent_metadata || '{"arch":"arm64"}'::jsonb WHERE id = $1`,
+      [OLD]
+    );
+    await ensureComputerDevice(OLD);
+    expect((await reportsOf(OLD)).manifest).toMatchObject({
+      identity: { hostname: "old-box-2", os: "darwin", arch: "arm64" },
+      resources: { memoryMb: 1024 },
+    });
+  });
+});
+
+describe("synap_list_agents: devices[] beside computers[]", () => {
+  const listAgents = async () => {
+    const res = await sessionHandlers.synap_list_agents!({
+      toolName: "synap_list_agents",
+      args: {},
+      userId: A,
+      apiKeyScopes: ["mcp.read"],
+    } as never);
+    return JSON.parse((res.content[0] as { text: string }).text) as {
+      devices: Array<{ name: string }> | null;
+      devicesError?: string;
+      computers: unknown[];
+    };
+  };
+
+  it("a person reads their devices", async () => {
+    const out = await listAgents();
+    expect(out.devicesError).toBeUndefined();
+    expect(out.devices?.map((d) => d.name)).toContain("devbox");
+  });
+
+  it("a key whose grant does not read devices is told so, never handed []", async () => {
+    h.grant = {
+      scopes: [{ permissions: ["agent.read", "tool.read"] }],
+      clientId: null,
+    };
+    try {
+      const out = await listAgents();
+      expect(out.devices).toBeNull();
+      expect(out.devicesError).toMatch(/^Not granted/);
+      expect(Array.isArray(out.computers)).toBe(true);
+    } finally {
+      h.grant = null;
+    }
+  });
+
+  it("devicesReadableByGrant: a person, a full key, or one reading installations whole", () => {
+    const key = (...scopes: Array<Record<string, unknown>>) =>
+      ({ scopes, clientId: null }) as never;
+    expect(devicesReadableByGrant(null)).toBe(true);
+    expect(devicesReadableByGrant(key({ permissions: ["*"] }))).toBe(true);
+    expect(
+      devicesReadableByGrant(key({ permissions: ["installation.read"] }))
+    ).toBe(true);
+    expect(
+      devicesReadableByGrant(
+        key({ permissions: ["installation.read"], workspaceIds: [WS_SHARED] })
+      )
+    ).toBe(false);
+    expect(devicesReadableByGrant(key({ permissions: ["agent.read"] }))).toBe(
+      false
+    );
+    expect(devicesReadableByGrant(key({ permissions: [] }))).toBe(false);
   });
 });

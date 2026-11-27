@@ -87,6 +87,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0461_devices.sql",
   },
   {
+    table: "devices",
+    column: "capability_reports",
+    addedBy: "0461_devices.sql",
+  },
+  {
+    table: "devices",
+    column: "retired_at",
+    addedBy: "0461_devices.sql",
+  },
+  {
     table: "compute_leases",
     column: "device_id",
     addedBy: "0461_devices.sql",

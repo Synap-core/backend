@@ -28,6 +28,7 @@
 -- its identity read from `agent_metadata` (hostname, platform, arch). One
 -- device per principal is held by a unique index, so the backfill and the
 -- enrolment door (`ensureComputerDevice`) can never make a second one.
+-- A computer that was revoked comes in retired (below).
 -- Idempotent: runs twice to the same rows.
 
 CREATE TABLE IF NOT EXISTS "devices" (
@@ -128,3 +129,29 @@ WHERE u."agent_type" = 'machine'
   AND NOT EXISTS (
     SELECT 1 FROM "devices" d WHERE d."principal_user_id" = u."id"
   );
+
+-- A computer that was revoked is retired: the machines list reads it
+-- "revoked" (its newest key is revoked and no key of its own is live, the
+-- `machineKeyState` of `machine-roster.ts`), and `revokeMachine` retires its
+-- device from now on. A computer with no key at all, or whose newest key only
+-- expired, stays. A reconnect brings the device back (`ensureComputerDevice`).
+-- Idempotent: a retired device is never touched again.
+UPDATE "devices" d
+SET "retired_at" = now(), "updated_at" = now()
+WHERE d."retired_at" IS NULL
+  AND d."principal_user_id" IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM "api_keys" k
+    WHERE k."user_id" = d."principal_user_id"
+      AND k."revoked_at" IS NULL
+      AND k."is_active"
+      AND (k."expires_at" IS NULL OR k."expires_at" > now())
+  )
+  AND (
+    SELECT k."revoked_at" IS NOT NULL
+      OR (NOT k."is_active" AND (k."expires_at" IS NULL OR k."expires_at" > now()))
+    FROM "api_keys" k
+    WHERE k."user_id" = d."principal_user_id"
+    ORDER BY k."created_at" DESC
+    LIMIT 1
+  ) IS TRUE;

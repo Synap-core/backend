@@ -19,7 +19,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { and, asc, db, eq, isNull } from "@synap/database";
+import { and, asc, db, drizzleSql, eq, isNull } from "@synap/database";
 import {
   devices,
   users,
@@ -27,7 +27,10 @@ import {
   type Device,
 } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { isUuid } from "@synap-core/types/property-render";
 import {
+  DEVICE_CAPABILITY_REPORTERS_MAX,
+  DEVICE_CAPABILITY_TTL_MS,
   DEVICE_DEFAULT_REPORTER,
   DEVICE_MANIFEST_VERSION,
   DEVICE_REPORTER,
@@ -40,8 +43,7 @@ import {
   parseDeviceManifest,
   recordCapabilityReport,
   summarizeDeviceResources,
-  type DeviceCapabilityReports,
-  type DeviceConnection,
+  type DeviceIdentity,
   type DeviceManifest,
   type DeviceReportAck,
   type FleetDevice,
@@ -49,9 +51,38 @@ import {
   type FleetDeviceNode,
 } from "@synap-core/types/device-manifest";
 import { scopedDb, type AccessContext } from "../../access/index.js";
+import { stableStringify } from "../../utils/stable-stringify.js";
 import { machineName } from "../machine-roster.js";
 
 const logger = createLogger({ module: "fleet/devices" });
+
+/**
+ * What a report reads of its device. `rev` is `updated_at` in whole
+ * microseconds, as text: the manifest merge writes only over the row it read
+ * (a JS Date would drop the microseconds and never match).
+ */
+const REPORT_COLUMNS = {
+  id: devices.id,
+  kind: devices.kind,
+  manifest: devices.manifest,
+  capabilityReports: devices.capabilityReports,
+  lastReportAt: devices.lastReportAt,
+  retiredAt: devices.retiredAt,
+  rev: drizzleSql<string>`(extract(epoch from ${devices.updatedAt}) * 1000000)::bigint::text`,
+};
+
+type ReportRow = {
+  id: string;
+  kind: string;
+  manifest: DeviceManifest | null;
+  capabilityReports: Device["capabilityReports"];
+  lastReportAt: Date | null;
+  retiredAt: Date | null;
+  rev: string;
+};
+
+const sameRev = (rev: string) =>
+  drizzleSql`(extract(epoch from ${devices.updatedAt}) * 1000000)::bigint::text = ${rev}`;
 
 // ── Enrolment ───────────────────────────────────────────────────────────────
 
@@ -59,24 +90,18 @@ const logger = createLogger({ module: "fleet/devices" });
  * The device of computer `machineUserId`, made when it has none: kind
  * `computer`, connection `agent`, owned by the person who approved it, named
  * as the person reads it (`machineName`), its identity from what the
- * terminal sent (`agent_metadata`: hostname, platform, arch). A device the
- * person retired comes back when the computer is connected again.
+ * terminal sent (`agent_metadata`: hostname, platform, arch).
  *
- * Returns the device id, or null for a row that is not a computer with a
+ * A device that exists already is kept, never twinned. A reconnect brings a
+ * retired one back and refreshes its identity from `agent_metadata` when the
+ * terminal now says something else (a renamed host, a reinstalled OS).
+ *
+ * Returns the device row, or null for a row that is not a computer with a
  * person behind it (nothing to own it).
  */
 export async function ensureComputerDevice(
   machineUserId: string
-): Promise<string | null> {
-  const existing = await deviceOfPrincipal(machineUserId);
-  if (existing) {
-    if (existing.retiredAt)
-      await db
-        .update(devices)
-        .set({ retiredAt: null, updatedAt: new Date() })
-        .where(eq(devices.id, existing.id));
-    return existing.id;
-  }
+): Promise<ReportRow | null> {
   const [m] = await db
     .select({
       name: users.name,
@@ -89,17 +114,34 @@ export async function ensureComputerDevice(
       and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
     )
     .limit(1);
+  const fresh = m ? identityOf(m.meta) : {};
+  const existing = await deviceOfPrincipal(machineUserId);
+  if (existing) {
+    const stale = staleIdentity(existing.manifest?.identity, fresh);
+    if (!existing.retiredAt && !stale) return existing;
+    const [row] = await db
+      .update(devices)
+      .set({
+        retiredAt: null,
+        updatedAt: new Date(),
+        ...(stale
+          ? {
+              manifest: drizzleSql`jsonb_set(
+                COALESCE(${devices.manifest}, ${JSON.stringify({ manifestVersion: DEVICE_MANIFEST_VERSION })}::jsonb),
+                '{identity}',
+                COALESCE(${devices.manifest}->'identity', '{}'::jsonb) || ${JSON.stringify(fresh)}::jsonb
+              )`,
+            }
+          : {}),
+      })
+      .where(eq(devices.id, existing.id))
+      .returning(REPORT_COLUMNS);
+    return (row as ReportRow | undefined) ?? existing;
+  }
   if (!m?.owner) return null;
-  const meta = (m.meta ?? {}) as AgentMetadata;
   const identity = parseDeviceManifest({
     manifestVersion: DEVICE_MANIFEST_VERSION,
-    identity: {
-      ...(word(meta.hostname, 253)
-        ? { hostname: word(meta.hostname, 253) }
-        : {}),
-      ...(word(meta.platform, 64) ? { os: word(meta.platform, 64) } : {}),
-      ...(word(meta.arch, 32) ? { arch: word(meta.arch, 32) } : {}),
-    },
+    identity: fresh,
   });
   try {
     const [row] = await db
@@ -116,14 +158,39 @@ export async function ensureComputerDevice(
         connection: { mode: "agent" },
         manifest: identity.ok ? identity.manifest : null,
       })
-      .returning({ id: devices.id });
-    return row?.id ?? null;
+      .returning(REPORT_COLUMNS);
+    return (row as ReportRow | undefined) ?? null;
   } catch (err) {
     // Two doors raced for the same principal: the unique index kept one.
     const raced = await deviceOfPrincipal(machineUserId);
-    if (raced) return raced.id;
+    if (raced) return raced;
     throw err;
   }
+}
+
+/** The identity the terminal sent at enrolment (`agent_metadata`). */
+function identityOf(
+  metaRaw: unknown
+): Pick<DeviceIdentity, "hostname" | "os" | "arch"> {
+  const meta = (metaRaw ?? {}) as AgentMetadata;
+  const hostname = word(meta.hostname, 253);
+  const os = word(meta.platform, 64);
+  const arch = word(meta.arch, 32);
+  return {
+    ...(hostname ? { hostname } : {}),
+    ...(os ? { os } : {}),
+    ...(arch ? { arch } : {}),
+  };
+}
+
+/** True when the terminal now says something the stored identity does not. */
+function staleIdentity(
+  stored: DeviceIdentity | undefined,
+  fresh: Pick<DeviceIdentity, "hostname" | "os" | "arch">
+): boolean {
+  return (Object.keys(fresh) as Array<keyof typeof fresh>).some(
+    (k) => stored?.[k] !== fresh[k]
+  );
 }
 
 function word(v: unknown, max: number): string | undefined {
@@ -132,20 +199,15 @@ function word(v: unknown, max: number): string | undefined {
   return t ? t.slice(0, max) : undefined;
 }
 
-async function deviceOfPrincipal(machineUserId: string) {
+async function deviceOfPrincipal(
+  machineUserId: string
+): Promise<ReportRow | null> {
   const [row] = await db
-    .select({
-      id: devices.id,
-      kind: devices.kind,
-      manifest: devices.manifest,
-      capabilityReports: devices.capabilityReports,
-      lastReportAt: devices.lastReportAt,
-      retiredAt: devices.retiredAt,
-    })
+    .select(REPORT_COLUMNS)
     .from(devices)
     .where(eq(devices.principalUserId, machineUserId))
     .limit(1);
-  return row ?? null;
+  return (row as ReportRow | undefined) ?? null;
 }
 
 // ── A runner's report ───────────────────────────────────────────────────────
@@ -156,37 +218,44 @@ async function deviceOfPrincipal(machineUserId: string) {
  * report rides on a call that must answer whatever happens here, so a failure
  * comes back as `recorded: false` with the reason (and is logged).
  *
- * One computer runs several processes (the host runner, the waker, a one-shot
- * `synap login`), each knowing only part of the device: `reporter` names the
- * one reporting. A manifest is MERGED section by section (a section the
- * report leaves out keeps the stored one), and each reporter's capabilities
- * are kept apart (`capability_reports`): the device's capabilities are the
- * union of the reporters seen within `DEVICE_CAPABILITY_TTL_MS`, so neither
- * process erases the other's and a stopped one drops out by itself.
+ * One computer runs several processes (the host runner, the worker, the
+ * waker), each knowing only part of the device: `reporter` names the one
+ * reporting. A manifest is MERGED section by section (a section the report
+ * leaves out keeps the stored one), and each reporter's capabilities are kept
+ * apart (`capability_reports`): the device's capabilities are the union of
+ * the reporters seen within `DEVICE_CAPABILITY_TTL_MS`, so neither process
+ * erases the other's and a stopped one drops out by itself.
  *
- * Writes at most once a minute when nothing changed
+ * Concurrent reports never lose each other:
+ * - a reporter's own entry is set in one statement over the stored value
+ *   (`reportEntriesAfter`), so two processes never overwrite each other's;
+ * - the manifest merge writes only over the row it read (`rev`); a report
+ *   that lost the race reads again and merges once more.
+ *
+ * Writes at most once a minute per reporter when nothing changed
  * ({@link DEVICE_REPORT_WRITE_MS}); a changed manifest or capability set is
  * written at once. A refused manifest keeps the last good one.
  */
 export async function recordDeviceReport(args: {
   machineUserId: string;
   manifest?: unknown;
-  /** Which process reports (`DEVICE_REPORTER`); the door's default else. */
-  reporter?: string;
+  /**
+   * Which process reports (`DEVICE_REPORTER`), as the body sent it; anything
+   * else is the door's default.
+   */
+  reporter?: unknown;
   now?: Date;
 }): Promise<DeviceReportAck> {
   const now = args.now ?? new Date();
   const sent = args.manifest !== undefined && args.manifest !== null;
   const reporter =
-    args.reporter && DEVICE_REPORTER.test(args.reporter)
+    typeof args.reporter === "string" && DEVICE_REPORTER.test(args.reporter)
       ? args.reporter
       : DEVICE_DEFAULT_REPORTER;
   try {
-    let row = await deviceOfPrincipal(args.machineUserId);
-    if (!row) {
-      await ensureComputerDevice(args.machineUserId);
-      row = await deviceOfPrincipal(args.machineUserId);
-    }
+    let row =
+      (await deviceOfPrincipal(args.machineUserId)) ??
+      (await ensureComputerDevice(args.machineUserId));
     if (!row)
       return {
         recorded: false,
@@ -198,37 +267,62 @@ export async function recordDeviceReport(args: {
       ? parseDeviceManifest(args.manifest, { kind: row.kind })
       : null;
     const incoming = parsed?.ok ? parsed.manifest : null;
-    const reports = recordCapabilityReport(
-      row.capabilityReports,
-      reporter,
-      incoming?.capabilities,
-      now
-    );
-    const stored = storedManifest(row);
-    const manifest = incoming
-      ? mergeDeviceManifest(
-          stored,
-          incoming,
-          effectiveDeviceCapabilities(reports, now)
-        )
-      : stored;
-    const changed =
-      stableJson(manifest) !== stableJson(stored) ||
-      stableJson(capabilitySets(reports)) !==
-        stableJson(capabilitySets(row.capabilityReports));
-    const due =
-      !row.lastReportAt ||
-      now.getTime() - row.lastReportAt.getTime() >= DEVICE_REPORT_WRITE_MS;
-    if (changed || due) {
-      await db
-        .update(devices)
-        .set({
-          lastReportAt: now,
-          updatedAt: now,
-          capabilityReports: reports,
-          ...(manifest !== stored ? { manifest } : {}),
+    const capabilities = incoming?.capabilities;
+    let lostRace = false;
+    for (let attempt = 0; ; attempt++) {
+      const stored = storedManifest(row);
+      const manifest = incoming
+        ? mergeDeviceManifest(
+            stored,
+            incoming,
+            effectiveDeviceCapabilities(
+              recordCapabilityReport(
+                row.capabilityReports,
+                reporter,
+                capabilities,
+                now
+              ),
+              now
+            )
+          )
+        : stored;
+      const manifestChanged =
+        incoming !== null &&
+        stableStringify(manifest) !== stableStringify(stored);
+      const own = row.capabilityReports?.[reporter];
+      const capabilitiesChanged =
+        capabilities !== undefined &&
+        stableStringify([...capabilities].sort()) !==
+          stableStringify([...(own?.capabilities ?? [])].sort());
+      if (
+        !manifestChanged &&
+        !capabilitiesChanged &&
+        !reportDue(row, reporter, now)
+      )
+        break;
+      if (!manifestChanged) {
+        await writeReport(row.id, { reporter, capabilities, now });
+        break;
+      }
+      if (
+        await writeReport(row.id, {
+          reporter,
+          capabilities,
+          now,
+          manifest: { value: manifest, overRev: row.rev },
         })
-        .where(eq(devices.id, row.id));
+      )
+        break;
+      const reread =
+        attempt === 0 ? await deviceOfPrincipal(args.machineUserId) : null;
+      if (!reread) {
+        // Lost twice (or the row went): the report time and this process's
+        // entry still land; its manifest waits for its next report.
+        lostRace = true;
+        await writeReport(row.id, { reporter, capabilities, now });
+        break;
+      }
+      row = reread;
     }
     if (parsed && !parsed.ok)
       return {
@@ -236,6 +330,14 @@ export async function recordDeviceReport(args: {
         deviceId: row.id,
         manifest: "refused",
         error: parsed.error,
+      };
+    if (lostRace)
+      return {
+        recorded: true,
+        deviceId: row.id,
+        manifest: "refused",
+        error:
+          "Another report changed this device at the same time; the next report stores this manifest.",
       };
     return {
       recorded: true,
@@ -256,29 +358,94 @@ export async function recordDeviceReport(args: {
   }
 }
 
-/** Each reporter's capability set, without its report time. */
-function capabilitySets(
-  reports: DeviceCapabilityReports | null | undefined
-): Record<string, string[]> {
-  return Object.fromEntries(
-    Object.entries(reports ?? {}).map(([k, v]) => [
-      k,
-      [...(v.capabilities ?? [])].sort(),
-    ])
-  );
+/**
+ * A report with nothing new is written when the row has not been written for
+ * a minute, OR when THIS reporter's own time is a minute old: two processes
+ * reporting out of phase must each move their own time, or the one that
+ * never wins the row's minute would see its capabilities expire while alive.
+ */
+function reportDue(row: ReportRow, reporter: string, now: Date): boolean {
+  const nowMs = now.getTime();
+  if (
+    !row.lastReportAt ||
+    nowMs - row.lastReportAt.getTime() >= DEVICE_REPORT_WRITE_MS
+  )
+    return true;
+  const ownAt = Date.parse(row.capabilityReports?.[reporter]?.at ?? "");
+  return !(nowMs - ownAt < DEVICE_REPORT_WRITE_MS);
 }
 
-/** JSON with sorted keys: jsonb reorders keys, so a plain stringify differs. */
-function stableJson(v: unknown): string {
-  return JSON.stringify(v, (_k, val: unknown) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(
-          Object.entries(val as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        )
-      : val
-  );
+/**
+ * One report written. The reporter's entry is set over the STORED reports in
+ * the same statement; with `manifest`, the row is written only when it is
+ * still the one read (`overRev`). Returns false when that row moved.
+ */
+async function writeReport(
+  deviceId: string,
+  w: {
+    reporter: string;
+    capabilities: string[] | undefined;
+    now: Date;
+    manifest?: { value: DeviceManifest | null; overRev: string };
+  }
+): Promise<boolean> {
+  const rows = await db
+    .update(devices)
+    .set({
+      lastReportAt: drizzleSql`GREATEST(${devices.lastReportAt}, ${w.now.toISOString()}::timestamptz)`,
+      // Always moves, to the microsecond: the next merge's `rev` sees it.
+      updatedAt: drizzleSql`clock_timestamp()`,
+      capabilityReports: reportEntriesAfter(w.reporter, w.capabilities, w.now),
+      ...(w.manifest ? { manifest: w.manifest.value } : {}),
+    })
+    .where(
+      w.manifest
+        ? and(eq(devices.id, deviceId), sameRev(w.manifest.overRev))
+        : eq(devices.id, deviceId)
+    )
+    .returning({ id: devices.id });
+  return rows.length > 0;
+}
+
+/**
+ * The stored reports after `reporter` reported, as SQL over the stored
+ * value: the other reporters seen within the TTL (the newest
+ * `DEVICE_CAPABILITY_REPORTERS_MAX - 1`), then this one's entry. Its
+ * capabilities are replaced when the report carries a list (`[]` = it has
+ * none) and kept when it carries none (`recordCapabilityReport`'s rule); its
+ * time moves either way.
+ */
+function reportEntriesAfter(
+  reporter: string,
+  capabilities: string[] | undefined,
+  now: Date
+) {
+  const cutoff = new Date(
+    now.getTime() - DEVICE_CAPABILITY_TTL_MS
+  ).toISOString();
+  const sent = capabilities === undefined ? null : JSON.stringify(capabilities);
+  return drizzleSql`(
+    SELECT COALESCE(jsonb_object_agg(s.k, s.v), '{}'::jsonb) FROM (
+      SELECT e.k, e.v FROM jsonb_each(${devices.capabilityReports}) AS e(k, v)
+      WHERE e.k <> ${reporter}
+        AND CASE WHEN e.v->>'at' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+              THEN (e.v->>'at')::timestamptz END >= ${cutoff}::timestamptz
+      ORDER BY (e.v->>'at')::timestamptz DESC
+      LIMIT ${DEVICE_CAPABILITY_REPORTERS_MAX - 1}
+    ) s
+  ) || jsonb_build_object(
+    ${reporter}::text,
+    jsonb_build_object(
+      'capabilities',
+      COALESCE(
+        ${sent}::jsonb,
+        (${devices.capabilityReports} -> (${reporter}::text)) -> 'capabilities',
+        '[]'::jsonb
+      ),
+      'at',
+      ${now.toISOString()}::text
+    )
+  )`;
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -309,13 +476,13 @@ export function toFleetDevice(
     id: row.id,
     kind: row.kind,
     name: row.name,
-    parentDeviceId: row.parentDeviceId ?? null,
-    principalUserId: row.principalUserId ?? null,
+    parentDeviceId: row.parentDeviceId,
+    principalUserId: row.principalUserId,
     ownerUserId: row.ownerUserId,
-    workspaceId: row.workspaceId ?? null,
+    workspaceId: row.workspaceId,
     belongsTo: row.belongsTo,
-    connection: (row.connection ?? { mode: "manual" }) as DeviceConnection,
-    labels: row.labels ?? [],
+    connection: row.connection,
+    labels: row.labels,
     status: deriveDeviceStatus(
       { lastReportAt: row.lastReportAt, retiredAt: row.retiredAt, manifest },
       now
@@ -376,12 +543,10 @@ export async function getFleetDevice(
 
 // ── `device` as an alias of `computer` (agent doors) ────────────────────────
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The computer an agent door's `computer` / `computerId` names, when the
- * caller named it by its DEVICE instead (`device` / `deviceId`, devices plan
- * 767a5978 §2: aliases, never a code rename). A device id the caller may read
+ * caller named it by its DEVICE instead (`device` / `deviceId`: aliases,
+ * never a code rename). A device id the caller may read
  * whose device runs the Synap runner answers its computer (the machine user
  * id every computer door takes); any other value is passed through as it is
  * (a computer's id or name, "mac", "pod"), so the door's own lookup and its
@@ -400,7 +565,7 @@ export async function computerFromDeviceArgs(
   const device = text(args.device);
   if (device === undefined) return { ok: true, computer };
   let viaDevice = device;
-  if (UUID.test(device)) {
+  if (isUuid(device)) {
     const row = await getFleetDevice(access, device);
     if (row && !row.principalUserId)
       return {

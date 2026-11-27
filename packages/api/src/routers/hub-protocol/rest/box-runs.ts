@@ -34,6 +34,7 @@ import { bodyLimit } from "hono/body-limit";
 import { and, db, eq } from "@synap/database";
 import { BOX_RUNNER_SCOPE, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { recordDeviceReport } from "../../../services/fleet/devices.js";
 import {
   hasScope,
   httpStatusForTrpcError,
@@ -261,6 +262,13 @@ export function registerBoxRunsRoutes(app: HubHono): void {
     const parsed = await body(c, LeaseBody);
     if (!parsed.ok)
       return c.json({ code: "BAD_REQUEST", error: parsed.error }, 400);
+    // A lease is the computer reporting: a computer that only runs scripts
+    // reads online on Devices as it does on Computers. No manifest, so the
+    // stored one is kept; `recordDeviceReport` never throws.
+    await recordDeviceReport({
+      machineUserId: who.runner.machineUserId,
+      reporter: "box",
+    });
     try {
       const run = await leaseBoxRun(who.runner);
       return c.json({ run });

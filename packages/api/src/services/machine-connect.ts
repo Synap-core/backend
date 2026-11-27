@@ -1262,10 +1262,10 @@ export async function ensureMachineAgent(args: {
       args.approverId,
       args.writeMode ?? null
     );
-  // Its device (devices plan 767a5978, P1): one per computer, made at the
-  // first connect, reused (and brought back if retired) by a reconnect. A
-  // registry failure never fails connecting a computer: the runner's first
-  // report makes the device then (`recordDeviceReport`).
+  // Its device: one per computer, made at the first connect, reused (and
+  // brought back if retired) by a reconnect. A registry failure never fails
+  // connecting a computer: the runner's first report makes the device then
+  // (`recordDeviceReport`).
   try {
     await ensureComputerDevice(machineId);
   } catch (err) {
@@ -1609,8 +1609,8 @@ export async function setMachineBelongsTo(
       .where(
         and(eq(users.id, machineId), eq(users.agentType, MACHINE_AGENT_TYPE))
       );
-    // Its device says the same (devices plan 767a5978): whose it is decides
-    // who reads it on the Devices page.
+    // Its device says the same: whose it is decides who reads it on the
+    // Devices page.
     await tx
       .update(devices)
       .set({ belongsTo, updatedAt: new Date() })
@@ -1658,6 +1658,17 @@ export async function revokeMachine(args: {
     revokedBy: args.by,
     reason: args.reason ?? "Computer revoked",
   });
+  // A revoked computer no longer answers: its device is retired with it, and
+  // a reconnect brings it back (`ensureComputerDevice`).
+  await db
+    .update(devices)
+    .set({ retiredAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        eq(devices.principalUserId, args.machineUserId),
+        isNull(devices.retiredAt)
+      )
+    );
   return rows.length;
 }
 

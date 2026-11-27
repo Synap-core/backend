@@ -22,6 +22,7 @@
  * the last good one); 503 when the pod could not record the report.
  */
 
+import { bodyLimit } from "hono/body-limit";
 import { and, db, eq } from "@synap/database";
 import { users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
@@ -108,7 +109,28 @@ export async function resolveComputerSelf(c: {
   return { ok: true, machineUserId: machine.id };
 }
 
+/**
+ * The largest report body: a manifest is at most 64 KB
+ * (`DEVICE_MANIFEST_MAX_BYTES`), twice that leaves room for its envelope and
+ * refuses a runaway body before it is read into memory.
+ */
+export const COMPUTER_REPORT_MAX_BYTES = 128 * 1024;
+
 export function registerComputerReportRoutes(app: HubHono): void {
+  app.use(
+    "/computers/me/report",
+    bodyLimit({
+      maxSize: COMPUTER_REPORT_MAX_BYTES,
+      onError: (c) =>
+        c.json(
+          {
+            code: "PAYLOAD_TOO_LARGE",
+            error: `The report is over ${COMPUTER_REPORT_MAX_BYTES} bytes. A manifest is at most 64 KB.`,
+          },
+          413
+        ),
+    })
+  );
   registerOpenApi(app, {
     method: "post",
     path: "/computers/me/report",
@@ -123,6 +145,7 @@ export function registerComputerReportRoutes(app: HubHono): void {
         schema: z.object({ device: DeviceReportAckSchema }),
       },
       400: { description: "The body is not JSON", schema: ErrorSchema },
+      413: { description: "The body is over 128 KB", schema: ErrorSchema },
       401: { description: "Unauthorized", schema: ErrorSchema },
       403: {
         description: "Not this computer's own key, or no hub-protocol.write",
@@ -156,8 +179,7 @@ export function registerComputerReportRoutes(app: HubHono): void {
     const device = await recordDeviceReport({
       machineUserId: who.machineUserId,
       manifest: fields.manifest,
-      reporter:
-        typeof fields.reporter === "string" ? fields.reporter : undefined,
+      reporter: fields.reporter,
     });
     if (!device.recorded)
       return c.json(
