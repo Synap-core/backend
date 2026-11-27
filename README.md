@@ -1,5 +1,14 @@
 # Synap pod
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Synap-core/backend)](https://github.com/Synap-core/backend/releases/latest)
+
+<!-- FOUNDER: no CI badge on purpose. GitHub's ci.yml badge for main counts a cancelled run as failing, and on 2026-11-26 it read "CI - failing" after a cancelled run, with the runs before it green. Add one only if main's CI badge stays green. -->
+
+<p align="center">
+  <img src="docs/assets/flow-demo.svg" width="100%" alt="How work flows through a pod: people and AI agents work in a session's channel, started by hand or by an automation. The session calls capabilities through skills, and capabilities use the credentials vault. Changes go out as proposals, and everything lands on the event chain.">
+</p>
+
 A Synap pod is a personal data server with a governed agent runtime on it. It
 stores your records in your own PostgreSQL database, lets AI agents work on
 them under rules you set, and records every change on an append-only event
@@ -18,10 +27,40 @@ protocol and REST client) remain MIT.
   to the pod with permissions you grant. The pod does not meter or proxy your
   inference.
 
+The Synap app, the one people use day to day, is hosted at
+[synap.live](https://synap.live) and is not in this repository. The app
+connects to a pod, the server this repository builds. You can run the pod
+yourself or let Synap host it for you.
+
+<!-- FOUNDER: if the app's source is public, link its repository here. -->
+
 What Synap is, in detail, with the source of every claim:
 [docs/ARCHITECTURE-OVERVIEW.md](docs/ARCHITECTURE-OVERVIEW.md).
 
-## Quickstart: run a pod
+## Quickstart: try a pod locally
+
+No domain, no TLS. You need Docker with Compose v2.
+
+```bash
+git clone https://github.com/synap-core/backend.git
+cd backend
+./synap install --domain localhost      # pulls the published images (ghcr.io); add --from-source to build them
+./synap setup admin --email you@example.com --magic-link
+```
+
+<!-- FOUNDER: time it (clean machine, published images) before stating a duration. -->
+
+The API answers on <http://localhost:4000> and Pod Admin on
+<http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
+
+The install needs ghcr.io reachable (it pins third-party images by digest and
+pulls the published ones); offline, use `--from-source`. With no terminal on
+stdin (a pipe, CI, an agent shell) the install runs as `--non-interactive`:
+every prompt takes its default or a flag (`--domain`, `--email`,
+`--admin-email`, `--admin-password`, `--intelligence-key`).
+Pass `--non-interactive` explicitly to skip the questions in a terminal too.
+
+## Run a pod on a server
 
 On a Linux host with a domain pointing at it:
 
@@ -36,32 +75,45 @@ sudo synap setup admin --email you@example.com --magic-link   # sign-in link for
 The installer installs Docker if needed, downloads the latest stable release,
 checks it, and starts the stack behind Caddy with automatic HTTPS.
 
-### Try it locally
-
-To try a pod on your own machine, with no domain or TLS, install it from a
-clone. You need Docker with Compose v2.
-
-```bash
-git clone https://github.com/synap-core/backend.git
-cd backend
-./synap install --domain localhost      # pulls the published images (ghcr.io); add --from-source to build them
-./synap setup admin --email you@example.com --magic-link
-```
-
-The install needs ghcr.io reachable (it pins third-party images by digest and
-pulls the published ones); offline, use `--from-source`. With no terminal on
-stdin (a pipe, CI, an agent shell) the install runs as `--non-interactive`:
-every prompt takes its default or a flag (`--domain`, `--email`,
-`--admin-email`, `--admin-password`, `--intelligence-key`).
-Pass `--non-interactive` explicitly to skip the questions in a terminal too.
-
-The API answers on <http://localhost:4000> and Pod Admin on
-<http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
-
 - Self-hosting guide: <https://doc.synap.live/docs/run>
 - The same guide in this repository, with every operator command:
   [deploy/README.md](deploy/README.md)
 - Or let Synap host the pod for you: <https://www.synap.live/hosted>
+
+## Why Synap
+
+Several tools give an AI somewhere to keep data. Each is built for a different
+job:
+
+- **Mem0** is a memory layer an AI application uses to store and recall what it
+  learns about its users.
+- **Supabase** is a Postgres platform for building applications, with auth,
+  storage and APIs.
+- **Notion AI** adds AI features to the pages and databases of a Notion
+  workspace.
+- **MCP memory servers** give an agent a store it can read and write over MCP,
+  often a knowledge graph or a local file.
+
+<!-- FOUNDER: the four one-line descriptions above are written from general knowledge of those products, not from this repo; check each against the product's own current wording before launch. -->
+
+A Synap pod is built for a different job: several agents and people working on
+the same records, which you own, with you deciding what changes.
+
+- **Your own database.** A pod is a PostgreSQL database with standard services
+  around it (see [What a pod runs](#what-a-pod-runs)). Export it with
+  `pg_dump`, self-host it, or have it hosted.
+- **Governed writes.** An agent's write either becomes a proposal you approve
+  or reject, or applies under a rule you granted. Deletes, admin changes and
+  scope changes always come to you; no rule can auto-approve them.
+- **An append-only history.** Changes to the core records land on an
+  append-only event chain, whether they were proposed or applied under a rule.
+- **Any agent, shared work.** Claude, ChatGPT, Cursor or any MCP client
+  connects with the permissions you grant, and works on the same typed records
+  and in the same sessions as you. The pod does not meter or proxy your
+  inference.
+
+The detail behind each point, with the source file it comes from:
+[docs/ARCHITECTURE-OVERVIEW.md](docs/ARCHITECTURE-OVERVIEW.md).
 
 ## Connect an agent
 
