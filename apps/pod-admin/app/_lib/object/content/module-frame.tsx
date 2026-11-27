@@ -41,6 +41,7 @@ import {
   cellModuleNeedsKit,
   cellModuleNetworkRefusal,
   createCellFrameHost,
+  postToFrame,
   surfaceContextInitFields,
   type CellBridgeEventLike,
   type CellBridgeMutateResult,
@@ -80,11 +81,7 @@ import {
 } from "./bridge-writes";
 import type { BridgeClient } from "./html-bridge-reads";
 import { frameReadFor } from "./frame-read-door";
-import {
-  browserFrameLinkEnv,
-  handleFrameLink,
-  handleFrameOpen,
-} from "./html-frame-links";
+import { useFrameLinkDoor } from "./frame-link-door";
 import { NotRun, useFullSize } from "./html-frame";
 import { EmbedBodyContext } from "./embed-context";
 import { frameT, type RendererWordSubject } from "./frame-copy";
@@ -668,25 +665,13 @@ export function ModuleFrame({
   }, [live, status, run]);
 
   // The link door and "open this", as for a stored page (`html-frame`).
-  useEffect(() => {
-    if (!live) return;
-    const env = browserFrameLinkEnv();
-    const onMessage = (event: MessageEvent) => {
-      const frame = frameRef.current?.contentWindow ?? null;
-      if (!handleFrameLink(event, frame, env)) {
-        handleFrameOpen(event, frame, env);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [live, run]);
+  const linkDoor = useFrameLinkDoor(frameRef, live, run);
 
-  // The reader switched theme: the running frame repaints itself.
+  // The reader switched theme: the running frame repaints itself (on its
+  // reply port, never on its window: `postToFrame`).
   useEffect(() => {
-    frameRef.current?.contentWindow?.postMessage(
-      { type: "synap:theme", theme },
-      "*"
-    );
+    const frame = frameRef.current?.contentWindow;
+    if (frame) postToFrame(frame, { type: "synap:theme", theme });
   }, [theme]);
 
   const again = area.retrying(() => {
@@ -772,6 +757,7 @@ export function ModuleFrame({
                 if (loads.current > 1) setLeft(true);
               }}
             />
+            {linkDoor}
           </>
         )}
       </div>

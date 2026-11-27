@@ -51,12 +51,8 @@ import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import type { BridgeClient } from "./html-bridge-reads";
 import { frameReadFor, type FrameSurface } from "./frame-read-door";
-import {
-  browserFrameLinkEnv,
-  handleFrameLink,
-  handleFrameOpen,
-} from "./html-frame-links";
 import { frameT } from "./frame-copy";
+import { useFrameLinkDoor } from "./frame-link-door";
 import { withWidgetCompat } from "./widget-compat";
 import {
   frameBrandCss,
@@ -290,21 +286,11 @@ export function HtmlFrame({
   ]);
 
   // The link door and the "open this" intent: the page asks, the reader's
-  // browser follows (or not). They answer with or without the data bridge: a
+  // browser follows (or not; another site only after the console asked,
+  // `frame-link-door`). They answer with or without the data bridge: a
   // preview with no bridge has links too, and an unanswered click would be a
   // dead link.
-  useEffect(() => {
-    if (left || refusal) return;
-    const env = browserFrameLinkEnv();
-    const onMessage = (event: MessageEvent) => {
-      const frame = frameRef.current?.contentWindow ?? null;
-      if (!handleFrameLink(event, frame, env)) {
-        handleFrameOpen(event, frame, env);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [left, refusal, run]);
+  const linkDoor = useFrameLinkDoor(frameRef, !left && !refusal, run);
 
   if (refusal) {
     const t = frameT();
@@ -361,6 +347,7 @@ export function HtmlFrame({
           if (loads.current > 1) setLeft(true);
         }}
       />
+      {linkDoor}
     </div>
   );
 }

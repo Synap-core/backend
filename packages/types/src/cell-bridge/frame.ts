@@ -5,6 +5,7 @@
 
 import { CELL_BRIDGE_SDK } from "./sdk.js";
 import { CELL_FRAME_LINK_DOOR } from "./frame-links.js";
+import { CELL_FRAME_CHANNEL_SCRIPT } from "./frame-channel.js";
 import { frameExternalOrigins } from "./external-origins.js";
 import { frameTokensWithBrand } from "./surface-context.js";
 
@@ -108,13 +109,18 @@ export interface CellFrameOptions {
   brand?: string | null;
 }
 
-/** The block injected ahead of everything the author wrote. */
+/**
+ * The block injected ahead of everything the author wrote: the policy, the
+ * tokens, the reply channel (`frame-channel.ts`: it says hello before any
+ * other script runs), the SDK, and the link door when asked.
+ */
 export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
   // `<\/` is the same text to CSS, and cannot end the element.
   const tokens = frameTokensWithBrand(options.tokens ?? "", options.brand);
   return (
     `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">` +
     (tokens ? `<style data-synap-tokens>${tokens}</style>` : "") +
+    `<script>${CELL_FRAME_CHANNEL_SCRIPT}</script>` +
     `<script>${CELL_BRIDGE_SDK}</script>` +
     (options.links ? `<script>${CELL_FRAME_LINK_DOOR}</script>` : "")
   );

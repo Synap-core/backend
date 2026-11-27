@@ -120,6 +120,22 @@ describe("the page bridge — through the console's own client", () => {
       frameWindow: () => frame,
       read: (op, params) => readForPage(client, op, params, { workspaceId }),
     });
+
+    // The frame's document hands over its reply port first (`frame-channel.ts`
+    // in the types leaf): every answer reaches it there, never on its window.
+    void host({
+      source: frame,
+      origin: "null",
+      data: { type: "synap:hello" },
+      ports: [
+        {
+          postMessage: (m: unknown) => {
+            if ((m as { type?: unknown }).type !== "synap:channel:ready")
+              frame.postMessage(m, "port");
+          },
+        },
+      ],
+    });
     const send = (data: unknown) =>
       host({ source: frame, origin: "null", data });
     return { calls, posted, send };

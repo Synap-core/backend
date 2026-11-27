@@ -5,10 +5,12 @@ import {
   FRAME_OPEN_KINDS,
   parseFrameNavigate,
   parseFrameOpen,
+  frameExternalLink,
   resolveFrameLink,
   type FrameNavigateMessage,
 } from "./frame-links.js";
 import { CELL_BRIDGE_SDK } from "./sdk.js";
+import { CELL_FRAME_CHANNEL_SCRIPT } from "./frame-channel.js";
 import {
   buildCellFrameCsp,
   cellFrameHeadBlock,
@@ -203,11 +205,52 @@ describe("resolveFrameLink — where a clicked link goes", () => {
     );
   });
 
-  it("anything outside our origins is a new tab, never the reader's tab", () => {
+  it("another site is never opened on the page's word: the host asks first, naming its host", () => {
     expect(resolveFrameLink(nav("https://example.com/a"), live)).toEqual({
-      action: "newTab",
+      action: "external",
       href: "https://example.com/a",
+      host: "example.com",
     });
+  });
+
+  it("an external link loses its query and fragment: what a page read cannot ride out in them (H2)", () => {
+    const secret = encodeURIComponent('{"title":"the viewer\'s secret"}');
+    expect(
+      resolveFrameLink(
+        nav(`https://evil.example:8443/x/y?d=${secret}&e=1#${secret}`),
+        live
+      )
+    ).toEqual({
+      action: "external",
+      href: "https://evil.example:8443/x/y",
+      host: "evil.example:8443",
+    });
+    // Also on a new-tab click, and on a look-alike of our own origin.
+    expect(
+      resolveFrameLink(
+        nav(`https://pod.example.live.evil.example/open/a?d=${secret}`, true),
+        live
+      )
+    ).toEqual({
+      action: "external",
+      href: "https://pod.example.live.evil.example/open/a",
+      host: "pod.example.live.evil.example",
+    });
+  });
+
+  it("frameExternalLink: origin and path only, punycode host, nothing that is not http(s)", () => {
+    expect(frameExternalLink("https://exämple.com/a/b?q=1#f")).toEqual({
+      href: "https://xn--exmple-cua.com/a/b",
+      host: "xn--exmple-cua.com",
+    });
+    for (const href of [
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "https://user:pw@example.com/",
+      "not a url",
+    ]) {
+      expect(frameExternalLink(href)).toBe(null);
+    }
   });
 
   it("origins are compared exactly: a look-alike host, another port or http for https is someone else", () => {
@@ -217,7 +260,7 @@ describe("resolveFrameLink — where a clicked link goes", () => {
       "https://pod.example.live:8443/open/a",
       "http://pod.example.live/open/a",
     ]) {
-      expect(resolveFrameLink(nav(href), live).action).toBe("newTab");
+      expect(resolveFrameLink(nav(href), live).action).toBe("external");
     }
   });
 
@@ -242,13 +285,13 @@ describe("resolveFrameLink — where a clicked link goes", () => {
     );
   });
 
-  it("with no known origins nothing is ours: every link is a new tab", () => {
+  it("with no known origins nothing is ours: every link asks first", () => {
     expect(
       resolveFrameLink(nav(`${POD}/open/a`), {
         ownOrigins: [],
         activated: true,
       }).action
-    ).toBe("newTab");
+    ).toBe("external");
   });
 });
 
@@ -458,9 +501,11 @@ describe("CELL_FRAME_LINK_DOOR — the in-frame half, run for real", () => {
 describe("the door is OPT-IN: a host that never asked keeps its frame exactly as it was", () => {
   const META = `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">`;
 
-  it("the default head block is the policy and the SDK, and nothing about links", () => {
+  it("the default head block is the policy, the reply channel and the SDK, and nothing about links", () => {
     const head = cellFrameHeadBlock();
-    expect(head).toBe(`${META}<script>${CELL_BRIDGE_SDK}</script>`);
+    expect(head).toBe(
+      `${META}<script>${CELL_FRAME_CHANNEL_SCRIPT}</script><script>${CELL_BRIDGE_SDK}</script>`
+    );
     expect(head).not.toContain("synap:navigate");
     expect(cellFrameHeadBlock({})).toBe(head);
     expect(cellFrameHeadBlock({ links: false })).toBe(head);
@@ -470,7 +515,7 @@ describe("the door is OPT-IN: a host that never asked keeps its frame exactly as
   it("asking for links adds the door AFTER the SDK and BEFORE the page", () => {
     const head = cellFrameHeadBlock({ links: true });
     expect(head).toBe(
-      `${META}<script>${CELL_BRIDGE_SDK}</script><script>${CELL_FRAME_LINK_DOOR}</script>`
+      `${META}<script>${CELL_FRAME_CHANNEL_SCRIPT}</script><script>${CELL_BRIDGE_SDK}</script><script>${CELL_FRAME_LINK_DOOR}</script>`
     );
     const out = wrapHtmlForFrame("<p>a</p><script>x()</script>", {
       links: true,

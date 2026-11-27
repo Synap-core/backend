@@ -24,6 +24,7 @@ import {
   FRAME_INIT_QUEUE_SCRIPT,
 } from "./frame-scripts.js";
 import { SYNAP_VIEW_SDK, SYNAP_WIDGET_SDK } from "./frame-sdks.js";
+import { CELL_FRAME_CHANNEL_SCRIPT } from "./frame-channel.js";
 import { HOST_PROVIDED_FRAME_SPECIFIERS } from "../renderables/cell-source-checks.js";
 import type { Locale } from "../i18n/locale.js";
 import {
@@ -319,6 +320,7 @@ body {
   background: transparent;
 }
 </style>
+<script>${CELL_FRAME_CHANNEL_SCRIPT}</script>
 <script type="application/json" id="synap-frame-modules">${JSON.stringify(modulePayload)}</script>
 <script>${FRAME_BLOB_URLS_SCRIPT}</script>
 <script>${FRAME_IMPORT_MAP_SCRIPT}</script>

@@ -74,9 +74,46 @@ export function parseFrameNavigate(data: unknown): FrameNavigateMessage | null {
 export type FrameLinkAction =
   /** The reader's own tab: the console draws this. */
   | { action: "here"; href: string }
-  /** A new tab, opened with `noopener`: the console's tab is not replaced. */
+  /** A new tab on the console's own origin, opened with `noopener`. */
   | { action: "newTab"; href: string }
-  | { action: "ignore"; reason: "not-activated" };
+  /**
+   * Another site: the host ASKS the reader first, naming `host`, and only on
+   * a yes opens `href` (its origin and path, `frameExternalLink`) in a new tab.
+   */
+  | { action: "external"; href: string; host: string }
+  /** `declined`: the reader said no to the host's question. */
+  | { action: "ignore"; reason: "not-activated" | "declined" };
+
+/** An address outside the console, as a host may open it. */
+export interface FrameExternalLink {
+  /** Origin and path only: the query and the fragment are cut. */
+  href: string;
+  /** What the reader is asked about (`url.host`: punycode, port included). */
+  host: string;
+}
+
+/**
+ * An http(s) address a frame asked to open, as the host may open it: its
+ * origin and path only. A page reads the viewer's pod data over the bridge;
+ * the query string and the fragment are where it would put that data on the
+ * way out (security review H2, 27 Nov 2026: `connect-src 'none'` closes the
+ * network, a link the reader follows must not reopen it). Null for anything
+ * that is not an absolute http(s) address without credentials.
+ *
+ * What it cannot cut: a page can still spell data into the PATH. That is why
+ * the reader is asked first, with the destination host in front of them.
+ */
+export function frameExternalLink(href: string): FrameExternalLink | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  return { href: `${url.origin}${url.pathname}`, host: url.host };
+}
 
 /**
  * Where a link goes. Pure: the host supplies what it knows.
@@ -92,7 +129,10 @@ export type FrameLinkAction =
  *     reader only to the console, never away from it).
  *
  * The reader's own tab only ever goes to an object door on the console
- * (`/open/…`). Everything else, even on the pod's origin, is a new tab.
+ * (`/open/…`), with no question asked. Anything else on the console's own
+ * origins is a new tab. Another site is never opened on the frame's word
+ * alone: `external`, cut to its origin and path, which the host opens only
+ * after the reader said yes to its host.
  */
 export function resolveFrameLink(
   nav: FrameNavigateMessage,
@@ -101,13 +141,15 @@ export function resolveFrameLink(
   if (env.activated === false)
     return { action: "ignore", reason: "not-activated" };
   const url = new URL(nav.href);
+  const own = env.ownOrigins.includes(url.origin);
   const consoleDoor =
-    env.ownOrigins.includes(url.origin) &&
-    (url.pathname === "/open" || url.pathname.startsWith("/open/"));
+    own && (url.pathname === "/open" || url.pathname.startsWith("/open/"));
   if (consoleDoor && !nav.newTab) return { action: "here", href: url.href };
   if (env.activated === null)
     return { action: "ignore", reason: "not-activated" };
-  return { action: "newTab", href: url.href };
+  if (own) return { action: "newTab", href: url.href };
+  // `parseFrameNavigate` already holds it to http(s) with no credentials.
+  return { action: "external", ...frameExternalLink(url.href)! };
 }
 
 /**
