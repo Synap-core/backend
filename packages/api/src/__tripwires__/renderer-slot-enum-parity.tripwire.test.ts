@@ -99,9 +99,10 @@ describe("renderer slot/scope enum parity", () => {
     expect(props?.scope?.enum).toEqual([...RENDERER_SCOPES]);
   });
 
-  it("the MCP build handler widens its slot/scope cast off the 3-member literal", () => {
+  it("the MCP build handler takes slot/scope as the input types them: no member literal, no cast", () => {
     const source = src("routers/mcp/handlers/build.ts");
     expect(source).not.toContain('"list" | "detail" | "dashboard"');
-    expect(source).toContain("as RendererSlot");
+    expect(source).not.toMatch(/as Renderer(Slot|Scope)\b/);
+    expect(source).toMatch(/const slot = args\.slot;/);
   });
 });

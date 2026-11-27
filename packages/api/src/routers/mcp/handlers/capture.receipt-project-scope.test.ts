@@ -162,7 +162,7 @@ describe("MCP capture receipts: derived scope before a write, stored scope after
       ) ?? []
     ).toHaveLength(2);
     expect(src).toMatch(
-      /const captureProjectId =\s*typeof args\.projectId === "string" && args\.projectId\s*\?\s*args\.projectId\b/
+      /const captureProjectId =\s*args\.projectId\s*\?\s*args\.projectId\b/
     );
     // No write reads the raw arg around the pin's one derivation.
     expect(src).not.toContain("...(args.projectId ?");

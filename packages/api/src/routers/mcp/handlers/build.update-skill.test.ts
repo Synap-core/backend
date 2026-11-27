@@ -358,11 +358,24 @@ describe("synap_update_skill — agentTypes", () => {
   });
 
   it("refuses a scope that is not a list of names, before the gate", async () => {
-    for (const bad of ["code", [""], [1], {}]) {
-      const r = await call({ id: SKILL_ID, agentTypes: bad }, AGENT);
-      expect(r.isError).toBe(true);
-      expect(r.text).toContain("agentTypes");
+    // Not a list of strings: refused at the door (the input's type).
+    for (const bad of ["code", [1], {}]) {
+      const parsed = parseToolArgs("synap_update_skill", {
+        id: SKILL_ID,
+        agentTypes: bad,
+      });
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) {
+        expect(parsed.result.isError).toBe(true);
+        expect(
+          (parsed.result.content[0] as { text: string }).text
+        ).toContain("agentTypes");
+      }
     }
+    // A blank name (a string to the input): refused by the handler.
+    const r = await call({ id: SKILL_ID, agentTypes: [""] }, AGENT);
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("agentTypes");
     expect(h.permCalls).toHaveLength(0);
   });
 });

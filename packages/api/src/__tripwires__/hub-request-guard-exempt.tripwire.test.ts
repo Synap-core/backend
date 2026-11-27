@@ -172,7 +172,9 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
       []
     );
     const handler = readFileSync(join(MCP_DIR, "http-handler.ts"), "utf8");
-    expect(handler).toMatch(/toolUntimed\(toolName\)/);
+    // Read with the call's arguments: a start_session launch is untimed, a
+    // plain start is not (`untimed` on its definition).
+    expect(handler).toMatch(/toolUntimed\(toolName, args\)/);
   });
 
   it("MCP: the guard runs in the POST door only, never on the GET SSE stream", () => {
