@@ -5377,6 +5377,11 @@ synap_update_engine() {
 
     # 2. preflight — nothing changes before every check passed (the migration
     #    ledger and minFrom: in 4, once postgres is surely running)
+    # A host build (step 1) regrows the BuildKit cache it capped before building:
+    # perso, 27 Nov 2026, the cache reached 9.7 GB during the build and this
+    # check then aborted the update ("not enough disk") after a 17-min build.
+    # Cap it again here; the built images are not cache and stay.
+    _ue_cap_build_cache || true
     _ue_disk_ok || { _ue_record aborted "$UE_FROM" "$UE_TO" "not enough disk" false; exit 1; }
     _preflight_compose_check "$(pwd)" || { _ue_record aborted "$UE_FROM" "$UE_TO" "compose preflight failed" false; exit 1; }
 

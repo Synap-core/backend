@@ -793,6 +793,14 @@ echo "$builds" | grep -q -- "-t synap-dev/backend:$tag12 " && echo "$builds" | g
 grep -qE "^(compose build|tag .* ghcr)" "$FAKE/log" && bad "source: compose build / ghcr retag used" || ok "source: no compose build, no ghcr retag"
 grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: build cache capped after the update (disk)" || bad "source: build cache never pruned — every from-source update grows it"
 ! grep -qE "^builder prune .*-a|^(system|volume) prune" "$FAKE/log" && ok "source: cache prune is capped, never -a / system / volume" || bad "source: an unbounded prune ran"
+# The build regrows the cache it capped before building; the preflight disk
+# check comes next (perso, 27 Nov 2026: 9.7 GB of cache, update aborted "not
+# enough disk" after the build). A cap must sit between the last build and the
+# pre-update backup, not only after an applied update.
+lb="$(grep -n '^build ' "$FAKE/log" | tail -1 | cut -d: -f1)"
+bk="$(grep -nE 'pg_dump' "$FAKE/log" | head -1 | cut -d: -f1)"
+[ -n "$lb" ] && [ -n "$bk" ] && sed -n "${lb},${bk}p" "$FAKE/log" | grep -qE "^builder prune -f --max-used-space 2gb" \
+  && ok "source: the build cache is capped again after the build, before the disk check and the backup" || bad "source: no cache cap between the last build (line ${lb:-?}) and the backup (line ${bk:-?})"
 [ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
