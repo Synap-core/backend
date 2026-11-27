@@ -232,6 +232,8 @@ export async function runAllowHostAsPerson(input: {
     },
     workspaceId: null,
     userId: input.userId,
+    // A person's own act from pod admin, not a machine read: record it.
+    observability: "full",
   });
 }
 
