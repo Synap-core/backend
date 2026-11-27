@@ -1,4 +1,4 @@
-import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
+import { supersedesDoors } from "./define-tool.js";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -223,10 +223,11 @@ describe("MCP session attribution — explicit override is declared", () => {
     ).toEqual([]);
   });
 
-  // D3 (plan 8032a127): `supersedes` is declared on EXACTLY the filing doors
-  // of SUPERSEDES_TOOLS (each a write), on the live list and the manifest,
-  // and on no other tool (the token-budget decision, 17 Nov 2026).
-  it("exactly SUPERSEDES_TOOLS declare supersedes — live list and manifest", async () => {
+  // D3 (plan 8032a127): `supersedes` is declared on EXACTLY the tools whose
+  // definition says `supersedes` (each a write), on the live list and the
+  // manifest, and on no other tool (the token-budget decision, 17 Nov 2026).
+  it("exactly the supersedes tools declare supersedes — live list and manifest", async () => {
+    const SUPERSEDES_TOOLS = supersedesDoors().map((d) => d.tool);
     const live = await tools.list();
     const declaring = (list: Array<{ name: string; inputSchema?: unknown }>) =>
       list

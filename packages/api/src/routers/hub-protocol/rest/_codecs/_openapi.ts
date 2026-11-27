@@ -90,7 +90,7 @@ export const uuidParam = z
 
 /**
  * `supersedes` on the filing doors that take it (plan 8032a127 D3,
- * `SUPERSEDES_DOORS`): read and refused by the door's wrapper
+ * `supersedesDoors()`): read and refused by the door's wrapper
  * (`_middleware/supersedes.ts`) before the route runs, declared here so the
  * contract says it. A plain string: a malformed id is the door's 409, said
  * in the same words as MCP's.

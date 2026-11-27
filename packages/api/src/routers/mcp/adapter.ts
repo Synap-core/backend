@@ -29,8 +29,6 @@ import {
   runWithWriteSessionLedger,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
-import { canonicalToolName } from "./define-tool.js";
-import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   fileSuperseding,
   leftFailedNote,
@@ -77,7 +75,7 @@ export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
  * THE dispatch map — every tool `tools/index.ts` defines resolves to exactly
  * one handler here, merged from the per-domain files: a defined tool with no
  * handler, or a handler for no defined tool, does not compile. An old name
- * (`aliases` on a definition) dispatches to its tool's handler.
+ * (`aliases` on a definition) reaches here as its tool's (`tools.execute`).
  */
 export const TOOL_HANDLERS = {
   ...readHandlers,
@@ -107,9 +105,7 @@ export const TOOL_HANDLERS = {
  * `ctx.args` is the door's parse of THAT tool's input (`parseToolArgs`).
  */
 export function mcpToolHandler(toolName: string): McpToolHandler | undefined {
-  return (TOOL_HANDLERS as unknown as Record<string, McpToolHandler>)[
-    canonicalToolName(toolName)
-  ];
+  return (TOOL_HANDLERS as unknown as Record<string, McpToolHandler>)[toolName];
 }
 
 export async function executeMCPToolViaHubProtocol(
@@ -275,16 +271,12 @@ export async function executeMCPToolViaHubProtocol(
         ? runWithNamedSession(session.sessionId, invokeHandler)
         : invokeHandler();
   // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
-  // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
-  // The ONE door `fileSuperseding` (also Hub REST's) refuses it before the
-  // handler when the name cannot be replaced (the insert door checks it
-  // again, and the request kind, against the row it files); otherwise the
-  // proposal this call files for it ends it.
-  if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
-    return toolError(
-      `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
-    );
-  }
+  // (`supersedes`, declared only by a definition that says `supersedes`:
+  // any other tool's input check refuses it as an unknown key). The ONE door
+  // `fileSuperseding` (also Hub REST's) refuses it before the handler when
+  // the name cannot be replaced (the insert door checks it again, and the
+  // request kind, against the row it files); otherwise the proposal this
+  // call files for it ends it.
   const named = readSupersedes(args.supersedes);
   if (!named.ok) return toolError(named.problem);
   const supersedes = named.id;

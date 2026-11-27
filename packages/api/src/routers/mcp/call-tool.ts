@@ -30,7 +30,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { toolError } from "./tool-errors.js";
-import { toolDefinition } from "./define-tool.js";
+import { canonicalToolName, toolDefinition } from "./define-tool.js";
 import { loadSkillCall } from "./tool-guidance.js";
 
 /** Renders a pod tool name as the calling door names it (`pod__*` on the connector). */
@@ -106,7 +106,7 @@ export async function resolveDispatch(
         `No tool is named "${tool}". ${n("synap_load_skill")}({ref: "catalog"}) lists the teaching skills; a tool group's names come with its unlock, e.g. ${loadSkillCall(n("synap_load_skill"))}.`
     );
   }
-  if (listed && !listed.has(tool)) {
+  if (listed && !listed.has(canonicalToolName(tool))) {
     const placed = toolDefinition(tool)?.group;
     const group = placed === "entry" ? undefined : placed;
     // Every advertised tool is entry (always listed) or in one group

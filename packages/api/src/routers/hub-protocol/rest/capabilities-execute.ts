@@ -65,7 +65,7 @@ import {
  * impossible rather than merely fixed once.
  */
 const ExecuteCapabilityRequestSchema = CapabilityExecuteInput.extend({
-  // Hub REST only (`SUPERSEDES_DOORS`): read by the door's wrapper, never by
+  // Hub REST only (`supersedesDoors()`): read by the door's wrapper, never by
   // the shared core, so it stays out of the contract tRPC also accepts.
   supersedes: SupersedesBodyField,
 })

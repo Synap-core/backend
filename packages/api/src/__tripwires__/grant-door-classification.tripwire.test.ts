@@ -2,16 +2,14 @@
  * TRIPWIRE — every door a scoped key can reach is classified, closed by
  * default (R1, 2 Nov 2026).
  *
- * MCP: the fence (`access/grant-door-fence.ts`) lets a fenced key through a
- * read tool only when MCP_READ_TOOL_DOORS says how the grant bounds it: SEAMED
- * (read through scopedDb / the grant hooks) or READS (an aggregate door that
- * declares its subjects; the key must read each one unnarrowed). Every OTHER
- * tool is in MCP_WRITE_TOOL_DOORS: a WRITE (bounded by the gate) or, when it
- * returns rows, the read door of what it returns. A tool in neither map is
- * refused to a fenced key. Both sets are DERIVED from the live tool list
- * (`tools.list()`, `readOnlyHint`), so a new tool fails here until someone
- * classifies it, and an entry for a tool that is gone or changed sides fails
- * too.
+ * MCP: the fence (`access/grant-door-fence.ts`) reads each tool's `access` on
+ * its definition (`defineTool`, required by the type, so an unclassified tool
+ * does not compile): SEAMED (read through scopedDb / the grant hooks), READS
+ * (an aggregate door that declares its subjects; the key must read each one
+ * unnarrowed), or for a tool that is not read-only a WRITE (bounded by the
+ * gate) or, when it returns rows, the read door of what it returns. Checked
+ * here, over every definition: a read-only tool never declares WRITE (a read
+ * declared a write would pass every fenced key).
  *
  * HUB REST ROUTE CLASSES (plan-access A3): every served Hub route is `read`,
  * `write` or `owner-wide` (`hubRouteClass`, from the fence's declarations).
@@ -59,7 +57,10 @@
  * reaches a gate is not checked.
  */
 import { describe, expect, it } from "vitest";
-import { tools } from "../routers/mcp/tools/index.js";
+import {
+  definedToolNames,
+  toolDefinition,
+} from "../routers/mcp/define-tool.js";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -69,8 +70,6 @@ import {
   GRANT_REST_GET_READS,
   GRANT_REST_POST_READS,
   GRANT_SAFE_REST_READS,
-  MCP_READ_TOOL_DOORS,
-  MCP_WRITE_TOOL_DOORS,
   TRPC_KEY_MUTATION_DOORS,
   hubRouteClass,
 } from "../access/grant-door-fence.js";
@@ -91,56 +90,30 @@ import {
 import { KEY_SCOPES_NOT_DERIVED } from "@synap-core/types/grants";
 import { hubProtocolRestApp } from "../routers/hub-protocol-rest.js";
 
-describe("MCP read-tool classification (derived from the live tool list)", () => {
-  it("classifies every read tool, and only read tools", async () => {
-    const all = await tools.list();
-    const reads = all
-      .filter((t) => t.annotations?.readOnlyHint === true)
-      .map((t) => t.name);
-    // Non-vacuity: the scan sees the tool list and the doors it must cover.
-    expect(all.length).toBeGreaterThan(60);
-    expect(reads).toEqual(
+describe("MCP tool access (declared on each definition)", () => {
+  const defs = definedToolNames().map((n) => toolDefinition(n)!);
+
+  it("no read-only tool declares WRITE; the row-returning writes carry a read door", () => {
+    const reads = defs.filter((d) => d.annotations?.readOnlyHint === true);
+    // Non-vacuity: the scan sees the tool list and both sides of it.
+    expect(defs.length).toBeGreaterThan(60);
+    expect(reads.map((d) => d.name)).toEqual(
       expect.arrayContaining(["synap_ask", "synap_orient", "synap_get_entity"])
     );
     expect(reads.length).toBeGreaterThanOrEqual(25);
-
-    const classified = Object.keys(MCP_READ_TOOL_DOORS);
     expect(
-      reads.filter((n) => !classified.includes(n)),
-      "Classify the tool in MCP_READ_TOOL_DOORS (access/grant-door-fence.ts)."
+      reads.filter((d) => d.access.bound === "write").map((d) => d.name),
+      "A read-only tool declares its read door (SEAMED, READS, …), never WRITE."
     ).toEqual([]);
-    expect(classified.filter((n) => !reads.includes(n))).toEqual([]);
-  });
-
-  it("classifies every other tool, and only those (closed by default)", async () => {
-    const all = await tools.list();
-    const others = all
-      .filter((t) => t.annotations?.readOnlyHint !== true)
-      .map((t) => t.name);
-    // Non-vacuity: the scan sees the write tools, and the two that return
-    // rows carry a read door, not WRITE.
-    expect(others.length).toBeGreaterThanOrEqual(50);
-    expect(others).toEqual(
-      expect.arrayContaining(["synap_wait_for_answer", "synap_get_channel"])
-    );
-    expect(MCP_WRITE_TOOL_DOORS.synap_wait_for_answer?.bound).toBe("reads");
-    expect(MCP_WRITE_TOOL_DOORS.synap_get_channel?.bound).toBe("reads");
-
-    const classified = Object.keys(MCP_WRITE_TOOL_DOORS);
-    expect(
-      others.filter((n) => !classified.includes(n)),
-      "Classify the tool in MCP_WRITE_TOOL_DOORS (access/grant-door-fence.ts): " +
-        "WRITE when it only writes through the gate, else the read door of what it returns."
-    ).toEqual([]);
-    expect(classified.filter((n) => !others.includes(n))).toEqual([]);
+    expect(toolDefinition("synap_wait_for_answer")!.access.bound).toBe("reads");
+    expect(toolDefinition("synap_get_channel")!.access.bound).toBe("reads");
   });
 
   it("declares only subjects the read hook knows (MCP tools and Hub REST doors)", () => {
     const known = new Set([...GRANT_READ_SPECS.values()].map((s) => s.subject));
     const doors = [
-      ...Object.entries(MCP_READ_TOOL_DOORS),
-      ...Object.entries(MCP_WRITE_TOOL_DOORS).flatMap(([n, d]) =>
-        d.bound === "write" ? [] : [[n, d] as const]
+      ...defs.flatMap((d) =>
+        d.access.bound === "write" ? [] : [[d.name, d.access] as const]
       ),
       ...[...GRANT_REST_GET_READS, ...GRANT_REST_POST_READS].map(
         ([r, d]) => [String(r), d] as const

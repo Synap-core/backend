@@ -17,9 +17,10 @@
  *     MCP, so its WRITE is refused; left alone it falls to the human governance
  *     path and DEFAULT_AUTO_APPROVE verbs execute with no proposal. Reads pass.
  *  2. W1 grant fence (`access/grant-door-fence.ts`): a scoped key may only call
- *     READ tools whose reads its grant bounds. A classified write passes to the
- *     gate; one that returns rows passes its read door; an unclassified tool is
- *     refused (`MCP_WRITE_TOOL_DOORS`, R1).
+ *     READ tools whose reads its grant bounds. Each tool declares its door as
+ *     `access` on its definition: a write passes to the gate; one that returns
+ *     rows passes its read door (R1). The name is the CANONICAL one: the door
+ *     resolves an old name before the fence (`canonicalToolName`).
  *
  * An unknown tool name is refused by neither: the SDK's own error names it.
  * `resources/read` gets the same fence (`resourceReadRefusal`): it was never
@@ -34,6 +35,7 @@ import {
   mcpToolAllowed,
   mcpToolRefusal,
 } from "../../access/grant-door-fence.js";
+import { toolDefinition } from "./define-tool.js";
 
 /** Who is calling, as the HTTP door resolved the key (`resolveKeyIdentity`). */
 export interface McpCallPrincipal {
@@ -91,17 +93,13 @@ export function toolCallRefusal(
   if (shouldRejectUnattributedWrite(toolName, toolDefs, principal)) {
     return UNATTRIBUTED_WRITE_MESSAGE;
   }
-  const tool = toolDefs.find((t) => t.name === toolName);
+  const def = toolDefinition(toolName);
   if (
-    tool &&
+    def &&
     isFencedGrant(principal.grant) &&
-    !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint, principal.grant!)
+    !mcpToolAllowed(def.access, principal.grant!)
   ) {
-    return mcpToolRefusal(
-      tool.name,
-      tool.annotations?.readOnlyHint,
-      principal.grant!
-    );
+    return mcpToolRefusal(toolName, def.access, principal.grant!);
   }
   return null;
 }

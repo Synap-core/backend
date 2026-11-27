@@ -26,7 +26,7 @@
  *    SUPERSEDES_REFUSED, nothing filed, the failure kept (rules out "filed
  *    beside a failure that never ends", and "a 500").
  * What this does NOT cover: an MCP door (its own test), a door outside
- * SUPERSEDES_DOORS, production Postgres's transaction isolation (PGlite runs
+ * supersedesDoors(), production Postgres's transaction isolation (PGlite runs
  * one connection, so a transaction body runs on the same handle).
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
@@ -161,7 +161,7 @@ import { applyAgentPosture } from "@synap/database/agent-governance";
 import "../../../access/grant-read.js";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import { hubProtocolRestApp } from "../../hub-protocol-rest.js";
-import { SUPERSEDES_DOORS } from "../../../services/proposals/supersedes-door.js";
+import { supersedesDoors } from "../../mcp/define-tool.js";
 import { SUPERSEDES_REFUSED } from "./supersedes.js";
 
 const OWNER = h.ids.owner;
@@ -178,7 +178,7 @@ server.route("/api/hub", hubProtocolRestApp);
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-type Door = (typeof SUPERSEDES_DOORS)[number];
+type Door = ReturnType<typeof supersedesDoors>[number];
 
 /** A body each door files ONE proposal for, fresh per call. */
 function bodyFor(door: Door): Record<string, unknown> {
@@ -327,15 +327,19 @@ beforeAll(async () => {
 
 describe("supersedes on every real Hub REST filing door", () => {
   it("covers the four doors (non-vacuity)", () => {
-    expect(SUPERSEDES_DOORS.map((d) => `${d.method} ${d.route}`)).toEqual([
-      "POST /capabilities/execute",
-      "POST /entities",
+    expect(
+      supersedesDoors()
+        .map((d) => `${d.method} ${d.route}`)
+        .sort()
+    ).toEqual([
       "PATCH /entities/:entityId",
+      "POST /capabilities/execute",
       "POST /capture/graph",
+      "POST /entities",
     ]);
   });
 
-  for (const door of SUPERSEDES_DOORS) {
+  for (const door of supersedesDoors()) {
     describe(`${door.method} ${door.route}`, () => {
       it("the same request again ends the failed one, pointing at the new row", async () => {
         // Learn what this door files: exactly one proposal, for OWNER.

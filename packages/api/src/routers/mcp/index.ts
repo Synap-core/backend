@@ -30,6 +30,7 @@ import { loadKeyToolAccess } from "./tool-access.js";
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { resolveDispatch, withInputSchemaOnError } from "./call-tool.js";
 import { doorToolName } from "./tool-guidance.js";
+import { canonicalToolName } from "./define-tool.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import { runWithCallNotices, withCallNotices } from "./call-notices.js";
 import { withToolCallLog } from "./tool-call-log.js";
@@ -378,10 +379,17 @@ export function createMCPServer(
           line.via = CALL_TOOL_NAME;
         }
 
-        // The key's refusals (attribution, W1 grant fence), before anything runs.
+        // The key's refusals (attribution, W1 grant fence), before anything runs,
+        // on the tool an old name answers as (resolved here, once: every check
+        // reads the definition). The caller's name stays for `execute`, which
+        // maps an old argument shape onto the tool's before it runs it.
         // A JSON-RPC error, as the HTTP door's 403 body used to carry.
         if (callPrincipal) {
-          const refusal = toolCallRefusal(name, toolDefs, callPrincipal);
+          const refusal = toolCallRefusal(
+            canonicalToolName(name),
+            toolDefs,
+            callPrincipal
+          );
           if (refusal) throw new McpError(MCP_CALL_REFUSED_CODE, refusal);
         }
         const userId =

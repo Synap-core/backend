@@ -964,7 +964,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     param: "reach",
     door: "routers/mcp/handlers/session.ts:synap_get_work_graph",
     reason:
-      "NO NARROWED KEY REACHES THIS DOOR. `reach` is derived from the calling key's grant, never a caller's choice. MCP `synap_get_work_graph` is declared `READS(...WORK_GRAPH_SUBJECTS)` (`MCP_READ_TOOL_DOORS`): it admits only a key that reads every subject of the graph unbounded, for which `workGraphReach` is `{ whole: true }`, the default when `reach` is absent. Only Hub REST admits a key holding `session.read` alone (NARROWED) and forwards its reach.",
+      "NO NARROWED KEY REACHES THIS DOOR. `reach` is derived from the calling key's grant, never a caller's choice. MCP `synap_get_work_graph` is declared `READS(...WORK_GRAPH_SUBJECTS)` (its `access` on its definition): it admits only a key that reads every subject of the graph unbounded, for which `workGraphReach` is `{ whole: true }`, the default when `reach` is absent. Only Hub REST admits a key holding `session.read` alone (NARROWED) and forwards its reach.",
   },
 ];
 

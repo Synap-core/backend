@@ -6,8 +6,9 @@
  * failure beside its fix.
  *
  * Two doors take it, and both call this file, never a copy of it:
- *  - MCP, on the tools of {@link SUPERSEDES_DOORS} (`routers/mcp/adapter.ts`);
- *  - Hub REST, on the same doors' routes (`hub-protocol/_middleware/
+ *  - MCP, on the tools whose definition says `supersedes`
+ *    (`routers/mcp/adapter.ts`);
+ *  - Hub REST, on the route each of those names (`hub-protocol/_middleware/
  *    supersedes.ts`), which is how the Intelligence Service files: it reaches
  *    the pod only through Hub REST, and Ask AI wakes it on another agent's
  *    failed proposal (finding d6ac7003).
@@ -22,34 +23,6 @@ import {
   SupersedesRefusedError,
   type SupersedesSlot,
 } from "@synap/database";
-
-/**
- * The doors that take `supersedes`: the MCP tool and the Hub REST route that
- * file the same request. ONLY the doors that filed the founder's 44 failures
- * (17 Nov 2026): a capability run (LinkedIn sends go through it), an entity
- * create or update, a capture graph. Not every write door: one property on
- * ~80 MCP tools broke the `token-budget` ratchet (decision of 17 Nov 2026,
- * option A). An MCP tool is added here WITH its Hub route, so the two doors
- * never disagree on what can replace a failed proposal.
- */
-export const SUPERSEDES_DOORS = [
-  {
-    tool: "synap_run_capability",
-    method: "POST",
-    route: "/capabilities/execute",
-  },
-  { tool: "synap_create_entity", method: "POST", route: "/entities" },
-  {
-    tool: "synap_update_entity",
-    method: "PATCH",
-    route: "/entities/:entityId",
-  },
-  { tool: "synap_capture", method: "POST", route: "/capture/graph" },
-] as const satisfies readonly {
-  tool: string;
-  method: "POST" | "PATCH";
-  route: string;
-}[];
 
 /** What a door received as `supersedes`: nothing, an id, or a refusal. */
 export type SupersedesRead =

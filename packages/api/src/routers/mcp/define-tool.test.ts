@@ -143,15 +143,15 @@ describe("the input check", () => {
 });
 
 describe("what is derived from the definitions", () => {
-  it("entry and group members: listed tools only; old names stay callable", () => {
+  it("entry and group members: tools only; an old name is resolved to its tool first (F7)", () => {
     expect(entryToolNames()).toContain("synap_start_session");
-    expect(entryToolNames()).not.toContain("synap_run_playbook");
-    expect(entryToolNames(true)).toContain("synap_run_playbook");
-    expect(toolGroupMembers().build).not.toContain("synap_list_widgets");
-    expect(toolGroupMembers(true).build).toContain("synap_list_widgets");
+    expect(entryToolNames(true)).not.toContain("synap_run_playbook");
+    expect(toolGroupMembers(true).build).not.toContain("synap_list_widgets");
+    expect(canonicalToolName("synap_run_playbook")).toBe("synap_start_session");
+    expect(canonicalToolName("synap_list_widgets")).toBe("synap_list_cells");
     expect(
       visibleToolNames({ profile: "entry", groups: [] })!.has(
-        "synap_run_playbook"
+        canonicalToolName("synap_run_playbook")
       )
     ).toBe(true);
   });

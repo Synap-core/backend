@@ -197,8 +197,8 @@ export interface KeyToolAccess {
 
 /**
  * The tool names a key may reach: the entry tools plus every tool of its
- * unlocked groups (hidden doors and old names included: `synap_call_tool`
- * runs them), or
+ * unlocked groups (hidden doors included: `synap_call_tool` runs them; an
+ * old name is resolved to its tool first, `canonicalToolName`), or
  * `null` for "every tool" (legacy NULL and `builder`). Unknown group strings
  * in storage are ignored, never widened.
  */

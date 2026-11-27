@@ -66,14 +66,12 @@ describe("tool profiles", () => {
     );
   });
 
-  it("legacy (NULL) and builder keys list every tool; an entry key reaches the 15 entry tools (+ their old names) and its unlocked groups", () => {
+  it("legacy (NULL) and builder keys list every tool; an entry key reaches the 15 entry tools and its unlocked groups", () => {
     expect(visibleToolNames({ profile: null, groups: [] })).toBeNull();
     expect(visibleToolNames({ profile: "builder", groups: [] })).toBeNull();
 
     expect(entryToolNames()).toHaveLength(15);
     const entry = entryToolNames(true);
-    // The old name of start_session's launch answers on every key.
-    expect(entry).toContain("synap_run_playbook");
     const entryOnly = visibleToolNames({ profile: "entry", groups: [] })!;
     expect([...entryOnly].sort()).toEqual([...entry].sort());
 

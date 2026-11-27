@@ -119,6 +119,7 @@ import {
 import { runWithGrant } from "@synap/database";
 import { officialCatalogUrl } from "@synap/jobs/workers/cp-catalog-sync.js";
 import { mcpToolAllowed } from "../../access/grant-door-fence.js";
+import { toolDefinition } from "../../routers/mcp/define-tool.js";
 import { installationHandlers } from "../../routers/mcp/handlers/installations.js";
 import { proposalExecRegistry } from "../../routers/proposals/execution-registry.js";
 import type { ProposalExecutorArgs } from "../../routers/proposals/execution-registry.js";
@@ -535,8 +536,8 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
       ],
       clientId: null,
     } as never;
-    expect(mcpToolAllowed("synap_list_installations", true, AI)).toBe(true);
-    expect(mcpToolAllowed("synap_request_installation", false, AI)).toBe(true);
+    expect(mcpToolAllowed(toolDefinition("synap_list_installations")?.access, AI)).toBe(true);
+    expect(mcpToolAllowed(toolDefinition("synap_request_installation")?.access, AI)).toBe(true);
     const out = await runWithGrant(AI, () =>
       asAgent("synap_list_installations", { capabilityKey: "media-ffmpeg" })
     );

@@ -214,29 +214,6 @@ export function classifyHubRestRequest(
   return null;
 }
 
-/** MCP tools that wait by design (a bounded long-poll, up to 90 s). */
-export const MCP_LONG_POLL_TOOLS: ReadonlySet<string> = new Set([
-  "synap_wait_for_answer",
-]);
-/** MCP tools that may run a model without declaring `openWorldHint`. */
-export const MCP_MODEL_TOOLS: ReadonlySet<string> = new Set(["synap_ask"]);
-
-/**
- * The exemption of one MCP `tools/call`, from the tool's own metadata:
- * `openWorldTools` = the tools that declare `openWorldHint: true`
- * (`openWorldToolNames`, routers/mcp/define-tool.ts).
- */
-export function classifyMcpToolCall(
-  toolName: string | undefined,
-  openWorldTools: ReadonlySet<string>
-): HubGuardExemption | null {
-  if (!toolName) return null;
-  if (MCP_LONG_POLL_TOOLS.has(toolName)) return "long_poll";
-  if (MCP_MODEL_TOOLS.has(toolName) || openWorldTools.has(toolName))
-    return "model";
-  return null;
-}
-
 // ── In-flight counters ────────────────────────────────────────────────────
 
 const inFlight = new Map<string, number>();

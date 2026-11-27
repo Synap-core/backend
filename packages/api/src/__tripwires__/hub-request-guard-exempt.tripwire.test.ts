@@ -19,10 +19,13 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
-import { openWorldToolNames } from "../routers/mcp/define-tool.js";
+import {
+  definedToolNames,
+  toolDefinition,
+  toolUntimed,
+} from "../routers/mcp/define-tool.js";
 import {
   classifyHubRestRequest,
-  classifyMcpToolCall,
   guardPolicy,
   HUB_REQUEST_GUARD_ENV,
   HUB_REST_EXEMPT_ROUTES,
@@ -156,24 +159,22 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
     }
     expect(waiting.length).toBeGreaterThan(0);
     expect(
-      waiting.filter((t) => classifyMcpToolCall(t, new Set()) !== "long_poll")
+      waiting.filter((t) => toolUntimed(t) !== "long_poll")
     ).toEqual([]);
   });
 
   it("MCP: every tool that declares openWorldHint is never timed", () => {
-    // Read off the tools' own definitions (`define-tool.ts`), the set the
-    // handler uses: a source scan of the definitions broke on their layout.
-    const openWorld = [...openWorldToolNames()];
+    // Read off the tools' own definitions (`define-tool.ts`), what the
+    // handler reads (`toolUntimed`).
+    const openWorld = definedToolNames().filter(
+      (t) => toolDefinition(t)?.annotations?.openWorldHint === true
+    );
     expect(openWorld).toContain("synap_run_capability");
-    // The handler reads them from the tools' own metadata
-    // (`openWorldToolNames`); the classification honours that set.
     expect(
-      openWorld.filter(
-        (t) => guardPolicy(classifyMcpToolCall(t, new Set(openWorld))).timed
-      )
+      openWorld.filter((t) => guardPolicy(toolUntimed(t)).timed)
     ).toEqual([]);
     const handler = readFileSync(join(MCP_DIR, "http-handler.ts"), "utf8");
-    expect(handler).toMatch(/openWorldToolNames\(\)/);
+    expect(handler).toMatch(/toolUntimed\(toolName\)/);
   });
 
   it("MCP: the guard runs in the POST door only, never on the GET SSE stream", () => {

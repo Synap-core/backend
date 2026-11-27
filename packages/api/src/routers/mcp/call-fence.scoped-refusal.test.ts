@@ -92,18 +92,9 @@ describe("synap_list_installations for a scoped key", () => {
   });
 
   it("a door no grant can open keeps the unsupported text", () => {
-    // A tool the fence does not classify: no permission would open it.
-    const unclassified: Tool = {
-      name: "synap_not_a_classified_tool",
-      inputSchema: { type: "object" },
-      annotations: { readOnlyHint: true },
-    };
+    // A tool whose declared access is REFUSED: no permission would open it.
     expect(
-      toolCallRefusal(
-        unclassified.name,
-        [...toolDefs, unclassified],
-        agent(AI_PERMISSIONS)
-      )
+      toolCallRefusal("synap_diagnose", toolDefs, agent(AI_PERMISSIONS))
     ).toBe(GRANT_DOOR_UNSUPPORTED);
   });
 });

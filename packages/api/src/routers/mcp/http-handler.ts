@@ -47,10 +47,10 @@ import {
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
-import { openWorldToolNames } from "./define-tool.js";
+import { toolUntimed } from "./define-tool.js";
 import { effectiveToolCall } from "./call-tool-name.js";
 import {
-  classifyMcpToolCall,
+  type HubGuardExemption,
   REQUEST_TIMEOUT,
   runGuarded,
   TOO_MANY_IN_FLIGHT,
@@ -393,15 +393,19 @@ function jsonRpcTimedOut(id: unknown, timeoutMs: number) {
 }
 
 /**
- * The tools that declare `openWorldHint` (static list). A failed read is not
+ * The exemption of one MCP `tools/call`, from the tool's definition
+ * (`toolUntimed`: its `untimed`, or `openWorldHint`). A failed read is not
  * hidden: it is logged, and the call is guarded like any other.
  */
-function mcpOpenWorldTools(): ReadonlySet<string> {
+function mcpCallExemption(
+  toolName: string | undefined
+): HubGuardExemption | null {
+  if (!toolName) return null;
   try {
-    return openWorldToolNames();
+    return toolUntimed(toolName);
   } catch (err) {
-    logger.warn({ err }, "could not read the open-world MCP tool list");
-    return new Set();
+    logger.warn({ err }, "could not read the MCP tool definitions");
+    return null;
   }
 }
 
@@ -755,7 +759,7 @@ mcpHttpApp.post("/", async (c) => {
     {
       key: UNCOUNTED_KEY_TYPES.has(keyRecord.keyType) ? null : keyRecord.id,
       route: `MCP ${rpc?.method ?? "?"}${toolName ? ` ${toolName}` : ""}`,
-      exemption: classifyMcpToolCall(toolName, mcpOpenWorldTools()),
+      exemption: mcpCallExemption(toolName),
     },
     () => mcpCall(),
     {

@@ -218,18 +218,24 @@ describe("synap_load_skill(<group>) unlocks on an entry key", () => {
     expect(out).toContain("Unlocked tool group: governance");
   });
 
-  it("a missing or empty ref is a clear error, never a crash", async () => {
-    for (const args of [{}, { ref: "" }, { ref: 42 }]) {
-      const res = (await tools.execute(
+  it("a missing, empty or mistyped ref is a clear error, never a crash", async () => {
+    const run = async (args: Record<string, unknown>) =>
+      (await tools.execute(
         "synap_load_skill",
         args,
         "u1",
         ["mcp.read"],
         "u1"
       )) as { isError?: boolean; content: unknown[] };
+    for (const args of [{}, { ref: "" }]) {
+      const res = await run(args);
       expect(res.isError).toBe(true);
       expect(text(res)).toContain("`ref` is required");
     }
+    // A number is refused by the door's input check, which names the input.
+    const typed = await run({ ref: 42 });
+    expect(typed.isError).toBe(true);
+    expect(text(typed)).toMatch(/invalid input[\s\S]*ref/);
   });
 
   it("an unknown tools: group names the real ones and unlocks nothing", async () => {

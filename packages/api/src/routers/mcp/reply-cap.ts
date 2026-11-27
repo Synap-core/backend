@@ -22,67 +22,16 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { fitReply } from "./handlers/fit-reply.js";
 import { REPLY_CAP_CHARS } from "./reply-cap-budget.js";
+import { toolDefinition } from "./define-tool.js";
 
 export { REPLY_CAP_CHARS };
-
-/**
- * Tools whose reply IS a body the caller asked to read whole (a skill's text
- * is what `synap_load_skill` is for). Capping them would break the tool. A new
- * entry needs a reason here; `reply-cap.test.ts` pins this list.
- */
-export const REPLY_CAP_EXEMPT: ReadonlySet<string> = new Set([
-  "synap_load_skill",
-]);
 
 const GENERIC_HOW =
   "Narrow the call: a smaller `limit`, a `detail` or `fields` parameter where the tool has one, or a more specific id or query.";
 
-/**
- * How to get less back, in the tool's own parameters. Every parameter named
- * here must be declared by that tool (`reply-cap.hints.test.ts` pins it).
- */
-export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
-  synap_get_session:
-    "Call again with detail:'lean' (the outcomes, what is owed, the next move, the last room posts).",
-  synap_get_entity:
-    "Call again with detail:'lean', or read the properties you need with synap_get_entities {fields}.",
-  synap_get_entities:
-    "Lower `limit`, pass `fields`, and page with `offset` (use `nextOffset`).",
-  synap_get_document:
-    "Read the body in slices: pass `limit` (characters) and `offset` (the previous `nextOffset`).",
-  synap_get_graph:
-    "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
-  synap_get_relations: "Lower `limit` (the newest relations come first).",
-  synap_ask: "Call again with detail:'brief' or 'sources', or a lower `limit`.",
-  synap_find:
-    "Lower `limit` (matches per catalog), or name only the `catalogs` you need.",
-  synap_list_proposals:
-    "Lower `limit`, page with `offset` (use `nextOffset`), or use detail:'summary'.",
-  synap_list_profiles:
-    "Lower `limit` and page with `offset` (use `nextOffset`).",
-  synap_list_views:
-    "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
-  synap_list_capabilities:
-    "Lower `limit` and page with `offset` (use `nextOffset`), or pass a `query` or `kind`.",
-  synap_list_automations:
-    "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
-  synap_list_playbooks:
-    "Lower `limit` and page with `cursor` (use `nextCursor`). With `playbookId`, read its stages in pages: `limit` and `offset` (use `nextOffset`).",
-  synap_list_cells: "Lower `limit` and page with `offset` (use `nextOffset`).",
-  synap_list_widgets:
-    "Lower `limit` and page with `offset` (use `nextOffset`).",
-  synap_list_sessions: "Lower `limit` and page with `offset`.",
-  synap_list_workspaces: "Lower `limit` and page with `offset`.",
-  synap_list_tracks:
-    "Pass `name`, or lower `limit` and page with `offset`; detail:'lean' is the default.",
-  synap_list_agents: "Lower `limit` and page with `offset`.",
-  synap_get_thread_context:
-    "Lower `limit`, and read older messages with `cursor` (the previous `nextCursor`).",
-  synap_read_board:
-    "Lower `limit` and page with `offset` (use `scene.window.nextOffset`), or read one frame with `frameId`.",
-  synap_orient:
-    "Pass `scope` and/or `workspaceId`; a worker polling its hand-offs passes only:'handedToYou'.",
-};
+/** How to get less back: the tool's own `narrow` (on its definition), else generic. */
+const howToNarrow = (toolName: string) =>
+  toolDefinition(toolName)?.narrow ?? GENERIC_HOW;
 
 function envelope(
   text: string,
@@ -96,7 +45,7 @@ function envelope(
       totalChars: text.length,
       shownChars: headChars,
       omittedChars: text.length - headChars,
-      how: HOW_TO_NARROW[toolName] ?? GENERIC_HOW,
+      how: howToNarrow(toolName),
     },
     head: text.slice(0, headChars),
   });
@@ -193,7 +142,7 @@ function fitted(text: string, budget: number, toolName: string): string | null {
     return null;
   }
   if (!isPlainObject(parsed)) return null;
-  const how = HOW_TO_NARROW[toolName] ?? GENERIC_HOW;
+  const how = howToNarrow(toolName);
   const out: Record<string, unknown> = fitReply(parsed, {
     budget: budget - FIT_NOTICE_ROOM,
     how: `Lists in \`fit.omitted\` kept their first items; strings in \`fit.clipped\` their start. ${how}`,
@@ -234,7 +183,7 @@ export function capReply(
   result: CallToolResult,
   budget: number = REPLY_CAP_CHARS
 ): CallToolResult {
-  if (REPLY_CAP_EXEMPT.has(toolName) || result.isError) return result;
+  if (toolDefinition(toolName)?.uncapped || result.isError) return result;
   if (!Array.isArray(result.content)) return result;
   let changed = false;
   const content = result.content.map((block) => {

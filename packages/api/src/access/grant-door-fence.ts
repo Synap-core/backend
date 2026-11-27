@@ -11,7 +11,7 @@
  *
  * Writes on Hub REST and MCP pass to the gate, whose rung 0 denies an
  * out-of-grant write. Closed by default (R1, 2 Nov 2026): an MCP tool that is
- * not read-only passes only when `MCP_WRITE_TOOL_DOORS` classifies it, and
+ * declares its `access` (`defineTool`: a WRITE or a read door), and
  * every served non-GET Hub route is a declared read, names its gate, or sits
  * in a shrink-only baseline (the classification tripwire). The free-form
  * `POST /proposals` passes no gate, so it runs rung 0 itself on an allowlist
@@ -27,9 +27,9 @@
  * declared subject with no narrowing (every kind, every workspace, project
  * and object) — then the grant would remove no row the door returns, so the
  * door is bounded by it exactly. A door read through the seams is `SEAMED`.
- * Every MCP read tool must be classified (`__tripwires__/
- * grant-door-classification.tripwire.test.ts` derives the set from the live
- * tool list); an unclassified one stays refused.
+ * Every MCP tool declares its door as `access` on its definition (required
+ * by the type; `grant-door-classification.tripwire.test.ts` checks a read
+ * tool never declares WRITE).
  *
  * Inventory + migration order: the W1 grants design of 2026-10-06 (team pod).
  */
@@ -67,8 +67,8 @@ export type FencedReadDoor =
     }
   | { readonly bound: "refused"; readonly reason: string };
 
-const SEAMED: FencedReadDoor = { bound: "seamed" };
-const READS = (...subjects: string[]): FencedReadDoor => ({
+export const SEAMED: FencedReadDoor = { bound: "seamed" };
+export const READS = (...subjects: string[]): FencedReadDoor => ({
   bound: "reads",
   subjects,
 });
@@ -81,7 +81,7 @@ const READS = (...subjects: string[]): FencedReadDoor => ({
  * asks for it and the person ticks it like any permission (founder decision
  * 3, 2026-10-26). A deny-all scope grants nothing.
  */
-const PERSON = (subject: string): FencedReadDoor => ({
+export const PERSON = (subject: string): FencedReadDoor => ({
   bound: "person",
   subject,
 });
@@ -97,7 +97,7 @@ const PERSON = (subject: string): FencedReadDoor => ({
  * (`capability.publish_post.run` admits a `capability … run` door): the route
  * then checks the qualifier and the space it was asked about.
  */
-const NARROWED = (
+export const NARROWED = (
   subject: string,
   full: readonly string[],
   action = "read",
@@ -109,7 +109,7 @@ const NARROWED = (
   action,
   ...(opts.orReadsFull ? { orReadsFull: true } : {}),
 });
-const REFUSED = (reason: string): FencedReadDoor => ({
+export const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
   reason,
 });
@@ -120,7 +120,7 @@ const REFUSED = (reason: string): FencedReadDoor => ({
  * (`readProfileUnderGrant`), so they share this one declaration. Admitted
  * when one live scope grants `entity.<some kind>.read`, as `/lifecycle`.
  */
-const FLOW_OF = NARROWED("entity", []);
+export const FLOW_OF = NARROWED("entity", []);
 
 /**
  * THE HOMES READS (`services/lifecycle/homes.ts`): Hub `GET /lifecycle/home`
@@ -136,7 +136,7 @@ const FLOW_OF = NARROWED("entity", []);
  * person's last-seen stamp; Moving needs `session.read`. Admitted when one
  * live scope grants `entity.<some kind>.read`, as `/lifecycle` and `/flow`.
  */
-const HOMES = NARROWED("entity", []);
+export const HOMES = NARROWED("entity", []);
 
 /**
  * THE PROCESS READ (`services/playbooks/process-read.ts`, Process wave W2):
@@ -183,7 +183,7 @@ export function runsDigestReadableByGrant(
  * MCP `synap_read_board` call the same function, so they share this one
  * declaration.
  */
-const BOARD_SCENE = READS("view", "document", "entity");
+export const BOARD_SCENE = READS("view", "document", "entity");
 /**
  * The surface find (`surfacesForObject`): Hub `GET /surfaces` and MCP
  * `synap_find_surfaces` share it. Most stores go through `scopedDb` (views,
@@ -192,7 +192,7 @@ const BOARD_SCENE = READS("view", "document", "entity");
  * outside the seams, so a fenced key passes only when it reads every subject
  * unnarrowed.
  */
-const SURFACES_FIND = READS(
+export const SURFACES_FIND = READS(
   "view",
   "document",
   "entity",
@@ -210,7 +210,7 @@ const SURFACES_FIND = READS(
  * (the log floored on the caller's spaces), so a fenced key passes only when
  * it reads every subject unnarrowed.
  */
-const SURFACES_INSPECT = READS("view", "document", "cell", "widget");
+export const SURFACES_INSPECT = READS("view", "document", "cell", "widget");
 
 /**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
@@ -221,7 +221,7 @@ const SURFACES_INSPECT = READS("view", "document", "cell", "widget");
  * REST (`synap proposals await`, `synap app connect`), where it was refused
  * as undeclared (finding 9a415c59).
  */
-const PROPOSAL_GET = READS("proposal", "entity");
+export const PROPOSAL_GET = READS("proposal", "entity");
 
 /**
  * Load an instruction skill: MCP `synap_load_skill` and its REST twins
@@ -233,7 +233,7 @@ const PROPOSAL_GET = READS("proposal", "entity");
  * REST and MCP answer the same for every key (the CLI's own key was refused
  * `synap skill get` while it could load the same skill over MCP).
  */
-const LOAD_SKILL = READS();
+export const LOAD_SKILL = READS();
 
 /**
  * Recall the person's remembered facts (`knowledge_facts`, owner-pinned):
@@ -251,20 +251,20 @@ const MEMORY_RECALL = READS("entity", "preference");
  * every one of them while the same key could call the MCP tools.
  */
 /** The lens map: MCP `synap_orient` and Hub `GET /orient` both call `discover()`. */
-const ORIENT = READS("entity", "project", "session", "proposal", "track");
+export const ORIENT = READS("entity", "project", "session", "proposal", "track");
 /** The kinds and roles: both call tRPC `profiles.listProfiles`. */
-const LIST_PROFILES = READS("entity");
+export const LIST_PROFILES = READS("entity");
 /** A space's automations: both call tRPC `automations.listAutomations`. */
-const LIST_AUTOMATIONS = READS("automation");
+export const LIST_AUTOMATIONS = READS("automation");
 /** One thread's context: both call tRPC `context.getThreadContext`. */
-const THREAD_CONTEXT = READS("channel", "entity", "document");
+export const THREAD_CONTEXT = READS("channel", "entity", "document");
 /**
  * The person's own personal channel, GET-OR-CREATE: MCP `synap_get_channel`
  * (`channels.ensurePersonal`) and Hub `GET /channels/personal` resolve or
  * create it through the same `resolveOrCreateChannel(…, PERSONAL,
  * orchestrator)`. The door of what it returns: a channel row.
  */
-const GET_CHANNEL = READS("channel");
+export const GET_CHANNEL = READS("channel");
 
 /**
  * The find door (`findForCaller`): MCP `synap_find` and Hub `GET /find` call
@@ -280,7 +280,7 @@ const GET_CHANNEL = READS("channel");
  * subject here names (`/workspaces` declares entity, project, proposal). A key
  * pinned to a space, project or object never passes it.
  */
-const FIND = READS("tool", "command", "playbook", "automation");
+export const FIND = READS("tool", "command", "playbook", "automation");
 
 /**
  * THE WORKERS READ (`listWorkersDoor`, Hub `GET /workers`): a playbook's
@@ -451,7 +451,7 @@ export function sessionHolderReadable(
  * under `installation` like a PERSON door: the person's own rows, which no
  * space holds. MCP `synap_list_installations` is exactly this door.
  */
-const INSTALLATIONS_READ = PERSON("installation");
+export const INSTALLATIONS_READ = PERSON("installation");
 
 /**
  * May this request's key read the person's installations through the owner
@@ -969,7 +969,7 @@ export function workReleaseReach(
 
 /**
  * Hub REST GET routes that are AGGREGATE reads (P2b): each DECLARES the grant
- * subjects it reads, like `GRANT_REST_POST_READS` and `MCP_READ_TOOL_DOORS`. A
+ * subjects it reads, like `GRANT_REST_POST_READS` and an MCP tool's `access`. A
  * fenced key passes when one of its scopes reads EVERY declared subject with
  * no narrowing — then the grant would remove no row the route returns. A key
  * pinned to a space / project / object, or missing one subject, is refused.
@@ -1511,253 +1511,10 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
 ];
 
-/**
- * Every MCP READ tool (`readOnlyHint: true`), classified. The tripwire derives
- * the live read-tool set and fails on an unclassified or stale entry.
- */
-export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
-  synap_get_entities: SEAMED,
-  synap_get_document: SEAMED,
-  // A file entity's signed URL (+ a small image inline): the ONE signer of
-  // `GET /files/:id/url` (`signFileEntityUrl` → `loadSignableFileEntity`,
-  // the entity read through `scopedDb`, grant ANDed), so a key pinned to
-  // one space reads that space's files and is refused the others.
-  synap_get_file: SEAMED,
-  synap_get_relations: SEAMED,
-  synap_list_tracks: SEAMED,
-  synap_resolve_identity: SEAMED,
-  synap_get_project: SEAMED,
-  synap_list_projects: SEAMED,
-  synap_list_views: SEAMED,
-  // The surface find (`surfacesForObject`, shared with `GET /surfaces`): an
-  // aggregate over several stores, some read outside the seams (workspace
-  // settings, the renderer ladder), so it declares what it reads.
-  synap_find_surfaces: SURFACES_FIND,
-  // The surface inspect (`inspectSurface`, shared with
-  // `GET /surfaces/inspect`): the cell type and the read log are read
-  // outside the seams, so it declares what it reads.
-  synap_inspect_surface: SURFACES_INSPECT,
-  // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
-  synap_get_flow: FLOW_OF,
-  // Same doors as `GET /lifecycle/home` and `/lifecycle/moving` (HOMES).
-  synap_get_home: HOMES,
-  // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
-  synap_read_board: BOARD_SCENE,
-  // Aggregate doors: the subjects they read.
-  synap_ask: READS(
-    "entity",
-    "document",
-    "relation",
-    "proposal",
-    "preference",
-    "project"
-  ),
-  synap_orient: ORIENT,
-  // Same door as `GET /find` (FIND).
-  synap_find: FIND,
-  synap_get_entity: READS("entity", "relation", "facet", "document"),
-  synap_get_graph: READS(
-    "entity",
-    "relation",
-    "link",
-    "document",
-    "session",
-    "project"
-  ),
-  synap_list_profiles: LIST_PROFILES,
-  synap_list_workspaces: READS("entity", "project"),
-  synap_get_thread_context: THREAD_CONTEXT,
-  synap_list_proposals: READS("proposal", "entity"),
-  synap_get_proposal: PROPOSAL_GET,
-  synap_list_sessions: READS("session", "project"),
-  synap_needs_you: READS(...NEEDS_YOU_SUBJECTS),
-  // The subjects of `GET /focus-sessions/graph`, read whole: the MCP door
-  // does not narrow (no pod app reads over MCP), the REST door does.
-  synap_get_work_graph: READS(...WORK_GRAPH_SUBJECTS),
-  synap_get_session: READS(
-    "session",
-    "channel",
-    "proposal",
-    "document",
-    "entity"
-  ),
-  synap_revert_session: READS("session", "proposal"),
-  synap_list_playbooks: READS("playbook"),
-  synap_match_playbooks: READS("playbook"),
-  synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
-  // What is installed on the person's computers (`listInstallations`, the
-  // owner floor): the grant read of `GET /installations`.
-  synap_list_installations: INSTALLATIONS_READ,
-  synap_list_automations: LIST_AUTOMATIONS,
-  // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
-  // worker rules and their automation runs, and the approvals they wait on.
-  synap_list_workers: READS("track", "playbook", "automation", "proposal"),
-  synap_list_cells: READS("widget", "view"),
-  // The old name of synap_list_cells (`tool-aliases.ts`): the same read.
-  synap_list_widgets: READS("widget", "view"),
-  synap_template_health: READS("tool", "playbook", "automation", "view"),
-  synap_governance: READS("proposal", "agent", "tool"),
-  // The roster of agents (+ their computers and dispatch tool) for hand-off.
-  synap_list_agents: READS("agent", "tool"),
-  // Same door as `GET /work-release` (GRANT_REST_GET_READS): the read
-  // narrows itself (`workReleaseReach`).
-  synap_get_work_release: NARROWED("event", WORK_RELEASE_SUBJECTS),
-  // The subjects of `GET /timeline`, read whole (the REST door narrows).
-  synap_get_timeline: READS(...TIMELINE_SUBJECTS),
-  synap_export_project_pack: READS(
-    "project",
-    "entity",
-    "document",
-    "relation",
-    "playbook",
-    "view",
-    "track"
-  ),
-  // Skills have no read subject in the read hook (system + the person's own
-  // runbooks): any key that holds a live permission may load one (LOAD_SKILL).
-  synap_load_skill: LOAD_SKILL,
-  synap_diagnose: REFUSED("Pod internals across every subject."),
-};
-
-/** How a non-read-only MCP tool is bounded for a fenced key. */
-export type McpWriteToolDoor = { readonly bound: "write" } | FencedReadDoor;
+/** How an MCP tool is bounded for a fenced key: a write, or a read door. */
+export type McpToolDoor = { readonly bound: "write" } | FencedReadDoor;
 /** A write: it reaches the governed-write gate, whose rung 0 bounds it. */
-const WRITE: McpWriteToolDoor = { bound: "write" };
-
-/**
- * Every MCP tool that is NOT read-only, classified (R1, 2 Nov 2026): a WRITE
- * (bounded by the gate) or, when it returns rows, the read door of what it
- * returns, checked like a read tool's. A tool in neither map is refused to a
- * fenced key (`mcpToolAllowed`, closed by default), and the classification
- * tripwire derives the live tool list and fails on an unclassified or stale
- * entry. That a WRITE tool reaches a gate is not checked here.
- */
-export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
-  {
-    synap_create_entity: WRITE,
-    synap_update_entity: WRITE,
-    synap_update_entities: WRITE,
-    synap_delete_entity: WRITE,
-    synap_create_document: WRITE,
-    synap_update_document: WRITE,
-    synap_request_upload: WRITE,
-    synap_store_file: WRITE,
-    synap_remember_fact: WRITE,
-    synap_link_entities: WRITE,
-    synap_attach_facet: WRITE,
-    synap_detach_facet: WRITE,
-    synap_update_facet: WRITE,
-    synap_define_role: WRITE,
-    synap_define_kind: WRITE,
-    synap_start_session: WRITE,
-    synap_update_session: WRITE,
-    synap_evaluate_session: WRITE,
-    synap_complete_session: WRITE,
-    synap_rerun_session: WRITE,
-    synap_continue_session: WRITE,
-    synap_start_orchestrator: WRITE,
-    // Not read-only only because an agent's read stamps the "Picked up"
-    // receipt: it RETURNS the person's answers and the session's changes. The
-    // same door as its REST twin, GET /focus-sessions/:id/answers/wait
-    // (`waitForSessionAnswers` / `waitForSessionChanges`).
-    synap_wait_for_answer: READS(
-      "session",
-      "channel",
-      "proposal",
-      "event",
-      "link"
-    ),
-    synap_relay_answer: WRITE,
-    synap_ask_person: WRITE,
-    // The dispatcher: the tools/call door unwraps it BEFORE the fence runs
-    // (`routers/mcp/index.ts`), so a fenced key is judged on the tool it
-    // names, never this name. Refused here so that if the name ever did
-    // reach the fence, it would stay closed.
-    synap_call_tool: REFUSED(
-      "A dispatcher: the fence judges the tool it names, never this name."
-    ),
-    synap_create_cell: WRITE,
-    synap_promote_cell_to_renderer: WRITE,
-    // Surfaces P3: the governed create / attach / detach (`surface/*` gate).
-    synap_create_surface: WRITE,
-    synap_attach_surface: WRITE,
-    // Files ONE composite proposal through the governed pending lane; it never
-    // applies anything, and reads only through the playbook get door.
-    synap_propose_app_from_playbook: WRITE,
-    synap_promote_session_to_playbook: WRITE,
-    synap_create_playbook: WRITE,
-    synap_update_playbook: WRITE,
-    synap_set_workspace_focus: WRITE,
-    synap_set_project_focus: WRITE,
-    synap_organize_library: WRITE,
-    synap_capture: WRITE,
-    synap_create_workspace: WRITE,
-    synap_declare_workspace_source: WRITE,
-    synap_create_project: WRITE,
-    synap_start_track: WRITE,
-    synap_start_stage_session: WRITE,
-    synap_advance_track: WRITE,
-    synap_set_track_status: WRITE,
-    synap_reopen_track: WRITE,
-    synap_convert_to_goal: WRITE,
-    synap_enable_worker: WRITE,
-    synap_pause_worker: WRITE,
-    synap_run_worker: WRITE,
-    synap_set_track_participant: WRITE,
-    synap_set_track_params: WRITE,
-    synap_update_track: WRITE,
-    synap_add_track_stage: WRITE,
-    synap_update_project: WRITE,
-    synap_project_use_workspace: WRITE,
-    // Reads the person's membership of the space and whether the key's grant
-    // reaches it; files nothing, returns the answer, never rows.
-    synap_request_workspace_access: WRITE,
-    synap_file_into_project: WRITE,
-    synap_archive_workspace: WRITE,
-    synap_retire_workspace: WRITE,
-    synap_update_workspace: WRITE,
-    synap_update_space_brief: WRITE,
-    synap_move_entities: WRITE,
-    synap_retire_field: WRITE,
-    synap_grant_profile_access: WRITE,
-    synap_change_kind_scope: WRITE,
-    // Always files a profile/declare_lifecycle proposal and returns its receipt,
-    // never rows (backend#689).
-    synap_declare_lifecycle: WRITE,
-    // Always files a property_def/change_lifecycle_options proposal (or
-    // refuses), never rows; authority on the loaded def at filing and approval.
-    synap_change_lifecycle_options: WRITE,
-    synap_create_view: WRITE,
-    synap_update_view_content: WRITE,
-    // The board write (`placeOnBoard`): through the gate on the board's own
-    // room floor; it returns ids only. Same as Hub POST
-    // /whiteboards/:viewId/placements (GATED_ELSEWHERE in the tripwire).
-    synap_place_on_board: WRITE,
-    // Hub `views.updateView`: the view.update gate on the loaded view's space.
-    synap_update_view: WRITE,
-    // `workspaces.setPrimarySurface`: the workspace/update gate (ADMIN floor).
-    synap_set_start_page: WRITE,
-    // Get-OR-create: it RETURNS a channel row, the person's personal channel
-    // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
-    // (`channels.resolveOrCreateChannel`). The door of what it reads.
-    synap_get_channel: GET_CHANNEL,
-    synap_post_message: WRITE,
-    synap_revise_proposal: WRITE,
-    synap_reject_proposal: WRITE,
-    synap_request_deploy_approval: WRITE,
-    synap_run_capability: WRITE,
-    // Files the person's `installation/request` proposal (an agent always
-    // proposes, `proposeBeyondGrant`), or a `capability.install` for the pod.
-    synap_request_installation: WRITE,
-    synap_create_verb: WRITE,
-    synap_trigger_automation: WRITE,
-    synap_create_automation: WRITE,
-    synap_create_rule: WRITE,
-    synap_update_rule: WRITE,
-    synap_run_playbook: WRITE,
-    synap_create_skill: WRITE,
-    synap_update_skill: WRITE,
-  };
+export const WRITE: McpToolDoor = { bound: "write" };
 
 /** tRPC QUERIES (by procedure path) that read only through a seam. */
 export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
@@ -1807,13 +1564,11 @@ function readDoorMissing(
  */
 export function mcpToolRefusal(
   toolName: string,
-  readOnly: boolean | undefined,
+  door: McpToolDoor | undefined,
   grant: KeyGrant
 ): string {
   const missing =
-    readOnly === true
-      ? readDoorMissing(MCP_READ_TOOL_DOORS[toolName], grant)
-      : null;
+    door && door.bound !== "write" ? readDoorMissing(door, grant) : null;
   if (!missing || missing.length === 0) return GRANT_DOOR_UNSUPPORTED;
   return `This key's grant does not let it call ${toolName}: it needs ${missing.map((p) => `'${p}'`).join(" and ")}. The person can add ${missing.length > 1 ? "them" : "it"} to this key's permissions, or give it a key that has ${missing.length > 1 ? "them" : "it"}. Nothing was read.`;
 }
@@ -2023,20 +1778,15 @@ export const APP_PERSON_WRITE_UNSUPPORTED =
   "This door does not take an app's sign-in yet: it does not check what you allowed this app to do. Nothing was changed. Do this in your pod, or through a door the app's access covers.";
 
 /**
- * MCP: may a scoped key call this listed tool? A read tool through its door
- * (`MCP_READ_TOOL_DOORS`); any other tool as `MCP_WRITE_TOOL_DOORS` classifies
- * it: a write passes to the gate, a row-returning one through its door, and an
- * unclassified one is refused (closed by default). A name no tool carries is
- * never asked: the caller lets MCP answer it.
+ * MCP: may a scoped key call a tool whose definition declares `door` (its
+ * `access`)? A write passes to the gate; a read door bounds it; no door is
+ * refused (closed by default). A name no tool carries is never asked: the
+ * caller lets MCP answer it.
  */
 export function mcpToolAllowed(
-  toolName: string,
-  readOnly: boolean | undefined,
+  door: McpToolDoor | undefined,
   grant: KeyGrant
 ): boolean {
-  if (readOnly === true)
-    return grantBoundsDoor(MCP_READ_TOOL_DOORS[toolName], grant);
-  const door = MCP_WRITE_TOOL_DOORS[toolName];
   if (!door) return false;
   return door.bound === "write" || grantBoundsDoor(door, grant);
 }

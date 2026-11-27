@@ -13,7 +13,6 @@ import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   composeCapabilityBrief,
-  MAIN_CAPABILITY_TOOLS,
   type CapabilityBriefDoor,
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
@@ -139,11 +138,14 @@ import {
 } from "../tool-guidance.js";
 import { CALL_TOOL_NAME } from "../call-tool-name.js";
 import {
+  canonicalToolName,
   defineTool,
   parseToolArgs,
+  toolDefinition,
   toolGroupMembers,
   wireTools,
 } from "../define-tool.js";
+import * as fence from "../../../access/grant-door-fence.js";
 import {
   clampedLimit,
   jsonObjectInput,
@@ -807,6 +809,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_ask",
       group: "entry",
+      // Aggregate doors: the subjects they read.
+      access: fence.READS("entity", "document", "relation", "proposal", "preference", "project"),
+      // It may run a model without declaring `openWorldHint`.
+      untimed: "model",
+      narrow:
+        "Call again with detail:'brief' or 'sources', or a lower `limit`.",
       teaches: ["search_unified"],
       annotations: {
         title: "Ask the pod",
@@ -860,6 +868,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_entities",
       group: "read",
+      access: fence.SEAMED,
+      narrow:
+        "Lower `limit`, pass `fields`, and page with `offset` (use `nextOffset`).",
       teaches: ["list_entities"],
       annotations: {
         title: "List entities",
@@ -961,6 +972,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_document",
       group: "read",
+      access: fence.SEAMED,
+      narrow:
+        "Read the body in slices: pass `limit` (characters) and `offset` (the previous `nextOffset`).",
       teaches: ["document.read", "get_document"],
       annotations: {
         title: "Get document",
@@ -984,6 +998,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_file",
       group: "read",
+      // A file entity's signed URL (+ a small image inline): the ONE signer of
+      // `GET /files/:id/url` (`signFileEntityUrl` → `loadSignableFileEntity`,
+      // the entity read through `scopedDb`, grant ANDed), so a key pinned to
+      // one space reads that space's files and is refused the others.
+      access: fence.SEAMED,
       annotations: {
         title: "Get a stored file",
         readOnlyHint: true,
@@ -1004,6 +1023,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_thread_context",
       group: "read",
+      access: fence.THREAD_CONTEXT,
+      narrow:
+        "Lower `limit`, and read older messages with `cursor` (the previous `nextCursor`).",
       teaches: ["feed.read"],
       annotations: {
         title: "Get thread context",
@@ -1032,6 +1054,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_proposals",
       group: "governance",
+      access: fence.READS("proposal", "entity"),
+      narrow:
+        "Lower `limit`, page with `offset` (use `nextOffset`), or use detail:'summary'.",
       annotations: {
         title: "List proposals",
         readOnlyHint: true,
@@ -1091,6 +1116,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_proposal",
       group: "governance",
+      access: fence.PROPOSAL_GET,
       annotations: {
         title: "Get proposal",
         readOnlyHint: true,
@@ -1116,6 +1142,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_template_health",
       group: "read",
+      access: fence.READS("tool", "playbook", "automation", "view"),
       annotations: {
         title: "Template health",
         readOnlyHint: true,
@@ -1136,6 +1163,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_diagnose",
       group: "read",
+      access: fence.REFUSED("Pod internals across every subject."),
       annotations: {
         title: "Diagnose",
         readOnlyHint: true,
@@ -1240,6 +1268,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_entity",
       group: "read",
+      access: fence.READS("entity", "relation", "facet", "document"),
+      narrow:
+        "Call again with detail:'lean', or read the properties you need with synap_get_entities {fields}.",
       teaches: ["get_entity"],
       annotations: {
         title: "Get entity",
@@ -1263,6 +1294,13 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_profiles",
       group: "read",
+      access: fence.LIST_PROFILES,
+      narrow:
+        "Lower `limit` and page with `offset` (use `nextOffset`).",
+      brief: {
+        governance: null, // read-only discovery, no checkPermissionOrPropose door
+        postureSlug: null,
+      },
       teaches: ["list_profiles"],
       annotations: {
         title: "List profiles",
@@ -1295,6 +1333,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_relations",
       group: "read",
+      access: fence.SEAMED,
+      narrow:
+        "Lower `limit` (the newest relations come first).",
       teaches: ["graph.relations"],
       annotations: {
         title: "Get relations",
@@ -1317,6 +1358,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_resolve_identity",
       group: "read",
+      access: fence.SEAMED,
       annotations: {
         title: "Resolve identity",
         readOnlyHint: true,
@@ -1365,6 +1407,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_graph",
       group: "read",
+      access: fence.READS("entity", "relation", "link", "document", "session", "project"),
+      narrow:
+        "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
       teaches: ["graph.relations"],
       annotations: {
         title: "Get graph",
@@ -1412,6 +1457,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_entity",
       group: "data",
+      access: fence.WRITE,
+      supersedes: { method: "POST", route: "/entities" },
+      brief: {
+        governance: { subjectType: "entity", action: "create" },
+        postureSlug: null, // varies by the entity's own profileSlug — no single kind
+      },
       teaches: ["entity.create", "create_entity"],
       annotations: {
         title: "Create entity",
@@ -1498,6 +1549,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_entity",
       group: "data",
+      access: fence.WRITE,
+      supersedes: { method: "PATCH", route: "/entities/:entityId" },
       teaches: ["entity.update", "update_entity"],
       annotations: {
         title: "Update entity",
@@ -1572,6 +1625,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_entities",
       group: "data",
+      access: fence.WRITE,
       teaches: ["update_entities"],
       annotations: {
         title: "Update many entities",
@@ -1639,6 +1693,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_delete_entity",
       group: "data",
+      access: fence.WRITE,
       teaches: ["entity.delete"],
       annotations: {
         title: "Delete entity",
@@ -1665,6 +1720,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_document",
       group: "data",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "document", action: "create" },
+        postureSlug: "document",
+      },
       teaches: ["document.create", "create_document"],
       annotations: {
         title: "Create document",
@@ -1765,6 +1825,13 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_document",
       group: "data",
+      access: fence.WRITE,
+      brief: {
+        // A section-only patch files under `document.section_update`; every other
+        // patch (and the full-replace aliases) under `document.update`.
+        governance: { subjectType: "document", action: "update" },
+        postureSlug: "document",
+      },
       teaches: ["document.update", "update_document"],
       annotations: {
         title: "Update document",
@@ -1904,6 +1971,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_request_upload",
       group: "data",
+      access: fence.WRITE,
       annotations: {
         title: "Request upload",
         readOnlyHint: false,
@@ -1934,6 +2002,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_store_file",
       group: "data",
+      access: fence.WRITE,
       annotations: {
         title: "Store file",
         readOnlyHint: false,
@@ -2005,6 +2074,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_remember_fact",
       group: "data",
+      access: fence.WRITE,
       teaches: ["remember_fact"],
       annotations: {
         title: "Remember fact",
@@ -2049,6 +2119,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_link_entities",
       group: "data",
+      access: fence.WRITE,
       teaches: ["graph.link", "create_relation"],
       annotations: {
         title: "Link entities",
@@ -2082,6 +2153,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_attach_facet",
       group: "data",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "facet", action: "attach" },
+        postureSlug: null, // varies by the target role's own profileSlug — no single kind
+      },
       teaches: ["entity_facet.attach"],
       annotations: {
         title: "Attach facet",
@@ -2127,6 +2203,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_detach_facet",
       group: "data",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "facet", action: "detach" },
+        postureSlug: null,
+      },
       teaches: ["entity_facet.detach"],
       annotations: {
         title: "Detach facet",
@@ -2170,6 +2251,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_facet",
       group: "data",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "facet", action: "update" },
+        postureSlug: null,
+      },
       teaches: ["entity_facet.update"],
       annotations: {
         title: "Update facet",
@@ -2225,6 +2311,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_define_role",
       group: "schema",
+      access: fence.WRITE,
       teaches: ["profile.create"],
       annotations: {
         title: "Define role type",
@@ -2281,6 +2368,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_define_kind",
       group: "schema",
+      access: fence.WRITE,
       teaches: ["profile.create"],
       annotations: {
         title: "Define entity kind",
@@ -2401,6 +2489,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_orient",
       group: "entry",
+      access: fence.ORIENT,
+      narrow:
+        "Pass `scope` and/or `workspaceId`; a worker polling its hand-offs passes only:'handedToYou'.",
       annotations: {
         title: "Orient in pod",
         readOnlyHint: true,
@@ -2464,6 +2555,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_session",
       group: "entry",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "focus_session", action: "create" },
+        postureSlug: "session",
+      },
       aliases: [
         {
           name: "synap_run_playbook",
@@ -2684,6 +2780,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_session",
       group: "entry",
+      actsOnSession: true,
+      brief: {
+        governance: { subjectType: "focus_session", action: "update" },
+        postureSlug: "session",
+      },
+      access: fence.WRITE,
       refusedArgs: {
         stages:
           "stages is not supported by synap_update_session — NOTHING WAS CHANGED. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door, which the browser and relay use. Seeding from a playbook happens automatically at instantiate.",
@@ -2879,6 +2981,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_evaluate_session",
       group: "sessions",
+      actsOnSession: true,
+      access: fence.WRITE,
       annotations: {
         title: "Evaluate focus session",
         readOnlyHint: false,
@@ -2907,6 +3011,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_complete_session",
       group: "entry",
+      actsOnSession: true,
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "focus_session", action: "update" },
+        postureSlug: "session",
+      },
       annotations: {
         title: "Complete focus session",
         readOnlyHint: false,
@@ -2970,6 +3080,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_revert_session",
       group: "sessions",
+      actsOnSession: true,
+      access: fence.READS("session", "proposal"),
       annotations: {
         title: "Ask the user to revert a session",
         readOnlyHint: true,
@@ -3002,6 +3114,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_continue_session",
       group: "sessions",
+      actsOnSession: true,
+      access: fence.WRITE,
       cpOmit:
         "Person-only on the pod; not exposed to connectors yet (founder, 17 Nov 2026).",
       annotations: {
@@ -3021,6 +3135,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_orchestrator",
       group: "sessions",
+      access: fence.WRITE,
       annotations: {
         title: "Start an orchestrator",
         readOnlyHint: false,
@@ -3063,6 +3178,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_rerun_session",
       group: "sessions",
+      actsOnSession: true,
+      access: fence.WRITE,
       annotations: {
         title: "Rerun a session",
         readOnlyHint: false,
@@ -3104,6 +3221,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_session",
       group: "entry",
+      access: fence.READS("session", "channel", "proposal", "document", "entity"),
+      narrow:
+        "Call again with detail:'lean' (the outcomes, what is owed, the next move, the last room posts).",
       annotations: {
         title: "Get focus session",
         readOnlyHint: true,
@@ -3135,6 +3255,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_wait_for_answer",
       group: "entry",
+      // Not read-only only because an agent's read stamps the "Picked up"
+      // receipt: it RETURNS the person's answers and the session's changes. The
+      // same door as its REST twin, GET /focus-sessions/:id/answers/wait
+      // (`waitForSessionAnswers` / `waitForSessionChanges`).
+      access: fence.READS("session", "channel", "proposal", "event", "link"),
+      untimed: "long_poll",
       cpOmit:
         "A long poll (up to 90 s): claude.ai times a connector call out before it ends; a connector agent reads answers through the session reads.",
       annotations: {
@@ -3194,6 +3320,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_relay_answer",
       group: "entry",
+      access: fence.WRITE,
       annotations: {
         title: "Relay the person's answer",
         readOnlyHint: false,
@@ -3257,6 +3384,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_ask_person",
       group: "entry",
+      access: fence.WRITE,
       annotations: {
         title: "Ask the person",
         readOnlyHint: false,
@@ -3355,6 +3483,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_needs_you",
       group: "sessions",
+      access: fence.READS(...fence.NEEDS_YOU_SUBJECTS),
       annotations: {
         title: "What needs the person",
         readOnlyHint: true,
@@ -3388,6 +3517,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_flow",
       group: "read",
+      // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
+      access: fence.FLOW_OF,
       annotations: {
         title: "Get the flow of a kind or role",
         readOnlyHint: true,
@@ -3418,6 +3549,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_home",
       group: "read",
+      // Same doors as `GET /lifecycle/home` and `/lifecycle/moving` (HOMES).
+      access: fence.HOMES,
       annotations: {
         title: "Get Home or Moving now",
         readOnlyHint: true,
@@ -3447,6 +3580,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_read_board",
       group: "read",
+      // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
+      access: fence.BOARD_SCENE,
+      narrow:
+        "Lower `limit` and page with `offset` (use `scene.window.nextOffset`), or read one frame with `frameId`.",
       teaches: ["get_whiteboard_state"],
       annotations: {
         title: "Read a whiteboard",
@@ -3478,6 +3615,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_find_surfaces",
       group: "build",
+      // The surface find (`surfacesForObject`, shared with `GET /surfaces`): an
+      // aggregate over several stores, some read outside the seams (workspace
+      // settings, the renderer ladder), so it declares what it reads.
+      access: fence.SURFACES_FIND,
       teaches: ["find_surfaces"],
       annotations: {
         title: "Find an object's surfaces",
@@ -3506,6 +3647,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_inspect_surface",
       group: "build",
+      // The surface inspect (`inspectSurface`, shared with
+      // `GET /surfaces/inspect`): the cell type and the read log are read
+      // outside the seams, so it declares what it reads.
+      access: fence.SURFACES_INSPECT,
       teaches: ["inspect_surface"],
       annotations: {
         title: "Inspect a surface",
@@ -3547,6 +3692,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_sessions",
       group: "sessions",
+      access: fence.READS("session", "project"),
+      narrow:
+        "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List focus sessions",
         readOnlyHint: true,
@@ -3638,6 +3786,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_work_graph",
       group: "sessions",
+      // The subjects of `GET /focus-sessions/graph`, read whole: the MCP door
+      // does not narrow (no pod app reads over MCP), the REST door does.
+      access: fence.READS(...fence.WORK_GRAPH_SUBJECTS),
       annotations: {
         title: "Get the work graph",
         readOnlyHint: true,
@@ -3709,6 +3860,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_work_release",
       group: "sessions",
+      // Same door as `GET /work-release` (GRANT_REST_GET_READS): the read
+      // narrows itself (`workReleaseReach`).
+      access: fence.NARROWED("event", fence.WORK_RELEASE_SUBJECTS),
       annotations: {
         title: "Get the release state",
         readOnlyHint: true,
@@ -3721,6 +3875,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_timeline",
       group: "sessions",
+      // The subjects of `GET /timeline`, read whole (the REST door narrows).
+      access: fence.READS(...fence.TIMELINE_SUBJECTS),
       annotations: {
         title: "Get a timeline",
         readOnlyHint: true,
@@ -3740,6 +3896,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_agents",
       group: "sessions",
+      // The roster of agents (+ their computers and dispatch tool) for hand-off.
+      access: fence.READS("agent", "tool"),
+      narrow:
+        "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List agents and computers",
         readOnlyHint: true,
@@ -3756,6 +3916,14 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_cell",
       group: "build",
+      access: fence.WRITE,
+      brief: {
+        // `cell.define` (NOT `cell.create`, which is cell-instances/placed cells):
+        // defining renderer source is governed via checkPermissionOrPropose in the
+        // MCP adapter + the `cell/define` approve-executor.
+        governance: { subjectType: "cell", action: "define" },
+        postureSlug: "cell",
+      },
       teaches: ["create_cell", "generate_widget"],
       annotations: {
         title: "Define cell",
@@ -3821,6 +3989,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_promote_cell_to_renderer",
       group: "build",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "cell", action: "update" },
+        postureSlug: "cell",
+      },
       annotations: {
         title: "Promote cell to renderer",
         readOnlyHint: false,
@@ -3876,6 +4049,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_surface",
       group: "build",
+      // Surfaces P3: the governed create / attach / detach (`surface/*` gate).
+      access: fence.WRITE,
       teaches: ["create_surface"],
       annotations: {
         title: "Create a surface for an object",
@@ -3927,6 +4102,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_attach_surface",
       group: "build",
+      access: fence.WRITE,
       teaches: ["attach_surface", "detach_surface"],
       annotations: {
         title: "Attach a surface to an object",
@@ -3980,6 +4156,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_propose_app_from_playbook",
       group: "build",
+      // Files ONE composite proposal through the governed pending lane; it never
+      // applies anything, and reads only through the playbook get door.
+      access: fence.WRITE,
       teaches: ["propose_app_from_playbook"],
       annotations: {
         title: "Propose a process's UI",
@@ -4012,6 +4191,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_promote_session_to_playbook",
       group: "sessions",
+      actsOnSession: true,
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "playbook", action: "create" },
+        postureSlug: "playbook",
+      },
       annotations: {
         title: "Save session as process",
         readOnlyHint: false,
@@ -4036,6 +4221,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_playbooks",
       group: "build",
+      access: fence.READS("playbook"),
+      narrow:
+        "Lower `limit` and page with `cursor` (use `nextCursor`). With `playbookId`, read its stages in pages: `limit` and `offset` (use `nextOffset`).",
       annotations: {
         title: "List processes",
         readOnlyHint: true,
@@ -4084,6 +4272,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_match_playbooks",
       group: "build",
+      access: fence.READS("playbook"),
       annotations: {
         title: "Match processes",
         readOnlyHint: true,
@@ -4134,6 +4323,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_playbook",
       group: "build",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "playbook", action: "create" },
+        postureSlug: "playbook",
+      },
       refusedArgs: { onEnd: ON_END_RETIRED_MESSAGE },
       annotations: {
         title: "Create process",
@@ -4203,6 +4397,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_playbook",
       group: "build",
+      access: fence.WRITE,
       refusedArgs: { onEnd: ON_END_RETIRED_MESSAGE },
       annotations: {
         title: "Update process",
@@ -4282,6 +4477,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_governance",
       group: "governance",
+      access: fence.READS("proposal", "agent", "tool"),
+      brief: {
+        governance: null, // this tool IS the governance query, not a governed write
+        postureSlug: null,
+      },
       annotations: {
         title: "Get governance policy",
         readOnlyHint: true,
@@ -4296,6 +4496,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_workspace_focus",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Set space focus",
         readOnlyHint: false,
@@ -4317,6 +4518,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_project_focus",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Set project focus",
         readOnlyHint: false,
@@ -4339,6 +4541,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_organize_library",
       group: "data",
+      access: fence.WRITE,
       annotations: {
         title: "Organize Library",
         readOnlyHint: false,
@@ -4383,6 +4586,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_capture",
       group: "entry",
+      access: fence.WRITE,
+      supersedes: { method: "POST", route: "/capture/graph" },
+      brief: {
+        governance: null, // capture pipeline gates upstream, not per-entity checkPermissionOrPropose
+        postureSlug: "capture",
+      },
       teaches: ["propose_entity_graph"],
       annotations: {
         title: "Capture",
@@ -4809,6 +5018,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_workspace",
       group: "spaces",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "workspace", action: "create" },
+        postureSlug: "workspace",
+      },
       teaches: ["create_workspace"],
       annotations: {
         title: "Create space",
@@ -4839,6 +5053,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_declare_workspace_source",
       group: "spaces",
+      access: fence.WRITE,
       teaches: ["declare_workspace_source"],
       annotations: {
         title: "Declare space source edge",
@@ -4886,6 +5101,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_workspaces",
       group: "spaces",
+      access: fence.READS("entity", "project"),
+      narrow:
+        "Lower `limit` and page with `offset`.",
       annotations: {
         title: "List spaces",
         readOnlyHint: true,
@@ -4910,6 +5128,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_project",
       group: "spaces",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "project", action: "create" },
+        postureSlug: "project",
+      },
       annotations: {
         title: "Create project",
         readOnlyHint: false,
@@ -4962,6 +5185,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_projects",
       group: "spaces",
+      access: fence.SEAMED,
       annotations: {
         title: "List projects",
         readOnlyHint: true,
@@ -4988,6 +5212,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_project",
       group: "spaces",
+      access: fence.SEAMED,
       annotations: {
         title: "Get project",
         readOnlyHint: true,
@@ -5002,6 +5227,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_tracks",
       group: "entry",
+      access: fence.SEAMED,
+      narrow:
+        "Pass `name`, or lower `limit` and page with `offset`; detail:'lean' is the default.",
       annotations: {
         title: "List goals",
         readOnlyHint: true,
@@ -5041,6 +5269,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_track",
       group: "entry",
+      access: fence.WRITE,
       annotations: {
         title: "Start goal",
         readOnlyHint: false,
@@ -5105,6 +5334,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_stage_session",
       group: "tracks",
+      access: fence.WRITE,
       hidden:
         "Legacy staged goals: synap_start_session with trackId; kept for the frozen connector name pod__start_stage_session.",
       annotations: {
@@ -5140,6 +5370,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_advance_track",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Advance goal step",
         readOnlyHint: false,
@@ -5164,6 +5395,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_track_status",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Set goal status",
         readOnlyHint: false,
@@ -5207,6 +5439,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_reopen_track",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Reopen goal",
         readOnlyHint: false,
@@ -5244,6 +5477,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_convert_to_goal",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Make it a goal",
         readOnlyHint: false,
@@ -5287,6 +5521,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_workers",
       group: "tracks",
+      // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
+      // worker rules and their automation runs, and the approvals they wait on.
+      access: fence.READS("track", "playbook", "automation", "proposal"),
       annotations: {
         title: "List a goal's workers",
         readOnlyHint: true,
@@ -5301,6 +5538,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_enable_worker",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Make a goal run",
         readOnlyHint: false,
@@ -5347,6 +5585,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_pause_worker",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Pause or resume a goal's worker",
         readOnlyHint: false,
@@ -5371,6 +5610,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_run_worker",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Run a goal's worker now",
         readOnlyHint: false,
@@ -5400,6 +5640,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_track_participant",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Set goal participant",
         readOnlyHint: false,
@@ -5446,6 +5687,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_track_params",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Set goal params",
         readOnlyHint: false,
@@ -5470,6 +5712,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_track",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Update goal",
         readOnlyHint: false,
@@ -5513,6 +5756,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_add_track_stage",
       group: "tracks",
+      access: fence.WRITE,
       annotations: {
         title: "Add goal step",
         readOnlyHint: false,
@@ -5545,6 +5789,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_project",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Update project",
         readOnlyHint: false,
@@ -5600,6 +5845,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_project_use_workspace",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Project uses space",
         readOnlyHint: false,
@@ -5635,6 +5881,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_request_workspace_access",
       group: "spaces",
+      // Reads the person's membership of the space and whether the key's grant
+      // reaches it; files nothing, returns the answer, never rows.
+      access: fence.WRITE,
       annotations: {
         title: "Check space access",
         readOnlyHint: false,
@@ -5652,6 +5901,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_file_into_project",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "File into project",
         readOnlyHint: false,
@@ -5691,6 +5941,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_archive_workspace",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Archive space",
         readOnlyHint: false,
@@ -5718,6 +5969,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_retire_workspace",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Move space off a retired template",
         readOnlyHint: false,
@@ -5745,6 +5997,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_workspace",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Rename space",
         readOnlyHint: false,
@@ -5762,6 +6015,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_set_start_page",
       group: "build",
+      // `workspaces.setPrimarySurface`: the workspace/update gate (ADMIN floor).
+      access: fence.WRITE,
       annotations: {
         title: "Set space start page",
         readOnlyHint: false,
@@ -5801,6 +6056,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_space_brief",
       group: "spaces",
+      access: fence.WRITE,
       annotations: {
         title: "Edit space brief",
         readOnlyHint: false,
@@ -5827,6 +6083,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_move_entities",
       group: "data",
+      access: fence.WRITE,
       annotations: {
         title: "Move entities to space",
         readOnlyHint: false,
@@ -5851,6 +6108,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_retire_field",
       group: "schema",
+      access: fence.WRITE,
       annotations: {
         title: "Retire field",
         readOnlyHint: false,
@@ -5872,6 +6130,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_change_lifecycle_options",
       group: "schema",
+      // Always files a property_def/change_lifecycle_options proposal (or
+      // refuses), never rows; authority on the loaded def at filing and approval.
+      access: fence.WRITE,
       annotations: {
         title: "Change a kind's lifecycle options",
         readOnlyHint: false,
@@ -5912,6 +6173,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_declare_lifecycle",
       group: "schema",
+      // Always files a profile/declare_lifecycle proposal and returns its receipt,
+      // never rows (backend#689).
+      access: fence.WRITE,
       annotations: {
         title: "Declare a kind's lifecycle",
         readOnlyHint: false,
@@ -5978,6 +6242,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_grant_profile_access",
       group: "schema",
+      access: fence.WRITE,
       annotations: {
         title: "Share kind with space",
         readOnlyHint: false,
@@ -6009,6 +6274,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_change_kind_scope",
       group: "schema",
+      access: fence.WRITE,
       annotations: {
         title: "Change kind scope",
         readOnlyHint: false,
@@ -6048,6 +6314,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_export_project_pack",
       group: "spaces",
+      access: fence.READS("project", "entity", "document", "relation", "playbook", "view", "track"),
       annotations: {
         title: "Export project as suite pack",
         readOnlyHint: true,
@@ -6062,6 +6329,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_view",
       group: "build",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "view", action: "create" },
+        postureSlug: "view",
+      },
       teaches: ["create_view"],
       annotations: {
         title: "Create view",
@@ -6127,6 +6399,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_view_content",
       group: "build",
+      access: fence.WRITE,
       annotations: {
         title: "Update whiteboard content",
         readOnlyHint: false,
@@ -6159,6 +6432,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_place_on_board",
       group: "build",
+      // The board write (`placeOnBoard`): through the gate on the board's own
+      // room floor; it returns ids only. Same as Hub POST
+      // /whiteboards/:viewId/placements (GATED_ELSEWHERE in the tripwire).
+      access: fence.WRITE,
       annotations: {
         title: "Place on a whiteboard",
         readOnlyHint: false,
@@ -6219,6 +6496,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_view",
       group: "build",
+      // Hub `views.updateView`: the view.update gate on the loaded view's space.
+      access: fence.WRITE,
       annotations: {
         title: "Edit view",
         readOnlyHint: false,
@@ -6247,6 +6526,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_views",
       group: "build",
+      access: fence.SEAMED,
+      narrow:
+        "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
       teaches: ["list_views"],
       annotations: {
         title: "List views",
@@ -6291,6 +6573,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_cells",
       group: "build",
+      access: fence.READS("widget", "view"),
+      narrow:
+        "Lower `limit` and page with `offset` (use `nextOffset`).",
       aliases: [
         {
           name: "synap_list_widgets",
@@ -6332,6 +6617,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_get_channel",
       group: "read",
+      // Get-OR-create: it RETURNS a channel row, the person's personal channel
+      // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
+      // (`channels.resolveOrCreateChannel`). The door of what it reads.
+      access: fence.GET_CHANNEL,
       teaches: ["channel.resolve", "channel.ensure"],
       annotations: {
         title: "Get or create channel",
@@ -6366,6 +6655,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_post_message",
       group: "entry",
+      access: fence.WRITE,
       teaches: ["feed.post"],
       annotations: {
         title: "Post message",
@@ -6473,6 +6763,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_revise_proposal",
       group: "governance",
+      access: fence.WRITE,
       annotations: {
         title: "Revise proposal",
         readOnlyHint: false,
@@ -6537,6 +6828,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_reject_proposal",
       group: "governance",
+      access: fence.WRITE,
       annotations: {
         title: "Reject proposal",
         readOnlyHint: false,
@@ -6569,6 +6861,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_request_deploy_approval",
       group: "governance",
+      access: fence.WRITE,
       annotations: {
         title: "Request deploy approval",
         readOnlyHint: false,
@@ -6632,6 +6925,10 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_find",
       group: "read",
+      // Same door as `GET /find` (FIND).
+      access: fence.FIND,
+      narrow:
+        "Lower `limit` (matches per catalog), or name only the `catalogs` you need.",
       annotations: {
         title: "Find what can do this",
         readOnlyHint: true,
@@ -6668,6 +6965,13 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_capabilities",
       group: "capabilities",
+      access: fence.READS("tool", "command", "playbook", "automation"),
+      narrow:
+        "Lower `limit` and page with `offset` (use `nextOffset`), or pass a `query` or `kind`.",
+      brief: {
+        governance: null, // read-only discovery, no checkPermissionOrPropose door
+        postureSlug: "capability",
+      },
       teaches: ["list_capabilities"],
       annotations: {
         title: "List tools",
@@ -6713,6 +7017,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_installations",
       group: "capabilities",
+      // What is installed on the person's computers (`listInstallations`, the
+      // owner floor): the grant read of `GET /installations`.
+      access: fence.INSTALLATIONS_READ,
       annotations: {
         title: "List installations",
         readOnlyHint: true,
@@ -6740,6 +7047,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_request_installation",
       group: "capabilities",
+      // Files the person's `installation/request` proposal (an agent always
+      // proposes, `proposeBeyondGrant`), or a `capability.install` for the pod.
+      access: fence.WRITE,
       annotations: {
         title: "Request installation",
         readOnlyHint: false,
@@ -6778,6 +7088,12 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_run_capability",
       group: "capabilities",
+      access: fence.WRITE,
+      supersedes: { method: "POST", route: "/capabilities/execute" },
+      brief: {
+        governance: null, // per-verb governance, not a single checkPermissionOrPropose door
+        postureSlug: "capability",
+      },
       teaches: ["run_capability"],
       annotations: {
         title: "Run tool",
@@ -6798,6 +7114,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_verb",
       group: "capabilities",
+      access: fence.WRITE,
       annotations: {
         title: "Create verb",
         readOnlyHint: false,
@@ -6872,6 +7189,9 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_list_automations",
       group: "capabilities",
+      access: fence.LIST_AUTOMATIONS,
+      narrow:
+        "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
       teaches: ["list_automations"],
       annotations: {
         title: "List rules",
@@ -6904,6 +7224,14 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_trigger_automation",
       group: "capabilities",
+      access: fence.WRITE,
+      brief: {
+        // launches an already-approved automation; gated by assertWorkspaceWrite,
+        // NOT a checkPermissionOrPropose door — so no governance dry-run applies
+        // (mirrors synap_run_capability). Downstream node writes stay governed.
+        governance: null,
+        postureSlug: "automation",
+      },
       annotations: {
         title: "Run rule now",
         readOnlyHint: false,
@@ -6937,6 +7265,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_automation",
       group: "capabilities",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "automation", action: "create" },
+        postureSlug: "automation",
+      },
       annotations: {
         title: "Create rule flow (advanced)",
         readOnlyHint: false,
@@ -7000,6 +7333,18 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_rule",
       group: "governance",
+      access: fence.WRITE,
+      brief: {
+        // A rule is a `skills` row, but it is governed under its OWN door
+        // (`rule/create`, declared in GATE_WRITE_DOORS) because approving one also
+        // writes the lineage edges to its fact and behaviour halves — so the
+        // verdict composed for the caller must be that door's, not `skill/create`'s.
+        governance: { subjectType: "rule", action: "create" },
+        // "capability", same as `synap_create_skill`: a rule IS a `skills` row, and
+        // there is no "skill"/"rule" key in DEFAULT_AI_POSTURES — naming one would
+        // resolve to an empty posture and compose no emphases at all.
+        postureSlug: "capability",
+      },
       teaches: ["rule.create", "skill.create"],
       annotations: {
         title: "Create rule",
@@ -7058,6 +7403,15 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_rule",
       group: "governance",
+      access: fence.WRITE,
+      brief: {
+        // The edit twin of `synap_create_rule`, governed under its own
+        // `rule/update` door (GATE_WRITE_DOORS) — an approved edit recompiles the
+        // behaviour and re-earns the divergence snapshot, which `skill/update`
+        // does not.
+        governance: { subjectType: "rule", action: "update" },
+        postureSlug: "capability",
+      },
       teaches: ["rule.update", "skill.update"],
       annotations: {
         title: "Update rule",
@@ -7126,6 +7480,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_skill",
       group: "build",
+      access: fence.WRITE,
+      brief: {
+        governance: { subjectType: "skill", action: "create" },
+        postureSlug: "capability",
+      },
       teaches: ["skill.create"],
       annotations: {
         title: "Create tool (skill)",
@@ -7238,6 +7597,7 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_update_skill",
       group: "build",
+      access: fence.WRITE,
       teaches: ["skill.update"],
       annotations: {
         title: "Update skill",
@@ -7311,6 +7671,11 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_load_skill",
       group: "entry",
+      // Skills have no read subject in the read hook (system + the person's own
+      // runbooks): any key that holds a live permission may load one (LOAD_SKILL).
+      access: fence.LOAD_SKILL,
+      uncapped:
+        "Its reply IS the skill body the caller asked to read whole: capping it would break the tool.",
       annotations: {
         title: "Load skill",
         readOnlyHint: true,
@@ -7346,6 +7711,11 @@ export function toolDefinitions() {
       // limit apply to the tool it names, as to a direct call of that tool.
       name: CALL_TOOL_NAME,
       group: "entry",
+      // The dispatcher: the tools/call door unwraps it BEFORE the fence runs
+      // (`routers/mcp/index.ts`), so a fenced key is judged on the tool it
+      // names, never this name. Refused here so that if the name ever did
+      // reach the fence, it would stay closed.
+      access: fence.REFUSED("A dispatcher: the fence judges the tool it names, never this name."),
       annotations: {
         title: "Call a tool",
         // It may run any write: a client approves it as one.
@@ -7393,7 +7763,7 @@ export const tools = {
     // throws); a tool with no brief content is left as-is.
     await Promise.all(
       toolDefs.map(async (tool) => {
-        if (!MAIN_CAPABILITY_TOOLS.includes(tool.name)) return;
+        if (!toolDefinition(tool.name)?.brief) return;
         const brief = await composeCapabilityBrief(tool.name, {
           agentUserId: ctx.agentUserId,
           workspaceId: ctx.workspaceId ?? null,
@@ -7449,6 +7819,9 @@ export const tools = {
       const input = parseToolArgs(name, args);
       if (!input.ok) return input.result;
       args = input.args;
+      // From here on the tool an old name answers as: every special case,
+      // the handler and the reply cap read the definition's name.
+      name = canonicalToolName(name);
       if (name === "synap_orient") {
         const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
         const result = await executeMCPToolViaHubProtocol(

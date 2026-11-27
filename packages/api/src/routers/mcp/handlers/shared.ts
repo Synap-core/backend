@@ -502,6 +502,15 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
   }
 }
 
+/**
+ * True when the tool's `sessionId` names the session it ACTS ON
+ * (`actsOnSession` on its definition), not the caller's own.
+ */
+async function actsOnSession(toolName: string): Promise<boolean> {
+  const { toolDefinition } = await import("../define-tool.js");
+  return toolDefinition(toolName)?.actsOnSession === true;
+}
+
 // The session-status vocabulary now lives in a leaf module
 // (`services/focus-sessions/session-statuses.ts`) so services can import it
 // without pulling this file's hub-protocol router in. Re-exported here so every
@@ -514,10 +523,7 @@ import {
   type WorkSessionResolution,
 } from "../../../services/focus-sessions/resolve-work-session.js";
 import { resolveRoomSession } from "../../../services/messaging/room-session.js";
-import {
-  attachConversationToNamedSession,
-  SESSION_ACTED_ON_TOOLS,
-} from "../../../services/focus-sessions/session-client-binding.js";
+import { attachConversationToNamedSession } from "../../../services/focus-sessions/session-client-binding.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -708,7 +714,7 @@ export async function resolveSessionHandle(
   // Named as the caller's OWN session (attach on naming): a `sessionId` the
   // write is filed under, or a coordination post's `fromSessionId`. Never a
   // session the tool acts on, nor a room the caller posts into.
-  let namedAsOwn = !!explicit && !SESSION_ACTED_ON_TOOLS.has(toolName);
+  let namedAsOwn = !!explicit && !(await actsOnSession(toolName));
   // A COORDINATION POST (`intent` / `toSessionId`) is written FROM the
   // caller's session INTO another session's room: the room names the TARGET,
   // so it must never become this call's session — that filed "A wrote to B"

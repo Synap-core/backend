@@ -1,6 +1,7 @@
 /**
  * `supersedes` at the Hub REST door (plan 8032a127 D3): the routes of
- * {@link SUPERSEDES_DOORS} file the request through `fileSuperseding`, the
+ * `supersedesDoors()` (`routers/mcp/define-tool.ts`) file the request
+ * through `fileSuperseding`, the
  * SAME function the MCP adapter calls. The Intelligence Service reaches the
  * pod only through Hub REST, and Ask AI wakes it on a failed proposal it did
  * not author (it may not revise it): without this door it could only file

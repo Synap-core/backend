@@ -33,7 +33,7 @@ import { z } from "zod";
 import { toolDefinitions } from "./tools/index.js";
 import { toolError } from "./tool-errors.js";
 import { wireInputSchema } from "./tool-input.js";
-import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
+import type { McpToolDoor } from "../../access/grant-door-fence.js";
 
 /** Where a tool is listed: the entry surface, or the group that unlocks it. */
 export type ToolPlacement = McpToolGroupName | "entry";
@@ -65,10 +65,16 @@ export type ToolInput = z.ZodObject<
 export interface ToolDefinition<
   N extends string = string,
   I extends ToolInput = ToolInput,
-> extends Omit<Tool, "name" | "inputSchema"> {
+> extends Pick<Tool, "description" | "annotations"> {
   name: N;
   input: I;
   group: ToolPlacement;
+  /**
+   * How a scoped key's grant bounds it (`access/grant-door-fence.ts`, read by
+   * the fence): `WRITE` (the gate's rung 0 bounds it), or the read door of
+   * what it returns. Required: an unclassified tool cannot be declared.
+   */
+  access: McpToolDoor;
   /** Callable, never listed: why it is kept (e.g. a frozen connector name). */
   hidden?: string;
   aliases?: ToolAlias[];
@@ -81,6 +87,38 @@ export interface ToolDefinition<
    * that says where that change goes (refused before the generic refusal).
    */
   refusedArgs?: Record<string, string>;
+  /**
+   * It takes `supersedes` (plan 8032a127 D3: the id of a FAILED proposal the
+   * call files again, corrected), and this is the Hub REST route that files
+   * the same request and takes it too (the Intelligence Service's door).
+   * Only the doors that filed the founder's 44 failures (17 Nov 2026): one
+   * property on every write tool broke the token budget (option A).
+   */
+  supersedes?: { method: "POST" | "PATCH"; route: string };
+  /**
+   * Its teaching brief (`compose-capability-brief.ts`): the `(subjectType,
+   * action)` its write gates on (`null`: no single governed door) and the
+   * posture key of its emphases (`null`: it varies by kind).
+   */
+  brief?: {
+    governance: { subjectType: string; action: string } | null;
+    postureSlug: string | null;
+  };
+  /** How to get less back, in its own parameters, when a reply is over the cap. */
+  narrow?: string;
+  /**
+   * Its `sessionId` names the session it ACTS ON (a lead updates, grades,
+   * closes or reruns a lane), not the caller's own: naming one there never
+   * attaches the conversation to it (`resolveSessionHandle`).
+   */
+  actsOnSession?: true;
+  /** Why its reply is never capped (a body the caller reads whole). */
+  uncapped?: string;
+  /**
+   * Why the Hub request guard never times it out, beyond `openWorldHint`:
+   * a bounded long poll, or a model run.
+   */
+  untimed?: "long_poll" | "model";
 }
 
 const DEFINED = Symbol("defineTool");
@@ -130,7 +168,7 @@ const ATTRIBUTED_SESSION_ID_INPUT = z
     "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
   );
 
-/** `supersedes`, declared on {@link SUPERSEDES_TOOLS} only (see there). */
+/** `supersedes`, declared only where the definition says so (see there). */
 const SUPERSEDES_INPUT = z.string().optional().describe("Failed proposal id");
 
 /** The input with what every write tool takes added (never mutating `def`). */
@@ -141,9 +179,7 @@ function fullInput(def: ToolDefinition): ToolInput {
     ...("sessionId" in def.input.shape
       ? {}
       : { sessionId: ATTRIBUTED_SESSION_ID_INPUT }),
-    ...(SUPERSEDES_TOOLS.includes(def.name)
-      ? { supersedes: SUPERSEDES_INPUT }
-      : {}),
+    ...(def.supersedes ? { supersedes: SUPERSEDES_INPUT } : {}),
   });
 }
 
@@ -173,24 +209,18 @@ interface Registry {
   aliases: ReadonlyMap<string, RegisteredAlias>;
   teaching: Readonly<Record<string, string[]>>;
   readOnly: ReadonlySet<string>;
-  openWorld: ReadonlySet<string>;
 }
 
 let registry: Registry | undefined;
 
-/** The entry `tools/list` returns: the definition minus its registry fields. */
+/** The entry `tools/list` returns: its MCP fields, never the registry's. */
 function wireTool(def: ToolDefinition, input: ToolInput): Tool {
-  const {
-    input: _input,
-    group: _group,
-    hidden: _hidden,
-    aliases: _aliases,
-    teaches: _teaches,
-    cpOmit: _cpOmit,
-    refusedArgs: _refusedArgs,
-    ...wire
-  } = def;
-  return { ...wire, inputSchema: wireInputSchema(input) };
+  return {
+    name: def.name,
+    ...(def.annotations ? { annotations: def.annotations } : {}),
+    description: def.description,
+    inputSchema: wireInputSchema(input),
+  };
 }
 
 /**
@@ -287,12 +317,6 @@ function reg(): Registry {
     }
   }
   const defs = [...byName.values()].map((t) => t.def);
-  const withHint = (hint: "readOnlyHint" | "openWorldHint") =>
-    new Set(
-      defs
-        .filter((d) => d.annotations?.[hint] === true)
-        .flatMap((d) => [d.name, ...(d.aliases ?? []).map((a) => a.name)])
-    );
   registry = {
     byName,
     aliasOf,
@@ -300,8 +324,12 @@ function reg(): Registry {
     teaching: Object.fromEntries(
       defs.map((d) => [d.name, [...new Set([...(d.teaches ?? []), d.name])]])
     ),
-    readOnly: withHint("readOnlyHint"),
-    openWorld: withHint("openWorldHint"),
+    // Old names too: the pod edge reads the RAW name of a request body.
+    readOnly: new Set(
+      defs
+        .filter((d) => d.annotations?.readOnlyHint === true)
+        .flatMap((d) => [d.name, ...(d.aliases ?? []).map((a) => a.name)])
+    ),
   };
   return registry;
 }
@@ -335,23 +363,19 @@ export function wireTools(): Tool[] {
 }
 
 /**
- * The entry tools: listed only by default; `callable` adds their old names,
- * which answer for every key (as `toolGroupMembers(true)` does for a group).
+ * The entry tools: listed only by default; `callable` adds the hidden ones,
+ * which answer for every key (an old name answers as its tool: callers
+ * canonicalise it first, `canonicalToolName`).
  */
 export function entryToolNames(callable = false): string[] {
   return [...reg().byName.values()]
     .filter(({ def }) => def.group === "entry" && (callable || !def.hidden))
-    .flatMap(({ def }) =>
-      callable
-        ? [def.name, ...(def.aliases ?? []).map((a) => a.name)]
-        : [def.name]
-    );
+    .map(({ def }) => def.name);
 }
 
 /**
- * Each group's tools. Listed only by default; `callable` adds every other
- * name that answers in the group (hidden doors, old names), which
- * `synap_call_tool` may run once the group is unlocked.
+ * Each group's tools. Listed only by default; `callable` adds its hidden
+ * doors, which `synap_call_tool` may run once the group is unlocked.
  */
 export function toolGroupMembers(
   callable = false
@@ -359,12 +383,7 @@ export function toolGroupMembers(
   const out = {} as Record<McpToolGroupName, string[]>;
   for (const { def } of reg().byName.values()) {
     if (def.group === "entry") continue;
-    const names = callable
-      ? [def.name, ...(def.aliases ?? []).map((a) => a.name)]
-      : def.hidden
-        ? []
-        : [def.name];
-    (out[def.group] ??= []).push(...names);
+    (out[def.group] ??= []).push(...(callable || !def.hidden ? [def.name] : []));
   }
   return out;
 }
@@ -440,11 +459,27 @@ export function readOnlyToolNames(): ReadonlySet<string> {
 }
 
 /**
- * The tools that reach outside the pod (a capability, an automation, a
- * playbook run): the Hub request guard never times them out.
+ * Why the Hub request guard never times a call of this tool out, or `null`:
+ * its own `untimed`, else `model` for a tool that reaches outside the pod
+ * (`openWorldHint`: a capability, an automation, a playbook run).
  */
-export function openWorldToolNames(): ReadonlySet<string> {
-  return reg().openWorld;
+export function toolUntimed(name: string): "long_poll" | "model" | null {
+  const def = toolDefinition(name);
+  if (!def) return null;
+  return def.untimed ?? (def.annotations?.openWorldHint ? "model" : null);
+}
+
+/**
+ * The tools that take `supersedes`, each with the Hub REST route that files
+ * the same request (`supersedes` on the definition): the Hub door mounts its
+ * `supersedes` middleware on exactly these routes.
+ */
+export function supersedesDoors(): Array<
+  { tool: string } & NonNullable<ToolDefinition["supersedes"]>
+> {
+  return [...reg().byName.values()].flatMap(({ def }) =>
+    def.supersedes ? [{ tool: def.name, ...def.supersedes }] : []
+  );
 }
 
 /** A tool's declared input names (an alias gives its tool's), or null. */

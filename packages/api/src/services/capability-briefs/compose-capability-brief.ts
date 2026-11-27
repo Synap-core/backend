@@ -35,7 +35,10 @@
 import { and, eq, isNull, like } from "drizzle-orm";
 import { db, skills, ProfileResolutionService } from "@synap/database";
 
-import { toolTeachingKeys } from "../../routers/mcp/define-tool.js";
+import {
+  toolDefinition,
+  toolTeachingKeys,
+} from "../../routers/mcp/define-tool.js";
 
 export type CapabilityBriefDoor = "chat" | "automation";
 
@@ -47,7 +50,7 @@ export interface CapabilityBriefContext {
   /**
    * For a runnable-action verbId: its run posture as the actions projection
    * (`runPosture`) judged it for this workspace. Absent for MCP tool names —
-   * those compose their verdict from `TOOL_METADATA`.
+   * those compose their verdict from their definition's `brief`.
    */
   actionPosture?: "auto" | "propose";
 }
@@ -71,183 +74,20 @@ const OPEN_AFFORDANCE_FOOTER =
   "After a successful write, surface the result to the user: share the response's `/open/<id>` link, or in Companion chat emit an `[[open:side|entity:<id>]]` chip — never make the user hunt for what you just did.";
 
 /**
- * Per-tool governance door mapping: the REAL (subjectType, action) pair the
- * write ultimately gates on, cross-checked against `checkPermissionOrPropose`
- * call sites (entities.ts, documents.ts, views.ts, cell-instances.ts,
- * focus-sessions.ts, projects.ts, playbooks.ts, workspaces.ts,
- * automations.ts). `postureSlug` is the `DEFAULT_AI_POSTURES` / `profiles`
- * key consulted for per-kind emphases (D4) — several are NOT `profiles` rows
- * (document/view/cell/session/project/playbook/workspace/automation/
- * capability/capture are first-class tables, not entity kinds); that's fine,
- * `getEffectiveAiPosture` falls back to code defaults + workspace overlay.
- * `governance: null` means no direct `checkPermissionOrPropose` door exists
- * for this tool today (e.g. capture writes via the capture pipeline, which is
- * gated upstream, not per-entity) — the verdict line is skipped, teaching +
- * posture still compose.
+ * A tool's brief facts, from its definition (`brief`): the REAL (subjectType,
+ * action) pair its write gates on, cross-checked against the
+ * `checkPermissionOrPropose` call sites, and the `DEFAULT_AI_POSTURES` /
+ * `profiles` key of its emphases (D4; several are first-class tables, not
+ * kinds, and `getEffectiveAiPosture` falls back to code defaults + the
+ * workspace overlay). `governance: null` = no single governed door: the
+ * verdict line is skipped, teaching and posture still compose. A write
+ * (`readOnlyHint` not true) gets the open-affordance footer.
  */
-const TOOL_METADATA: Record<
-  string,
-  {
-    governance: { subjectType: string; action: string } | null;
-    postureSlug: string | null;
-    isWrite: boolean;
-  }
-> = {
-  synap_create_document: {
-    governance: { subjectType: "document", action: "create" },
-    postureSlug: "document",
-    isWrite: true,
-  },
-  // A section-only patch files under `document.section_update`; every other
-  // patch (and the full-replace aliases) under `document.update`.
-  synap_update_document: {
-    governance: { subjectType: "document", action: "update" },
-    postureSlug: "document",
-    isWrite: true,
-  },
-  synap_create_entity: {
-    governance: { subjectType: "entity", action: "create" },
-    postureSlug: null, // varies by the entity's own profileSlug — no single kind
-    isWrite: true,
-  },
-  synap_capture: {
-    governance: null, // capture pipeline gates upstream, not per-entity checkPermissionOrPropose
-    postureSlug: "capture",
-    isWrite: true,
-  },
-  synap_start_session: {
-    governance: { subjectType: "focus_session", action: "create" },
-    postureSlug: "session",
-    isWrite: true,
-  },
-  synap_update_session: {
-    governance: { subjectType: "focus_session", action: "update" },
-    postureSlug: "session",
-    isWrite: true,
-  },
-  synap_complete_session: {
-    governance: { subjectType: "focus_session", action: "update" },
-    postureSlug: "session",
-    isWrite: true,
-  },
-  synap_create_project: {
-    governance: { subjectType: "project", action: "create" },
-    postureSlug: "project",
-    isWrite: true,
-  },
-  synap_create_view: {
-    governance: { subjectType: "view", action: "create" },
-    postureSlug: "view",
-    isWrite: true,
-  },
-  synap_create_rule: {
-    // A rule is a `skills` row, but it is governed under its OWN door
-    // (`rule/create`, declared in GATE_WRITE_DOORS) because approving one also
-    // writes the lineage edges to its fact and behaviour halves — so the
-    // verdict composed for the caller must be that door's, not `skill/create`'s.
-    governance: { subjectType: "rule", action: "create" },
-    // "capability", same as `synap_create_skill`: a rule IS a `skills` row, and
-    // there is no "skill"/"rule" key in DEFAULT_AI_POSTURES — naming one would
-    // resolve to an empty posture and compose no emphases at all.
-    postureSlug: "capability",
-    isWrite: true,
-  },
-  synap_update_rule: {
-    // The edit twin of `synap_create_rule`, governed under its own
-    // `rule/update` door (GATE_WRITE_DOORS) — an approved edit recompiles the
-    // behaviour and re-earns the divergence snapshot, which `skill/update`
-    // does not.
-    governance: { subjectType: "rule", action: "update" },
-    postureSlug: "capability",
-    isWrite: true,
-  },
-  synap_create_cell: {
-    // `cell.define` (NOT `cell.create`, which is cell-instances/placed cells):
-    // defining renderer source is governed via checkPermissionOrPropose in the
-    // MCP adapter + the `cell/define` approve-executor.
-    governance: { subjectType: "cell", action: "define" },
-    postureSlug: "cell",
-    isWrite: true,
-  },
-  synap_promote_cell_to_renderer: {
-    governance: { subjectType: "cell", action: "update" },
-    postureSlug: "cell",
-    isWrite: true,
-  },
-  synap_create_playbook: {
-    governance: { subjectType: "playbook", action: "create" },
-    postureSlug: "playbook",
-    isWrite: true,
-  },
-  synap_promote_session_to_playbook: {
-    governance: { subjectType: "playbook", action: "create" },
-    postureSlug: "playbook",
-    isWrite: true,
-  },
-  synap_create_workspace: {
-    governance: { subjectType: "workspace", action: "create" },
-    postureSlug: "workspace",
-    isWrite: true,
-  },
-  synap_create_automation: {
-    governance: { subjectType: "automation", action: "create" },
-    postureSlug: "automation",
-    isWrite: true,
-  },
-  synap_trigger_automation: {
-    // launches an already-approved automation; gated by assertWorkspaceWrite,
-    // NOT a checkPermissionOrPropose door — so no governance dry-run applies
-    // (mirrors synap_run_capability). Downstream node writes stay governed.
-    governance: null,
-    postureSlug: "automation",
-    isWrite: true,
-  },
-  synap_run_playbook: {
-    governance: { subjectType: "playbook", action: "run" },
-    postureSlug: "playbook",
-    isWrite: true,
-  },
-  synap_create_skill: {
-    governance: { subjectType: "skill", action: "create" },
-    postureSlug: "capability",
-    isWrite: true,
-  },
-  synap_list_capabilities: {
-    governance: null, // read-only discovery, no checkPermissionOrPropose door
-    postureSlug: "capability",
-    isWrite: false,
-  },
-  synap_run_capability: {
-    governance: null, // per-verb governance, not a single checkPermissionOrPropose door
-    postureSlug: "capability",
-    isWrite: true,
-  },
-  synap_governance: {
-    governance: null, // this tool IS the governance query, not a governed write
-    postureSlug: null,
-    isWrite: false,
-  },
-  synap_list_profiles: {
-    governance: null, // read-only discovery, no checkPermissionOrPropose door
-    postureSlug: null,
-    isWrite: false,
-  },
-  synap_attach_facet: {
-    governance: { subjectType: "facet", action: "attach" },
-    postureSlug: null, // varies by the target role's own profileSlug — no single kind
-    isWrite: true,
-  },
-  synap_detach_facet: {
-    governance: { subjectType: "facet", action: "detach" },
-    postureSlug: null,
-    isWrite: true,
-  },
-  synap_update_facet: {
-    governance: { subjectType: "facet", action: "update" },
-    postureSlug: null,
-    isWrite: true,
-  },
-};
+function toolMeta(name: string) {
+  const def = toolDefinition(name);
+  if (!def?.brief) return undefined;
+  return { ...def.brief, isWrite: def.annotations?.readOnlyHint !== true };
+}
 
 // ── Skills lookup cache (teaching core) — 60s TTL, keyed by the queried key set ──
 
@@ -429,11 +269,9 @@ export async function composeCapabilityBrief(
     // An alias lends posture emphases + the write footer, never its governance
     // door: a verb run through the execute gate is governed by that gate, and
     // its verdict arrives as `ctx.actionPosture`.
-    const aliasMeta = aliases
-      .map((a) => TOOL_METADATA[a])
-      .find((m) => m !== undefined);
+    const aliasMeta = aliases.map(toolMeta).find((m) => m !== undefined);
     const meta =
-      TOOL_METADATA[toolName] ??
+      toolMeta(toolName) ??
       (aliasMeta ? { ...aliasMeta, governance: null } : undefined);
 
     const sections: string[] = [];
@@ -481,9 +319,6 @@ export async function composeCapabilityBrief(
     return null;
   }
 }
-
-/** The main-capability tool names briefs v1 covers (plan §Waves, Wave 2). */
-export const MAIN_CAPABILITY_TOOLS = Object.keys(TOOL_METADATA);
 
 /** Test-only seam: clear the module-level TTL caches between test cases. */
 export function __resetCapabilityBriefCachesForTest(): void {
