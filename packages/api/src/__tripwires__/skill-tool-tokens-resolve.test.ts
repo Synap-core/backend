@@ -5,7 +5,7 @@
  * token that names no pod tool renders verbatim on both of them — the agent
  * reads "call frob_widget" and dead-ends. So every taught token must either
  * resolve to a pod MCP tool (and from there to each door's name, via
- * `DOOR_TOOL_NAMES`) or be deliberately classified in `door-tool-render.ts` as
+ * `toolNameOnDoor`) or be deliberately classified in `door-tool-render.ts` as
  * IS-only (with the note it renders) or not-a-door-tool (with what it really is).
  *
  * THE SET IS DERIVED: every `*.md` under `synap-backend/skills/` (README.md
@@ -30,7 +30,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { DOOR_TOOL_NAMES } from "../routers/mcp/door-tool-names.generated.js";
+import { toolNameOnDoor } from "../routers/mcp/define-tool.js";
 import {
   IS_ONLY_TOOL_TOKENS,
   NOT_A_DOOR_TOOL_TOKENS,
@@ -130,20 +130,17 @@ describe("tripwire: taught tool tokens resolve to a door", () => {
     }
   });
 
-  it("the door table covers exactly the pod manifest, and each resolved token is on ≥1 door", () => {
+  it("each resolved token is named on the pod door, and the connector names most tools", () => {
     const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as {
       tools: Array<{ name: string }>;
     };
-    expect(Object.keys(DOOR_TOOL_NAMES).sort()).toEqual(
-      manifest.tools.map((t) => t.name).sort()
+    const named = manifest.tools.filter((t) =>
+      toolNameOnDoor(t.name, "cp-connector")
     );
-    const rows = Object.values(DOOR_TOOL_NAMES);
-    expect(rows.filter((r) => r["cp-connector"]).length).toBeGreaterThanOrEqual(
-      30
-    );
+    expect(named.length).toBeGreaterThanOrEqual(30);
     for (const [token] of taught) {
       const pod = resolveTaughtToolToken(token);
-      if (pod) expect(DOOR_TOOL_NAMES[pod]!["pod-mcp"], token).toBe(pod);
+      if (pod) expect(toolNameOnDoor(pod, "pod-mcp"), token).toBe(pod);
     }
   });
 });

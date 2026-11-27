@@ -45,8 +45,11 @@ vi.mock("../../hub-protocol/utils.js", () => ({
 import { ruleHandlers } from "./rule.js";
 import type { McpToolContext } from "./shared.js";
 import { tools } from "../tools/index.js";
-import { toolGroupMembers, toolTeachingKeys } from "../define-tool.js";
-import { DOOR_TOOL_NAMES } from "../door-tool-names.generated.js";
+import {
+  toolGroupMembers,
+  toolNameOnDoor,
+  toolTeachingKeys,
+} from "../define-tool.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -215,9 +218,12 @@ describe("registered wherever synap_create_rule is", () => {
     expect(toolTeachingKeys().synap_update_rule).toContain("rule.update");
   });
 
-  it("is in the generated door tool-name table", () => {
-    expect(DOOR_TOOL_NAMES.synap_update_rule?.["pod-mcp"]).toBe(
+  it("is named on both doors", () => {
+    expect(toolNameOnDoor("synap_update_rule", "pod-mcp")).toBe(
       "synap_update_rule"
+    );
+    expect(toolNameOnDoor("synap_update_rule", "cp-connector")).toBe(
+      "pod__update_rule"
     );
   });
 });

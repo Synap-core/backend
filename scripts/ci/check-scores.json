@@ -939,17 +939,6 @@
       "setup": true
     },
     {
-      "check": "test file packages/api/src/routers/mcp/door-tool-names.freshness.test.ts",
-      "unit": "Full suite",
-      "n": 50,
-      "f": 7,
-      "rawFailures": 7,
-      "exonerated": 0,
-      "p": 0.1538,
-      "c_min": null,
-      "score": null
-    },
-    {
       "check": "test file packages/api/src/routers/mcp/instructions-budget.test.ts",
       "unit": "Full suite",
       "n": 50,
@@ -1028,11 +1017,6 @@
     }
   ],
   "preflightCosts": {
-    "door-tool-names": {
-      "seconds": 0.84,
-      "measuredAt": "2026-10-28T22:11:23.888Z",
-      "where": "local"
-    },
     "api-types-freshness": {
       "seconds": 0.78,
       "measuredAt": "2026-10-28T22:11:23.888Z",

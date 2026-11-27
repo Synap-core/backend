@@ -17,7 +17,8 @@
  *     callable for a frozen name;
  *   - its teaching keys (`teaches`), for the brief composer and skill render;
  *   - whether the claude.ai connector exposes it (`cpOmit` says why not),
- *     published in the manifest's `exposure` for the control plane;
+ *     its name on each door (`toolNameOnDoor`), and the manifest's
+ *     `exposure` for the control plane;
  *   - the input check (`parseToolArgs`): unknown keys refused, then the
  *     arguments PARSED, and the handler receives the parsed value.
  *
@@ -33,8 +34,6 @@ import { toolDefinitions } from "./tools/index.js";
 import { toolError } from "./tool-errors.js";
 import { wireInputSchema } from "./tool-input.js";
 import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
-import type { SkillDoor } from "./door-tool-names.build.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 
 /** Where a tool is listed: the entry surface, or the group that unlocks it. */
 export type ToolPlacement = McpToolGroupName | "entry";
@@ -385,20 +384,26 @@ export function toolTeachingKeys(): Readonly<Record<string, string[]>> {
   return reg().teaching;
 }
 
-export type { SkillDoor };
+/**
+ * The two doors a pod tool reaches an agent through, each under its own name:
+ * `pod-mcp`, the pod's own `/mcp` (`synap_define_kind`), and `cp-connector`,
+ * the claude.ai control-plane connector (`pod__define_kind`).
+ */
+export type SkillDoor = "pod-mcp" | "cp-connector";
 
 /**
- * A pod tool's name on a door, `null` when that door does not have it. The
- * connector's set is still curated in the control plane and mirrored here
- * (`door-tool-names.generated.ts`) until its generator derives the set from
- * each definition's `cpOmit` (the manifest's `exposure`); then this reads the
- * definition and the mirror goes.
+ * A pod tool's name on a door, `null` when that door does not have it: the
+ * connector carries every tool as `pod__<name without synap_>` except the
+ * ones whose definition says why not (`cpOmit`); an alias follows its tool.
  */
 export function toolNameOnDoor(
   podName: string,
   door: SkillDoor
 ): string | null {
-  return DOOR_TOOL_NAMES[podName]?.[door] ?? null;
+  const tool = registered(podName);
+  if (!tool) return null;
+  if (door === "pod-mcp") return podName;
+  return tool.def.cpOmit ? null : `pod__${podName.replace(/^synap_/, "")}`;
 }
 
 /**

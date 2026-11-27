@@ -45,14 +45,14 @@ vi.mock(
 );
 
 import { tools } from "./index.js";
-import { DOOR_TOOL_NAMES } from "../door-tool-names.generated.js";
+import { definedToolNames, toolNameOnDoor } from "../define-tool.js";
 import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
 
 /** A pod tool this door does NOT carry — DERIVED, never a hand-picked name. */
 function absentFrom(door: "cp-connector"): string | undefined {
-  return Object.keys(DOOR_TOOL_NAMES)
+  return definedToolNames()
     .sort()
-    .find((tool) => DOOR_TOOL_NAMES[tool]![door] === null);
+    .find((tool) => toolNameOnDoor(tool, door) === null);
 }
 
 const load = async (agentUserId?: string) => {
@@ -118,7 +118,7 @@ describe("synap_load_skill door rendering", () => {
       // rather than pass silently; IS-only daggers stay covered in
       // door-tool-render.test.ts.
       expect(
-        Object.values(DOOR_TOOL_NAMES).every((r) => r["cp-connector"])
+        definedToolNames().every((t) => toolNameOnDoor(t, "cp-connector"))
       ).toBe(true);
       return;
     }

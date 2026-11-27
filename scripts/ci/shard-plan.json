@@ -822,7 +822,6 @@
     "src/routers/mcp/adapter.proposal-updates.reachability.test.ts": [1,1.22],
     "src/routers/mcp/adapter.proposal-updates.test.ts": [2,0.8],
     "src/routers/mcp/create-automation-data-contract.test.ts": [4,4.52],
-    "src/routers/mcp/door-tool-names.freshness.test.ts": [3,0.25],
     "src/routers/mcp/get-graph-profile-fallback.test.ts": [2,0.34],
     "src/routers/mcp/grounding-format.test.ts": [1,0.99],
     "src/routers/mcp/handlers/build.create-skill-turn-on.pglite.test.ts": [4,3.39],

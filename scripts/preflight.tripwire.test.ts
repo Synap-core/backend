@@ -123,30 +123,25 @@ describe("preflight: every red, never a false pass", () => {
     const tier0 = CHECKS.filter((c: { tier: number }) => c.tier === 0).map(
       (c: { id: string }) => c.id
     );
-    for (const id of ["api-types-freshness", "door-tool-names", "main-status"])
+    for (const id of ["api-types-freshness", "main-status"])
       expect(tier0).toContain(id);
   });
 });
 
-// door-tool-names, end to end through the CLI and its CI contract: the SAME
-// builder and committed table as door-tool-names.freshness.test.ts, against a
-// CP catalog given as a file. No network.
-describe("preflight --ci: door-tool-names against a CP catalog file", () => {
-  const generated = readFileSync(
-    join(REPO, "packages/api/src/routers/mcp/door-tool-names.generated.ts"),
-    "utf8"
-  );
-  // The CP catalog that produces exactly the committed table.
-  const pairs = [
-    ...generated.matchAll(
-      /"pod-mcp":\s*"(synap_[a-z_]+)",\s*"cp-connector":\s*"pod__([a-z_]+)"/g
-    ),
-  ].map((m) => `  { name: "${m[2]}", podToolName: "${m[1]}" },`);
-  const cli = (catalog: string) => {
+// The CI contract, end to end through the CLI: a red check writes red=true
+// and its id to GITHUB_OUTPUT, annotates, and the step still exits 0. Run on
+// sibling-registry with a pins file given on the command line. No network.
+describe("preflight --ci: a red is reported, never an exit", () => {
+  const cli = (repos: Array<{ dir: string; repo: string }>) => {
     const dir = mkdtempSync(join(tmpdir(), "preflight-"));
-    const cp = join(dir, "mcp-pod-tools.ts");
+    const pins = join(dir, "pins.json");
     const out = join(dir, "github-output");
-    writeFileSync(cp, `export const CURATED = [\n${catalog}\n];\n`);
+    writeFileSync(
+      pins,
+      JSON.stringify({
+        repos: repos.map((r) => ({ ...r, ref: "1".repeat(40) })),
+      })
+    );
     writeFileSync(out, "");
     const env = { ...process.env, GITHUB_OUTPUT: out, PR_BODY: "" };
     delete env.GITHUB_STEP_SUMMARY;
@@ -155,8 +150,8 @@ describe("preflight --ci: door-tool-names against a CP catalog file", () => {
       [
         "scripts/preflight.mjs",
         "--ci",
-        "--only=door-tool-names",
-        `--cp-source=${cp}`,
+        "--only=sibling-registry",
+        `--pins=${pins}`,
       ],
       { cwd: REPO, encoding: "utf8", env }
     );
@@ -166,121 +161,25 @@ describe("preflight --ci: door-tool-names against a CP catalog file", () => {
       outputs: readFileSync(out, "utf8").split("\n"),
     };
   };
+  const CP = {
+    dir: "synap-control-plane-api",
+    repo: "Synap-core/control-plane-api",
+  };
 
-  it("the probe catalog is not vacuous", () => {
-    expect(pairs.length).toBeGreaterThan(30);
-  });
-
-  it("a fresh table: red=false", () => {
-    const r = cli(pairs.join("\n"));
+  it("a green check: red=false", () => {
+    const r = cli([CP]);
     expect(r.out).toContain("PASS");
     expect(r.outputs).toContain("red=false");
     expect(r.code).toBe(0);
   });
 
-  it("a CP change the table missed: red=true, named, and the CI step still exits 0", () => {
-    const r = cli(pairs.slice(1).join("\n"));
+  it("a red check: red=true, named, and the CI step still exits 0", () => {
+    const r = cli([CP, { dir: "synap-app", repo: "Synap-core/app-bases" }]);
     expect(r.out).toContain("FAIL");
-    expect(r.out).toContain("::error title=Preflight door-tool-names::");
+    expect(r.out).toContain("::error title=Preflight sibling-registry::");
     expect(r.outputs).toContain("red=true");
-    expect(r.outputs).toContain("reds=door-tool-names");
+    expect(r.outputs).toContain("reds=sibling-registry");
     expect(r.code).toBe(0);
-  });
-});
-
-// door-tool-names reads control-plane-api at the commit sibling-pins.json pins
-// (plan b5820982 §2 P0), never at CP main: a CP change reaches the table only
-// through a pull request that bumps the pin. GitHub is a fake that records
-// the ref it is asked for.
-describe("preflight: door-tool-names reads CP at the pin", () => {
-  const doorToolNames = CHECKS.find(
-    (c: { id: string }) => c.id === "door-tool-names"
-  );
-  const generated = readFileSync(
-    join(REPO, "packages/api/src/routers/mcp/door-tool-names.generated.ts"),
-    "utf8"
-  );
-  const catalog = `export const CURATED = [\n${[
-    ...generated.matchAll(
-      /"pod-mcp":\s*"(synap_[a-z_]+)",\s*"cp-connector":\s*"pod__([a-z_]+)"/g
-    ),
-  ]
-    .map((m) => `  { name: "${m[2]}", podToolName: "${m[1]}" },`)
-    .join("\n")}\n];\n`;
-  const PIN = "1".repeat(40);
-  const pinsAt = (ref: string) => {
-    const file = join(mkdtempSync(join(tmpdir(), "pins-")), "pins.json");
-    writeFileSync(
-      file,
-      JSON.stringify({
-        repos: [
-          {
-            dir: "synap-control-plane-api",
-            repo: "Synap-core/control-plane-api",
-            ref,
-          },
-        ],
-      })
-    );
-    return file;
-  };
-  const run = async (pinsFile: string, text = catalog) => {
-    const asked: string[] = [];
-    const result = await doorToolNames.run({
-      env: {},
-      prBody: "",
-      pinsFile,
-      ghRaw: async (repo: string, path: string, ref: string) => {
-        asked.push(`${repo}/${path}@${ref}`);
-        return { text };
-      },
-      ghJson: async (path: string) => {
-        asked.push(path);
-        return [{ sha: PIN, commit: { message: "feat: x" } }];
-      },
-    });
-    return { result, asked };
-  };
-
-  it("asks GitHub for the catalog and its last commit at the pin, and says so", async () => {
-    const { result, asked } = await run(pinsAt(PIN));
-    expect(asked).toEqual([
-      `Synap-core/control-plane-api/src/routes/mcp-pod-tools.ts@${PIN}`,
-      `repos/Synap-core/control-plane-api/commits?sha=${PIN}&path=src/routes/mcp-pod-tools.ts&per_page=1`,
-    ]);
-    expect(asked.join(" ")).not.toContain("main");
-    expect(result.verdict).toBe("PASS");
-    expect(result.detail).toContain(`@${PIN.slice(0, 10)} (the pin)`);
-  });
-
-  it("stale against the pin: red, naming the pin", async () => {
-    const { result } = await run(
-      pinsAt(PIN),
-      catalog.replace(/\n {2}\{[^\n]*\},/, "")
-    );
-    expect(result.verdict).toBe("FAIL");
-    expect(result.detail).toContain("(the pin)");
-  });
-
-  it("a malformed or missing pin is red, never a read of main", async () => {
-    for (const file of [pinsAt("main"), join(tmpdir(), "no-such-pins.json")]) {
-      const { result, asked } = await run(file);
-      expect(result.verdict, file).toBe("FAIL");
-      expect(asked).toEqual([]);
-    }
-    const none = join(mkdtempSync(join(tmpdir(), "pins-")), "pins.json");
-    writeFileSync(none, JSON.stringify({ repos: [] }));
-    const { result } = await run(none);
-    expect(result.verdict).toBe("FAIL");
-    expect(result.detail).toContain("pins no synap-control-plane-api");
-  });
-
-  it("a CP Depends-On still skips: the Full suite compares against that ref", async () => {
-    const result = await doorToolNames.run({
-      env: {},
-      prBody: "Depends-On: control-plane-api#12",
-    });
-    expect(result.verdict).toBe("SKIP");
   });
 });
 

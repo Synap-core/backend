@@ -24,10 +24,9 @@ import {
   SYNAP_INSTRUCTIONS,
 } from "./index.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 import { formatGrounding } from "./http-handler.js";
 import { tools } from "./tools/index.js";
-import { entryToolNames } from "./define-tool.js";
+import { definedToolNames, entryToolNames } from "./define-tool.js";
 import {
   BUILDER_REF,
   TOOL_GROUP_NAMES,
@@ -173,11 +172,9 @@ describe("entry-key MCP instructions", () => {
         /your door may prefix them \(([^)]*)\)\./
       )?.[1];
       expect(example).toBeDefined();
-      const podNames = new Set(
-        Object.values(DOOR_TOOL_NAMES).map((r) => r["pod-mcp"])
-      );
+      const podNames = new Set(definedToolNames());
       const named = [...example!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
-      expect(named).toContain(DOOR_TOOL_NAMES.synap_ask!["pod-mcp"]);
+      expect(named).toContain("synap_ask");
       expect(named.filter((n) => !podNames.has(n))).toEqual([]);
     }
   );

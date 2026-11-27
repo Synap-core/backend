@@ -43,7 +43,6 @@ import {
   toolGroupRef,
 } from "./tool-profiles.js";
 import { BUILD_SKILLS, loadSkillCall } from "./tool-guidance.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 
 type Result = { isError?: boolean; content: Array<{ text?: string }> };
 const text = (r: Result) => r.content.map((c) => c.text ?? "").join("\n");
@@ -143,11 +142,8 @@ describe("synap_orient carries `yourTools`", () => {
     const yt = (await orient("key-cp")).yourTools as Record<string, unknown>;
     expect(yt.ask).toMatch(/^pod__ask /);
     expect(yt.unlock).toContain('pod__load_skill({ref: "tools:read"})');
-    // The connector's own name for the dispatcher, once its curated catalog
-    // carries it (the generated door table); the pod name until then.
-    expect(yt.unlock).toContain(
-      `${DOOR_TOOL_NAMES.synap_call_tool?.["cp-connector"] ?? "synap_call_tool"}({tool, arguments})`
-    );
+    // The connector's own name for the dispatcher (derived: no `cpOmit`).
+    expect(yt.unlock).toContain("pod__call_tool({tool, arguments})");
     expect(yt.unlock).not.toMatch(/reconnect|next conversation/i);
   });
 

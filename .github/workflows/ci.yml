@@ -189,7 +189,7 @@ jobs:
       # `pnpm audit` (security-audit) needs pnpm, not an install.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      # control-plane-api (door-tool-names) and app-bases (api-types
+      # control-plane-api (cp-pod-tools-drift) and app-bases (api-types
       # freshness) are private: the Reader App's read token, as monorepo-setup.
       - name: Mint control-plane-api read token (GitHub App)
         id: app-token

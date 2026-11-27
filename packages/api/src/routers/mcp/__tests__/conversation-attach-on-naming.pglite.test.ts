@@ -74,7 +74,7 @@ import { findClientSession, runWithClientKey } from "@synap/database";
 const { resolveSessionHandle } = await import("../handlers/shared.js");
 const { newSessionClientKey, SESSION_ACTED_ON_TOOLS } =
   await import("../../../services/focus-sessions/session-client-binding.js");
-const { DOOR_TOOL_NAMES } = await import("../door-tool-names.generated.js");
+const { definedToolNames } = await import("../define-tool.js");
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -232,7 +232,7 @@ describe("CONTROLS: what never attaches (the named session is used for that call
   it("every acted-on tool is a real MCP tool (a rename cannot empty the list)", () => {
     expect(SESSION_ACTED_ON_TOOLS.size).toBeGreaterThanOrEqual(7);
     for (const tool of SESSION_ACTED_ON_TOOLS) {
-      expect(DOOR_TOOL_NAMES, tool).toHaveProperty(tool);
+      expect(definedToolNames(), tool).toContain(tool);
     }
   });
 
