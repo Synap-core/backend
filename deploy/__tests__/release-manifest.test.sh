@@ -168,4 +168,46 @@ backend_push = [s for s in jobs["build-and-push-backend-api"]["steps"] if s.get(
 need(backend_push and "GIT_SHA" in str(backend_push[0].get("with", {}).get("build-args", "")), "backend image is not stamped with GIT_SHA (verify would fail every release)")
 sys.exit(1 if fails else 0)
 PY
+
+# ── 4. the per-commit fast release (decision ce5fb987) ───────────────────────
+# A pod pulls the CI-built release of the commit it deploys instead of building
+# it. These are the promises that make that safe for every OTHER pod. What it
+# reads is the workflow's text and expressions, not a run: it cannot tell
+# whether GitHub evaluates them as intended (that is the first real run's job).
+python3 - "$HERE/.github/workflows/docker-publish.yml" <<'PY' && ok "docker-publish.yml: per-commit fast release = CI's main push runs only, nightly-fast (no reviewer), never the Control Plane, one at a time" || { bad "docker-publish.yml broke a per-commit release promise (see above)"; }
+import sys, re, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+jobs = wf["jobs"]; on = wf.get("on", wf.get(True, {})); fails = []
+def need(c, m):
+    if not c: fails.append(m); print("   ✗", m)
+wr = on.get("workflow_run") or {}
+need(wr.get("workflows") == ["CI"] and wr.get("types") == ["completed"] and wr.get("branches") == ["main"],
+     f"the workflow_run trigger is not CI completed on main: {wr}")
+gate_if = str(jobs.get("ci-gate", {}).get("if", ""))
+for frag in ("github.event.workflow_run.event == 'push'", "github.event.workflow_run.head_branch == 'main'",
+             "github.event.workflow_run.head_repository.full_name == github.repository"):
+    need(frag in gate_if, f"ci-gate does not hold a workflow_run to {frag} (a queue, PR or fork run could release)")
+pick = [s for s in jobs.get("ci-gate", {}).get("steps", []) if s.get("id") == "pick"]
+need(pick and "--commit" in str(pick[0].get("run", "")) and "workflow_run" in str(pick[0].get("if", "")),
+     "ci-gate's pick does not check the per-commit commit (nightly-fast-pick.sh --commit)")
+# Client pods follow what the CP is told: a per-commit build must never reach it.
+cp_if = str(jobs.get("notify-control-plane", {}).get("if", ""))
+need("github.event_name != 'workflow_run'" in cp_if and "github.event_name != 'schedule'" in cp_if,
+     f"notify-control-plane can run for an automatic fast release (if: {cp_if!r})")
+auto = "(github.event_name == 'schedule' || github.event_name == 'workflow_run')"
+for j in ("release-checks", "build-and-push-backend-api", "build-and-push-pod-agent", "build-and-push-pod-admin"):
+    need(f"{auto} && needs.ci-gate.outputs.build == 'true'" in str(jobs.get(j, {}).get("if", "")),
+         f"{j} does not wait for ci-gate's build verdict on an automatic release")
+for j in ("build-and-push-backend-api", "build-and-push-pod-agent", "build-and-push-pod-admin"):
+    env = str(jobs.get(j, {}).get("environment", ""))
+    need(env.startswith("${{ " + auto + " && 'nightly-fast' ||"), f"{j}: an automatic release does not use nightly-fast: {env}")
+conc = wf.get("concurrency") or {}
+need("workflow_run" in str(conc.get("group", "")) and conc.get("cancel-in-progress") is False,
+     "automatic fast releases are not serialized (two could move channel-fast at once, or one be cancelled mid-publish)")
+sys.exit(1 if fails else 0)
+PY
+# channel-fast only moves forward: the pick refuses a commit the pointer is past.
+grep -q 'repos/$repo/compare/$pointer_sha...$picked' "$HERE/deploy/release/nightly-fast-pick.sh" \
+  && ok "nightly-fast-pick.sh: a commit channel-fast is already past is not built (compare through GitHub)" \
+  || bad "nightly-fast-pick.sh: no forward-only check on channel-fast"
 exit $fail
