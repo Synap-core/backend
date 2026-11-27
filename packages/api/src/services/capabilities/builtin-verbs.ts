@@ -181,6 +181,12 @@ export interface BuiltinVerbContext {
   governanceReason?: string | null;
   /** What a pod app asked (an intent action), for the approval screen. */
   intentRequest?: Record<string, unknown> | null;
+  /**
+   * The APPROVED proposal this run applies, when it is one (the executor's
+   * `provenance.proposalId`, `execute-capability.ts`). Read by a handler that
+   * keeps which approval made its write (`http.allow_host`); never a gate input.
+   */
+  proposalId?: string | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -4736,7 +4742,14 @@ const httpAllowHostHandler: BuiltinVerbHandler = async (params, ctx) => {
       "validation"
     );
   }
-  return { status: "allowed", ...(await allowHost(host, ctx.userId)) };
+  // Kept with the host: why it was asked, and the approval that added it.
+  return {
+    status: "allowed",
+    ...(await allowHost(host, ctx.userId, {
+      reason: input.reason ?? null,
+      proposalId: ctx.proposalId ?? null,
+    })),
+  };
 };
 
 // ── Search the web ("web.search") ─────────────────────────────────────────────

@@ -15,6 +15,10 @@
  *      plus the connection-broker trust panel. Orthogonal to Apps (browser
  *      origins). Pending issuers are decided in Review, not here.
  *   2. Secrets — where pod-level and per-user secrets live.
+ *   3. Network — the outside sites the pod's AIs may read open data from
+ *      (`http.get_json`'s allow-list): members read it, a pod admin adds
+ *      (proof of presence) and removes. `?section=network` is the path an
+ *      agent's refusal names (`HTTP_ALLOWED_HOSTS_ADMIN_PATH`).
  *
  * API keys moved to their own page, `/keys`.
  */
@@ -27,10 +31,11 @@ import { WaysInSummary } from "../../_lib/presence/ways-in/ways-in-summary";
 import { PresenceModeCard } from "./_lib/presence-mode-card";
 import { SensitivityCard } from "./_lib/sensitivity-card";
 import { SecretsSection } from "./_lib/secrets-section";
+import { NetworkSection } from "./_lib/network-section";
 
 const TITLE = "Pod security";
 const DESCRIPTION =
-  "Who this pod trusts to sign in its users, and where its secrets are kept.";
+  "Who this pod trusts to sign in its users, where its secrets are kept, and which outside sites its AIs may read.";
 
 function SecurityInner() {
   return (
@@ -56,6 +61,11 @@ function SecurityInner() {
             key: "secrets",
             label: "Secrets",
             content: <SecretsSection />,
+          },
+          {
+            key: "network",
+            label: "Network",
+            content: <NetworkSection />,
           },
         ]}
       />

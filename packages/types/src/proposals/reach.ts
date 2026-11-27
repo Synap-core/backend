@@ -25,7 +25,10 @@
 export interface ProposalPartReach {
   /**
    * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
-   * webhook step's URL host, a provider verb's fixed base URL.
+   * webhook step's URL host, a provider verb's fixed base URL, an
+   * `http.get_json` step's URL host. {@link ANY_PUBLIC_HOST} (`*`, the host
+   * lists' "any host" spelling, as in a computer manifest's `network`) when it
+   * may read any public page (`web.read`).
    */
   hosts: string[];
   /**
@@ -39,6 +42,22 @@ export interface ProposalPartReach {
 
 /** The label of the reach fact, on every surface. */
 export const CAN_REACH_LABEL = "Can reach";
+
+/**
+ * The host of a part that may read ANY public page (`web.read`): `*`, the
+ * spelling a host list already gives "any host" (a computer manifest's
+ * `network`). Never shown as is: {@link hostWords} says it.
+ */
+export const ANY_PUBLIC_HOST = "*";
+
+/** The words for one host of a reach list ("any public page" for `*`). */
+export function hostWords(host: string): string {
+  return host === ANY_PUBLIC_HOST ? "any public page" : host;
+}
+
+function capitalized(text: string): string {
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text;
+}
 
 /** "Gmail" / "Gmail and Slack" / "Gmail, Notion and Slack". */
 export function joinNames(names: readonly string[]): string {
@@ -63,20 +82,25 @@ export function canReachLine(hosts: readonly string[]): string {
 /**
  * The value of a part's "Can reach" fact:
  *   - "api.apify.com, your existing Apify connection"
+ *   - "Any public page" (a step reads any page: `web.read`)
  *   - "Nothing outside your pod" (measured, every step read)
  *   - "api.apify.com; not known for 1 step" / "Not known for 2 steps"
  */
 export function partReachWords(reach: ProposalPartReach): string {
+  const anyPage = reach.hosts.includes(ANY_PUBLIC_HOST);
   const known = [
-    ...reach.hosts,
+    ...(anyPage ? [hostWords(ANY_PUBLIC_HOST)] : []),
+    ...reach.hosts.filter((h) => h !== ANY_PUBLIC_HOST),
     ...(reach.connections.length
       ? [existingConnections(reach.connections, "your")]
       : []),
   ].join(", ");
-  if (reach.unreadSteps <= 0) return known || "Nothing outside your pod";
+  // A sentence that opens on words (not on a host name) starts upper case.
+  const lead = (text: string) => (anyPage ? capitalized(text) : text);
+  if (reach.unreadSteps <= 0) {
+    return known ? lead(known) : "Nothing outside your pod";
+  }
   const n = reach.unreadSteps;
   const unread = `not known for ${n} ${n === 1 ? "step" : "steps"}`;
-  return known
-    ? `${known}; ${unread}`
-    : `${unread.charAt(0).toUpperCase()}${unread.slice(1)}`;
+  return known ? lead(`${known}; ${unread}`) : capitalized(unread);
 }

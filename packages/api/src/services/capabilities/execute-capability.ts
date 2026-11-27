@@ -2206,6 +2206,11 @@ async function runResolvedSkillInner(
               intentRequest: ctx.selfGate.intentRequest,
             }
           : {}),
+        // The approval this run applies (a handler keeps which one made its
+        // write); absent on a direct run.
+        ...(ctx.provenance?.proposalId
+          ? { proposalId: ctx.provenance.proposalId }
+          : {}),
         // The verb identity is known HERE and was previously dropped at the
         // handler boundary. Handlers that create durable objects need it to stamp
         // provenance (channel origin), so it is threaded rather than re-derived.

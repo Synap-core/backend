@@ -119,7 +119,9 @@ import { SYNAP_CORE_DEFINITION } from "./ensure-synap-core.js";
 import {
   allowHost,
   httpGetJson,
+  listAllowedHostRows,
   listAllowedHosts,
+  HTTP_ALLOWED_HOSTS_ADMIN_PATH,
   type HttpGetJsonDeps,
 } from "./http-get-json.js";
 
@@ -359,6 +361,11 @@ describe("http.get_json reads only hosts the pod allows", () => {
     expect(out.status === "refused" && out.message).toContain(
       'run http.allow_host with { host: "elsewhere.example.test" }'
     );
+    // Where a person manages the list: the pod-admin page, by its path.
+    expect(out.status === "refused" && out.message).toContain(
+      HTTP_ALLOWED_HOSTS_ADMIN_PATH
+    );
+    expect(HTTP_ALLOWED_HOSTS_ADMIN_PATH).toBe("/security?section=network");
     expect(seen).toHaveLength(0);
   });
 
@@ -482,7 +489,51 @@ describe("http.get_json reads only hosts the pod allows", () => {
   });
 });
 
+describe("the allow-list read", () => {
+  it("lists each live row once, sorted by host, without a revoked one", async () => {
+    await allowHost("zz.example.test", OWNER, { reason: "to remove" });
+    const before = await listAllowedHostRows();
+    const zz = before.find((r) => r.host === "zz.example.test")!;
+    expect(zz.reason).toBe("to remove");
+    await q(`update config_settings set revoked_at = now() where id = $1`, [
+      zz.id,
+    ]);
+    const after = await listAllowedHostRows();
+    expect(after.map((r) => r.host)).not.toContain("zz.example.test");
+    expect(after.map((r) => r.host)).toEqual(
+      [...after.map((r) => r.host)].sort()
+    );
+    expect(after.map((r) => r.host)).toEqual(
+      expect.arrayContaining(["api.example.test", "data.example.test"])
+    );
+  });
+});
+
+describe("the catalog row's live reach", () => {
+  it("http.get_json reaches the hosts on the list today; another verb is not measured", async () => {
+    const { readLiveVerbReach } = await import("../proposals/part-reach.js");
+    const live = await readLiveVerbReach(["http.get_json", "web.search"]);
+    expect(live.get("http.get_json")).toEqual({
+      hosts: await listAllowedHosts(),
+      connections: [],
+      unreadSteps: 0,
+    });
+    expect(live.get("http.get_json")?.hosts).toContain("api.example.test");
+    expect(live.has("web.search")).toBe(false);
+  });
+});
+
 describe("http.allow_host: an agent never adds a host itself", () => {
+  it("its arguments are described for the person who reviews the ask", () => {
+    const props = (
+      coreSkill("http.allow_host").parameters as {
+        properties: Record<string, { description?: string }>;
+      }
+    ).properties;
+    expect(props.host?.description).toMatch(/host name/i);
+    expect(props.reason?.description).toMatch(/approves/);
+  });
+
   it("an agent's ask is a proposal, even under a person's auto rule naming the verb", async () => {
     h.rule = { verdict: "auto" };
     const out = await run(
@@ -497,7 +548,7 @@ describe("http.allow_host: an agent never adds a host itself", () => {
     );
   });
 
-  it("the person's approval re-runs it as the person, and the host is added", async () => {
+  it("the person's approval re-runs it as the person, and the host is added with its why and its approval", async () => {
     const row = {
       id: ALLOW_HOST,
       name: "http.allow_host",
@@ -509,13 +560,17 @@ describe("http.allow_host: an agent never adds a host itself", () => {
       intent: null,
       inputMap: null,
     } as ResolvedSkillRow;
+    const proposalId = randomUUID();
     const out = await runResolvedSkill(
       row,
-      { host: "bodacc-datadila.opendatasoft.com" },
+      {
+        host: "bodacc-datadila.opendatasoft.com",
+        reason: "Legal notices for the CRM",
+      },
       {
         userId: OWNER,
         workspaceId: null,
-        provenance: { agentUserId: AGENT, proposalId: randomUUID() },
+        provenance: { agentUserId: AGENT, proposalId },
       }
     );
     expect(out).toMatchObject({
@@ -525,6 +580,32 @@ describe("http.allow_host: an agent never adds a host itself", () => {
     expect(await listAllowedHosts()).toContain(
       "bodacc-datadila.opendatasoft.com"
     );
+    // The why and the approval are kept, not dropped on store.
+    const stored = await q<{ value: unknown; source: string }>(
+      `select value, source from config_settings where key = 'http.get_json.allowed_host' and value->>'host' = $1`,
+      ["bodacc-datadila.opendatasoft.com"]
+    );
+    expect(stored.rows).toEqual([
+      {
+        value: {
+          host: "bodacc-datadila.opendatasoft.com",
+          reason: "Legal notices for the CRM",
+          proposalId,
+        },
+        source: `proposal:${proposalId}`,
+      },
+    ]);
+    const detail = (await listAllowedHostRows()).find(
+      (r) => r.host === "bodacc-datadila.opendatasoft.com"
+    );
+    expect(detail).toMatchObject({
+      host: "bodacc-datadila.opendatasoft.com",
+      addedBy: { id: OWNER, name: "owner@example.test" },
+      reason: "Legal notices for the CRM",
+      proposalId,
+    });
+    expect(typeof detail?.id).toBe("string");
+    expect(detail?.addedAt).toBeInstanceOf(Date);
   });
 
   it("a pod admin's own run adds it at once, normalised", async () => {
@@ -540,6 +621,15 @@ describe("http.allow_host: an agent never adds a host itself", () => {
       },
     });
     expect(await listAllowedHosts()).toContain("geo.api.gouv.fr");
+    // A person's own add: no approval behind it, the user's own source.
+    const detail = (await listAllowedHostRows()).find(
+      (r) => r.host === "geo.api.gouv.fr"
+    );
+    expect(detail).toMatchObject({ reason: null, proposalId: null });
+    const stored = await q<{ source: string }>(
+      `select source from config_settings where key = 'http.get_json.allowed_host' and value->>'host' = 'geo.api.gouv.fr'`
+    );
+    expect(stored.rows).toEqual([{ source: "user" }]);
   });
 
   it("the handler itself refuses an agent and a member who is not a pod admin", async () => {

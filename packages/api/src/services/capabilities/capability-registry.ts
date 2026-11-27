@@ -65,6 +65,7 @@ import { declaredReadOnly } from "./capability-drift.js";
 import { verbType } from "./capability-catalog.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
+import type { ProposalPartReach } from "@synap-core/types/proposals";
 import {
   capabilityNextAction,
   resolveCapabilityBlock,
@@ -1565,6 +1566,13 @@ export interface SectionedCapabilities {
     /** See `integrations[].blocked` — a skill blocks on approval only (it has no
      *  connection of its own), so this is `kind:"enable"` whenever present. */
     blocked?: CapabilityNextAction;
+    /**
+     * Where this verb can reach outside the pod TODAY, read live from pod
+     * state (`readLiveVerbReach`: `http.get_json` → the pod's allow-list), in
+     * the review's reach shape. Present only for a verb measured that way;
+     * absent = not measured, never "reaches nothing".
+     */
+    reach?: ProposalPartReach;
     /** Why this row matched the `query` (see `RegistryCapability.match`). */
     match?: TermMatch;
   }>;
@@ -1632,6 +1640,12 @@ export interface SectionCapabilitiesOptions {
    * surface can say "in <space>". Omit for the lensed fold (unchanged).
    */
   bySpace?: boolean;
+  /**
+   * Live reach per skill NAME (`readLiveVerbReach`), stamped on the matching
+   * `skills[]` row after the dedupe, like `blocked`. The fold stays pure: the
+   * door reads it and hands it in. Omit and no row carries `reach`.
+   */
+  liveReach?: ReadonlyMap<string, ProposalPartReach>;
 }
 
 /**
@@ -1845,6 +1859,8 @@ export function sectionCapabilities(
       enabled: row.enabled,
     });
     if (blocked) row.blocked = blocked;
+    const reach = opts?.liveReach?.get(row.name);
+    if (reach) row.reach = reach;
   }
 
   const full: SectionedCapabilities = {
