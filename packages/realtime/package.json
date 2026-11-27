@@ -1,7 +1,7 @@
 {
   "name": "@synap/realtime",
   "version": "1.0.0",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "description": "Real-time collaboration with WebSocket and Yjs",
   "type": "module",
@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "dev": "tsx watch --env-file=../../.env.development.local src/server.ts",
-    "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
+    "start": "test -f ../../.env && export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
     "build": "tsc && node scripts/bundle-document-access.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

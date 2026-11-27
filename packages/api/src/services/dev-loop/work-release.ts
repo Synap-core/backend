@@ -207,21 +207,21 @@ async function readHolders(
   database: typeof db
 ): Promise<WorkReleaseHolderInput[]> {
   if (sessions.length === 0) return [];
-  const live = await loadSessionLiveness(
-    { userId: reader.userId, roster: reader.roster },
-    sessions,
-    { since: new Date(now.getTime() - LIVENESS_LOOKBACK_MS) }
-  );
   const holderIdOf = (s: SessionRow) => s.agentIds?.[0] ?? s.userId;
   const ids = [...new Set(sessions.map(holderIdOf))];
-  const names = new Map(
-    (
-      await database
-        .select({ id: users.id, name: users.name })
-        .from(users)
-        .where(inArray(users.id, ids))
-    ).map((u) => [u.id, u.name])
-  );
+  // Independent reads: run together (either one failing still throws).
+  const [live, nameRows] = await Promise.all([
+    loadSessionLiveness(
+      { userId: reader.userId, roster: reader.roster },
+      sessions,
+      { since: new Date(now.getTime() - LIVENESS_LOOKBACK_MS) }
+    ),
+    database
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(inArray(users.id, ids)),
+  ]);
+  const names = new Map(nameRows.map((u) => [u.id, u.name]));
   return sessions.map((s) => {
     const facts = live.get(s.id);
     // `loadSessionLiveness` answers null for every session when its read
@@ -292,47 +292,59 @@ export async function readWorkRelease(
     reach.snapshotSpaces
   );
 
-  let sessionRows: SessionRow[] | null;
-  try {
-    sessionRows = withheld.has("sessions")
-      ? []
-      : await readPrSessions(reader, snapshots, database);
-  } catch (err) {
-    logger.error({ err }, "work-release: the sessions read failed");
-    sessionRows = null;
-  }
-  const sessions: WorkReleaseSessionInput[] | null =
-    sessionRows?.map((s) => ({
-      id: s.id,
-      title: resolveSessionTitle(s) || null,
-      pullRequests: declaredPullRequests(s.expectedOutputs),
-    })) ?? null;
-
-  let holders: WorkReleaseHolderInput[] | null = null;
-  if (withheld.has("holders")) {
-    holders = [];
-  } else if (sessionRows) {
+  // Two independent chains, each needing only the snapshots: the sessions and
+  // then their holders, and the PR facts. They run together; each part still
+  // fails alone (`null` → its source reads `unavailable`).
+  const sessionsAndHolders = async (): Promise<{
+    sessionRows: SessionRow[] | null;
+    holders: WorkReleaseHolderInput[] | null;
+  }> => {
+    let sessionRows: SessionRow[] | null;
     try {
-      holders = await readHolders(reader, sessionRows, now, database);
+      sessionRows = withheld.has("sessions")
+        ? []
+        : await readPrSessions(reader, snapshots, database);
     } catch (err) {
-      logger.error({ err }, "work-release: the holders read failed");
+      logger.error({ err }, "work-release: the sessions read failed");
+      sessionRows = null;
     }
-  }
-
-  let pullRequests: Awaited<ReturnType<typeof readPullRequestStates>> | null =
-    new Map();
-  if (!withheld.has("pullRequests")) {
+    let holders: WorkReleaseHolderInput[] | null = null;
+    if (withheld.has("holders")) {
+      holders = [];
+    } else if (sessionRows) {
+      try {
+        holders = await readHolders(reader, sessionRows, now, database);
+      } catch (err) {
+        logger.error({ err }, "work-release: the holders read failed");
+      }
+    }
+    return { sessionRows, holders };
+  };
+  const pullRequestFacts = async (): Promise<Awaited<
+    ReturnType<typeof readPullRequestStates>
+  > | null> => {
+    if (withheld.has("pullRequests")) return new Map();
     try {
-      pullRequests = await readPullRequestStates(
+      return await readPullRequestStates(
         snapshotPullRequests(snapshots),
         reader,
         database
       );
     } catch (err) {
       logger.error({ err }, "work-release: the PR facts read failed");
-      pullRequests = null;
+      return null;
     }
-  }
+  };
+  const [{ sessionRows, holders }, pullRequests] = await Promise.all([
+    sessionsAndHolders(),
+    pullRequestFacts(),
+  ]);
+  const sessions: WorkReleaseSessionInput[] | null =
+    sessionRows?.map((s) => ({
+      id: s.id,
+      title: resolveSessionTitle(s) || null,
+      pullRequests: declaredPullRequests(s.expectedOutputs),
+    })) ?? null;
 
   const read = foldWorkRelease(snapshots, sessions, holders, {
     now,

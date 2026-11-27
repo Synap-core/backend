@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "name": "synap-monorepo-ci-slice",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "Apache-2.0",
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",

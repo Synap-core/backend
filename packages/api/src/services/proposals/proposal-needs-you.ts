@@ -30,6 +30,7 @@ import {
   focusSessions,
   proposalSnoozes,
   needsYouSessionClassSql,
+  sessionAgentEventClocks,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -47,7 +48,10 @@ import {
 } from "./proposal-waits.js";
 import { isUuid } from "@synap-core/types/property-render";
 import { cannotApplyYet } from "@synap-core/types/proposals/cannot-apply";
-import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
+import {
+  sessionIdsBlockingOpenPr,
+  type OpenPrBlockingRead,
+} from "../dev-loop/open-pr-blocking.js";
 
 export interface ProposalNeedsYouRow extends ProposalWaitsRow {
   createdAt: Date | string;
@@ -64,6 +68,11 @@ export async function classifyPendingProposals(
      * its own reader floor (a page that read them once). Absent = read here.
      */
     openPrSessionIds?: ReadonlySet<string>;
+    /**
+     * The open-PR read to ask (a needs-you read's ONE shared read,
+     * `sharedOpenPrRead`). Absent = `sessionIdsBlockingOpenPr` under `reader`.
+     */
+    openPrRead?: OpenPrBlockingRead;
   } = {}
 ): Promise<Map<string, NeedsYouProposalClass>> {
   const pending = rows.filter((r) => r.status === "pending");
@@ -77,6 +86,9 @@ export async function classifyPendingProposals(
     ),
   ];
   const proposalIds = pending.map((r) => r.id).filter(isUuid);
+  // The sessions' agent events, read in ONE grouped pass and joined in: read
+  // per session they decompressed the events hypertable once each.
+  const clocks = sessionAgentEventClocks("focus_sessions", sessionIds);
   const [waits, sessions, snoozes] = await Promise.all([
     resolveProposalWaits(pending, reader),
     sessionIds.length > 0
@@ -84,9 +96,10 @@ export async function classifyPendingProposals(
           .select({
             id: focusSessions.id,
             status: focusSessions.status,
-            sessionClass: drizzleSql<NeedsYouSessionClass>`${needsYouSessionClassSql("focus_sessions", now)}`,
+            sessionClass: drizzleSql<NeedsYouSessionClass>`${needsYouSessionClassSql("focus_sessions", now, clocks)}`,
           })
           .from(focusSessions)
+          .leftJoin(clocks.table, clocks.on)
           .where(
             and(
               inArray(focusSessions.id, sessionIds),
@@ -121,7 +134,9 @@ export async function classifyPendingProposals(
   const sessionOf = new Map(sessions.map((s) => [s.id, s]));
   const blocking =
     opts.openPrSessionIds ??
-    (await sessionIdsBlockingOpenPr(reader, sessionIds));
+    (await (opts.openPrRead
+      ? opts.openPrRead(sessionIds)
+      : sessionIdsBlockingOpenPr(reader, sessionIds)));
   const snoozedUntilOf = new Map(
     snoozes.map((s) => [s.proposalId, s.snoozedUntil])
   );

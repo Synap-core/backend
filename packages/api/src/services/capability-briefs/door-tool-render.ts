@@ -34,8 +34,6 @@ export const IS_ONLY_TOOL_TOKENS: Record<string, string> = {
     "in-app assistant only; list_profiles returns each kind's fields",
   get_bento_schema: "in-app assistant only (workspace layout read)",
   focus_surface: "in-app assistant only (drives the user's open screen)",
-  place_on_whiteboard:
-    "in-app assistant only (drives the user's open whiteboard)",
   link_entity_to_thread:
     "in-app assistant only (binds the current chat thread)",
   link_document_to_thread:

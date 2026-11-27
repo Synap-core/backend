@@ -194,7 +194,11 @@ Measured with the image's `timescaledb-tune` 0.19: a 4 GB host gets
 measure the whole host, as it always did. The Control Plane sends nothing:
 `synap install`, which a managed pod's cloud-init runs, computes it on the host.
 
-An update never changes a running pod's Postgres settings. To re-size an
+An update never changes a running pod's Postgres sizing. It does apply the
+two settings `docker-compose.yml` passes as `-c` on the postgres command
+(`max_connections`, and `shared_preload_libraries=timescaledb,pg_stat_statements`,
+which lets anyone read per-query cost from `pg_stat_statements`): when they
+change, the update recreates Postgres, a few seconds of downtime. To re-size an
 existing pod (installed before this, or moved to a host of another size):
 
 ```bash

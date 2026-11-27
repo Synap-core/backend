@@ -440,10 +440,10 @@ const branchTreeView: ViewCapabilityDef = {
 const bentoView: ViewCapabilityDef = {
   key: "bento",
   aiHint:
-    "Mixed composition \u2014 a dashboard of cells (call synap_list_widgets for keys).",
+    "Mixed composition \u2014 a dashboard of cells (call synap_list_cells for keys).",
   name: "Bento Dashboard",
   description:
-    "Drag-and-drop grid dashboard composed of widgets — the home view type",
+    "Drag-and-drop grid dashboard composed of cells — the home view type",
   icon: "LayoutDashboard",
   category: "special",
   family: "composite",

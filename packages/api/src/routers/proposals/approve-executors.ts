@@ -33,6 +33,7 @@ import { registerFocusSessionOrchestrateExecutor } from "./executors/focus-sessi
 import { registerDevApprovalExecutors } from "./executors/dev-approval.js";
 import { registerProjectExecutors } from "./executors/project.js";
 import { registerViewExecutors } from "./executors/view.js";
+import { registerWhiteboardExecutors } from "./executors/whiteboard.js";
 import { registerProfileExecutors } from "./executors/profile.js";
 import { registerSkillExecutors } from "./executors/skill.js";
 import { registerToolExecutors } from "./executors/tool.js";
@@ -89,6 +90,7 @@ export function registerApproveExecutors(): void {
   registerDevApprovalExecutors();
   registerProjectExecutors();
   registerViewExecutors();
+  registerWhiteboardExecutors();
   registerProfileExecutors();
   registerSkillExecutors();
   registerToolExecutors();

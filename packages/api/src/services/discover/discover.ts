@@ -841,6 +841,62 @@ export async function discover(
   }
   const lensWsIds = workspaceId ? [workspaceId] : wsIds;
 
+  // The briefing reads below need nothing the workspace and project sections
+  // compute, so they START here and run beside them; each is awaited where its
+  // result is used, which keeps every error arm where it was. A rejection that
+  // lands before its await is only kept from reading as unhandled (the
+  // `ranked` pattern): the await below still throws it.
+  //
+  // Pending-review backlog. Best-effort: orient must never fail because the
+  // proposals read hiccuped — a missing nudge is far better than a broken map.
+  //
+  // MUST match what `synap_list_proposals` returns (the tool the nudge tells the
+  // user to call), or the count and the tool disagree. The canonical queue floors
+  // by AUTHOR — me OR an agent I created (`proposals-service.ts`) — with a
+  // workspaceId only NARROWING. An earlier version floored by workspace
+  // MEMBERSHIP instead, which on a multi-user pod counted a teammate's pending
+  // proposals for this user (both a wrong count and a small disclosure of their
+  // backlog). Floor by author, user-wide, exactly like the tool's default.
+  //
+  // `count` and `oldest` are aggregated over the SAME floored population as the
+  // list: widening the list without widening this would make `oldestDays` a
+  // number computed over a different set than the count printed beside it.
+  const pendingRead: Promise<PendingReviewState> =
+    readPendingReviewState(userId);
+  // A PINNED orient also carries the space brief (the caller chose the space,
+  // light included). Its `keyKinds` and `startHere.topKinds` read the SAME
+  // lens-ranked listing — one read, started here and shared.
+  const ranked = readRankedLensProfiles({ caller, userId, workspaceId });
+  // Each consumer surfaces its own failure; this only keeps a rejection that
+  // lands before they attach from reading as unhandled.
+  ranked.catch(() => undefined);
+  // Who the user IS — the one thing orient never carried. Best-effort, same
+  // rule as the roster: a failed read costs a prose block, never the map.
+  const whoRead = buildWhoBlock(userId);
+  const startHereRead = pendingRead.then((pending) =>
+    buildStartHere({
+      caller,
+      userId,
+      agentUserId: params.agentUserId ?? null,
+      workspaceId,
+      projectId,
+      statusOf: params.statusOf,
+      statusOfInclude: params.statusOfInclude,
+      pending,
+      learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
+      ranked,
+    })
+  );
+  startHereRead.catch(() => undefined);
+  // Team roster — same loader capture uses for structure. One workspace only
+  // (pinned or first accessible sample) so light orient stays cheap. Best-
+  // effort: never fail orient on roster errors. No emails in the payload.
+  const sampleWsId = workspaceId ?? lensWsIds[0];
+  const rosterRead = sampleWsId
+    ? loadTeamRosterForCapture(db, { workspaceId: sampleWsId, userId })
+    : undefined;
+  rosterRead?.catch(() => undefined);
+
   const needWorkspaces = want("workspaces");
   // Light drops the profile inventory — UNLESS the caller asked for it by name.
   // An explicit `scope:['profiles']` is a direct request; answering it with
@@ -895,7 +951,6 @@ export async function discover(
   const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
 
   // ── Profiles: full-only inventory (or an explicit scope:['profiles']) ──
-  const sampleWsId = workspaceId ?? lensWsIds[0];
   let profileSample: ProfileSample[] = [];
   const perWsProfiles = new Map<string, ProfileSample[]>();
   if (needProfiles && sampleWsId) {
@@ -1089,21 +1144,8 @@ export async function discover(
     });
   }
 
-  // Pending-review backlog. Best-effort: orient must never fail because the
-  // proposals read hiccuped — a missing nudge is far better than a broken map.
-  //
-  // MUST match what `synap_list_proposals` returns (the tool the nudge tells the
-  // user to call), or the count and the tool disagree. The canonical queue floors
-  // by AUTHOR — me OR an agent I created (`proposals-service.ts`) — with a
-  // workspaceId only NARROWING. An earlier version floored by workspace
-  // MEMBERSHIP instead, which on a multi-user pod counted a teammate's pending
-  // proposals for this user (both a wrong count and a small disclosure of their
-  // backlog). Floor by author, user-wide, exactly like the tool's default.
-  //
-  // `count` and `oldest` are aggregated over the SAME floored population as the
-  // list: widening the list without widening this would make `oldestDays` a
-  // number computed over a different set than the count printed beside it.
-  const pendingState: PendingReviewState = await readPendingReviewState(userId);
+  // Pending-review backlog, read since the top (see `pendingRead`).
+  const pendingState: PendingReviewState = await pendingRead;
   const pendingSummary =
     pendingState.status === "ok" &&
     (pendingState.count > 0 || pendingState.reviewLater > 0)
@@ -1114,34 +1156,14 @@ export async function discover(
         }
       : undefined;
 
-  // Who the user IS — the one thing orient never carried. Best-effort, same
-  // rule as the roster: a failed read costs a prose block, never the map.
-  // The briefing sections read in parallel with it.
-  //
-  // A PINNED orient also carries the space brief (the caller chose the space,
-  // light included). Its `keyKinds` and `startHere.topKinds` read the SAME
-  // lens-ranked listing — one read, started here and shared.
-  const ranked = readRankedLensProfiles({ caller, userId, workspaceId });
-  // Each consumer surfaces its own failure; this only keeps a rejection that
-  // lands before they attach from reading as unhandled.
-  ranked.catch(() => undefined);
+  // The briefing: who, startHere (both read since the top) and the space
+  // brief, which needs the pinned workspace row read above.
   const pinnedRow = workspaceId
     ? wsRaw.find((w) => w.id === workspaceId)
     : undefined;
   const [who, startHere, brief] = await Promise.all([
-    buildWhoBlock(userId),
-    buildStartHere({
-      caller,
-      userId,
-      agentUserId: params.agentUserId ?? null,
-      workspaceId,
-      projectId,
-      statusOf: params.statusOf,
-      statusOfInclude: params.statusOfInclude,
-      pending: pendingState,
-      learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
-      ranked,
-    }),
+    whoRead,
+    startHereRead,
     workspaceId
       ? buildSpaceBrief({
           caller,
@@ -1177,16 +1199,10 @@ export async function discover(
   };
   if (detail === "light") capLightRowProse(result);
 
-  // Team roster — same loader capture uses for structure. One workspace only
-  // (pinned or first accessible sample) so light orient stays cheap. Best-
-  // effort: never fail orient on roster errors. No emails in the payload.
-  const rosterWsId = sampleWsId;
-  if (rosterWsId) {
+  // Team roster, read since the top (see `rosterRead`).
+  if (rosterRead) {
     try {
-      const roster = await loadTeamRosterForCapture(db, {
-        workspaceId: rosterWsId,
-        userId,
-      });
+      const roster = await rosterRead;
       // Strip email from every prompt-facing field (loader may fall back
       // displayName → email when the user has no name set).
       const members = roster.members.map((m) => ({

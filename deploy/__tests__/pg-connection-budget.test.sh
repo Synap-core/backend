@@ -37,10 +37,18 @@
 #      service passes it the SAME variable the `-c max_connections` reads, with
 #      the same shipped default; TS_TUNE_MEMORY reads POSTGRES_TUNE_MEMORY; and
 #      NO_TS_TUNE is not set (it would drop the sizing in silence).
-#   H. the postgres command sets no parameter but max_connections: a `-c` there
+#   H. the postgres command sets no parameter but PG_COMMAND_PARAMS
+#      (max_connections, shared_preload_libraries): a `-c` there
 #      changes every RUNNING pod on its next update, while sizing must change
 #      a pod only at initdb or through `synap tune-postgres` (the opt-in).
 #      A new `-c` is a decision: add it to PG_COMMAND_PARAMS with its reason.
+#   I. the postgres command preloads `pg_stat_statements` (without it no pod
+#      can say which query costs: a read of the view fails) AND keeps
+#      `timescaledb`, since `-c shared_preload_libraries` replaces the list the
+#      image's postgresql.conf sets (only `timescaledb`, measured 2026-11-26).
+#      NOT covered: a later image whose postgresql.conf preloads more; the
+#      `-c` list would drop it (compare `SHOW shared_preload_libraries` on a
+#      fresh cluster of that image).
 #   Non-vacuity: the known consumers are all found, and the ${...} resolver
 #   still reads a literal sample.
 #
@@ -160,7 +168,11 @@ for i, c in enumerate(cmd):
         pg_max = int(m.group(1))
 
 # G. the initdb tune sizes for the real connection ceiling and the pod's memory share
-PG_COMMAND_PARAMS = {"max_connections"}  # H: each one changes running pods on update
+# H: each one changes running pods on update, on purpose:
+#   max_connections — the pools' worst case must fit (D);
+#   shared_preload_libraries — pg_stat_statements on every pod (I); it sizes
+#     nothing (its shared memory is fixed, pg_stat_statements.max 5000).
+PG_COMMAND_PARAMS = {"max_connections", "shared_preload_libraries"}
 raw_env = pg.get("environment") or {}
 raw_cmd = pg.get("command") or []
 raw_cmd = raw_cmd if isinstance(raw_cmd, list) else str(raw_cmd).split()
@@ -177,6 +189,15 @@ for i, c in enumerate(cmd):
         if param not in PG_COMMAND_PARAMS:
             fails.append(f"H: postgres command sets -c {c}: it would change every running pod on its next update (size at initdb, or opt in with synap tune-postgres)")
 
+# I. pg_stat_statements is preloaded, and timescaledb is still preloaded
+preload = [c.split("=", 1)[1] for i, c in enumerate(cmd)
+           if i > 0 and cmd[i - 1] == "-c" and c.startswith("shared_preload_libraries=")]
+libs = [l.strip() for l in (preload[-1].split(",") if preload else []) if l.strip()]
+if "pg_stat_statements" not in libs:
+    fails.append(f"I: postgres command does not preload pg_stat_statements (-c shared_preload_libraries={','.join(libs) or '<absent>'}): a read of pg_stat_statements fails, no pod can say which query costs")
+if preload and "timescaledb" not in libs:
+    fails.append(f"I: postgres command sets -c shared_preload_libraries={','.join(libs)} without timescaledb: it replaces the image's list, and TimescaleDB would not load")
+
 total = sum(n for _, _, n in rows)
 print(f"  budget (shipped defaults) vs postgres max_connections={pg_max}:")
 for name, what, n in rows:
@@ -190,6 +211,7 @@ for f in fails:
 if not fails:
     print(f"  ✓ {len(consumers)} Postgres consumers, every pool capped, worst case {total} < max_connections {pg_max}")
     print(f"  ✓ sizing: the initdb tune reads TS_TUNE_MAX_CONNS={raw_env.get('TS_TUNE_MAX_CONNS')} (= -c max_connections) and TS_TUNE_MEMORY; the command sets only {sorted(PG_COMMAND_PARAMS)}")
+    print(f"  ✓ preload: {','.join(libs)} (pg_stat_statements readable, timescaledb kept)")
 known = {"backend", "backend-canary", "backend-worker", "realtime", "backend-migrate", "kratos", "kratos-migrate", "postgres-backup"}
 nv = known <= consumers and "postgres" in svcs
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: consumers {sorted(consumers)} (must include {sorted(known)})")

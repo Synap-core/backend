@@ -68,6 +68,7 @@ import { requestClientKey } from "../../../services/focus-sessions/resolve-work-
 import type { SessionCriterion } from "@synap/playbooks";
 import {
   normalizeSessionTitle,
+  SESSION_CLOSE_OUTCOMES,
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
@@ -301,6 +302,11 @@ const WorkGraphWireSchema = z.object({
       playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
       /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
       skipped: z.literal(true).optional(),
+      /** The step's planned window and due date (`metadata`, valid dates only). Absent = none. */
+      plannedFor: z.string().optional(),
+      dueBy: z.string().optional(),
+      /** How it ended (`sessionClosedAs`). Absent = not ended, or an older pod. */
+      closedAs: z.enum(SESSION_CLOSE_OUTCOMES).optional(),
     })
   ),
   edges: z.array(
@@ -1011,6 +1017,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
+      "with no `kind` named every kind except CLOSED automation runs " +
+      "(`kind=all` keeps them; open, failed and cancelled runs stay), " +
       "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
       "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
@@ -1043,7 +1051,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           .min(1)
           .max(WORK_GRAPH_MAX_WINDOW_HOURS)
           .optional(),
-        // Same vocabularies and agent-door defaults as the list: `all`.
+        // Same vocabularies as the list. Absent = every kind but CLOSED
+        // automation runs; `all` keeps them.
         kind: z.enum([...SESSION_KINDS, "all"]).optional(),
         lens: z.enum(["default", "triage", "all"]).optional(),
         trackId: uuidQueryParam.optional(),
@@ -1772,7 +1781,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         400
       );
     }
-    const kindRaw = c.req.query("kind") ?? "all";
+    // No `kind` named = the default window (`buildWorkGraph`): every kind
+    // but closed automation runs. `kind=all` keeps them.
+    const kindParam = c.req.query("kind") || undefined;
+    const kindRaw = kindParam ?? "all";
     if (
       !(SESSION_KINDS as readonly string[]).includes(kindRaw) &&
       kindRaw !== "all"
@@ -1816,7 +1828,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: acting.userId,
         scope: { workspaceLens: workspaceIdParam, projectLens: projectIdParam },
         windowHours,
-        kind,
+        kind: kindParam === undefined ? undefined : kind,
         lens,
         // An agent door reads owner-only, as `GET /focus-sessions` does
         // (decision C v1: `rosterReadFor` is false for every Hub caller).

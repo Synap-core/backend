@@ -1090,7 +1090,7 @@ export function validatePlanOperations(
           );
         }
         if (op.viewType === "bento" && !Array.isArray(op.config?.blocks)) {
-          push(i, "a bento needs `config.blocks` — the widgets it places");
+          push(i, "a bento needs `config.blocks` — the cells it places");
         }
         return;
       // ── A playbook's UI (cell + where it shows) ───────────────────────

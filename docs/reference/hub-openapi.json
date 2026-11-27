@@ -4225,7 +4225,7 @@
           "widgets": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/BentoWidget" },
-            "description": "Replacement widget arrangement for a bento view."
+            "description": "Replacement cell arrangement for a bento view."
           },
           "agentUserId": { "type": "string" },
           "reasoning": { "type": "string" },
@@ -5155,6 +5155,120 @@
           "access",
           "scene"
         ]
+      },
+      "BoardPlacementResult": {
+        "type": "object",
+        "properties": {
+          "viewId": { "type": "string" },
+          "documentId": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "created": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          },
+          "updated": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          },
+          "removed": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          }
+        },
+        "required": ["viewId", "documentId", "workspaceId"]
+      },
+      "BoardPlacementRequest": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "entity",
+                    "view",
+                    "cellInstance",
+                    "cellDefinition",
+                    "html",
+                    "artboard-deck",
+                    "automation",
+                    "url"
+                  ]
+                }
+              },
+              "required": ["kind"],
+              "additionalProperties": {},
+              "description": "One thing to place (`BoardResourceRef`): entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?}, html {name, html}, artboard-deck {preset, title?, slides:[{html, title?}]}, automation {automationId, mode}, url {url, title?}."
+            },
+            "maxItems": 50
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "w": { "type": "number" },
+              "h": { "type": "number" },
+              "frameId": { "type": "string" },
+              "layout": {
+                "type": "string",
+                "enum": ["stack", "grid", "flow", "freeform"]
+              }
+            }
+          },
+          "update": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "shapeId": { "type": "string" },
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "w": { "type": "number" },
+                "h": { "type": "number" },
+                "props": { "type": "object", "additionalProperties": {} }
+              },
+              "required": ["shapeId"]
+            },
+            "maxItems": 50
+          },
+          "remove": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 50
+          },
+          "idempotencyKey": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "sourceMessageId": { "type": "string" }
+        }
       },
       "McpServer": {
         "type": "object",
@@ -28823,8 +28937,8 @@
     "/views/{viewId}/arrange": {
       "post": {
         "tags": ["Views"],
-        "summary": "Reorder/arrange widgets in a bento view",
-        "description": "Replaces the widget arrangement for a bento-type view. Widget IDs must reference existing cell instances in the view.",
+        "summary": "Reorder/arrange cells in a bento view",
+        "description": "Replaces the cell arrangement for a bento-type view. Cell IDs must reference existing cell instances in the view.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -35455,6 +35569,369 @@
                         "live_unreadable",
                         "stored_unavailable",
                         "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whiteboards/{viewId}/placements": {
+      "post": {
+        "tags": ["Views"],
+        "summary": "Place things on a whiteboard, or change what it holds",
+        "description": "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; a refused call wrote nothing to the board, and everything granted lands in one write.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "viewId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BoardPlacementRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was placed, changed or proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardPlacementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request, unknown frame, shape or reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, read-only, or denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such board, or not in your space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The board failed to load or has no document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The board or a cell could not be read or made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realtime server or storage did not answer, or the save did not land",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The write took too long and may have landed: retry is safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -44985,7 +45462,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with no `kind` named every kind except CLOSED automation runs (`kind=all` keeps them; open, failed and cancelled runs stay), with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -45103,7 +45580,13 @@
                             "type": ["string", "null"],
                             "enum": ["session", "goal", null]
                           },
-                          "skipped": { "type": "boolean", "enum": [true] }
+                          "skipped": { "type": "boolean", "enum": [true] },
+                          "plannedFor": { "type": "string" },
+                          "dueBy": { "type": "string" },
+                          "closedAs": {
+                            "type": "string",
+                            "enum": ["done", "not_done"]
+                          }
                         },
                         "required": [
                           "id",
@@ -45144,7 +45627,8 @@
                               "waits_on_output",
                               "triggered",
                               "updated",
-                              "serves"
+                              "serves",
+                              "replaces"
                             ]
                           },
                           "from": { "type": "string" },

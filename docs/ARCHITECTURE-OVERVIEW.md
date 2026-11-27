@@ -9,7 +9,7 @@
 > file in the same commit.
 
 Synap is a **sovereign data pod** with a **governed agent runtime** on it. It is
-source-available (PolyForm Noncommercial 1.0.0; commercial use needs a license),
+open source (Apache-2.0),
 self-hostable, and it is deliberately not a product that owns your
 data. Three claims carry the whole thing:
 

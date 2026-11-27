@@ -64,6 +64,7 @@ import {
   OWED_SLOT_CLAUSES,
   owedSlotPredicateIn,
   owedSlotWhere,
+  sessionAgentEventClocks,
   sessionLastAgentActivitySql,
   sessionLastAgentWorkSql,
   sessionTurnInFlightSql,
@@ -376,6 +377,12 @@ export interface ListOwedSlotsParams {
    */
   withoutOpenPrFact?: boolean;
   /**
+   * The open-PR read to ask under `needsYouLens` (a needs-you read's ONE
+   * shared read, `sharedOpenPrRead`). Absent = `sessionIdsBlockingOpenPr`
+   * under the owner floor. A failed read THROWS.
+   */
+  openPrRead?: (sessionIds: readonly string[]) => Promise<Set<string>>;
+  /**
    * The caller never shows a need-you card (the waiting-on collector): skip
    * resolving the thing each ask holds up (`blockedThing`), which only the
    * card reads. The needs-you lens resolves it by default.
@@ -640,7 +647,21 @@ export async function listOwedSlots(
     );
   }
 
-  const rows = await db
+  // The needs-you lens reads each session's agent evidence. Its `events`
+  // terms come from ONE grouped pass over the page's candidates (the same
+  // conditions), joined in: read per session, they decompressed the events
+  // hypertable once each (`sessionAgentEventClocks`).
+  const clocks = params.needsYouLens
+    ? sessionAgentEventClocks(
+        "focus_sessions",
+        db
+          .select({ id: focusSessions.id })
+          .from(focusSessions)
+          .where(and(...conditions))
+          .getSQL()
+      )
+    : undefined;
+  const page = db
     .select({
       id: focusSessions.id,
       title: focusSessions.title,
@@ -657,14 +678,16 @@ export async function listOwedSlots(
             turnInFlight: drizzleSql<boolean>`${sessionTurnInFlightSql("focus_sessions")}`,
             lastAgentActivityAt: drizzleSql<
               Date | string | null
-            >`${sessionLastAgentActivitySql("focus_sessions")}`,
+            >`${sessionLastAgentActivitySql("focus_sessions", clocks)}`,
             lastAgentWorkAt: drizzleSql<
               Date | string | null
-            >`${sessionLastAgentWorkSql("focus_sessions")}`,
+            >`${sessionLastAgentWorkSql("focus_sessions", clocks)}`,
           }
         : {}),
     })
     .from(focusSessions)
+    .$dynamic();
+  const rows = await (clocks ? page.leftJoin(clocks.table, clocks.on) : page)
     .where(and(...conditions))
     // Oldest owed slot first, computed from the same predicate the WHERE uses.
     // Rows are capped at `limit` because a session yields at least one slot, so
@@ -674,15 +697,18 @@ export async function listOwedSlots(
     .limit(limit);
 
   // The needs-you rule reads whether the session blocks an open PR: one read
-  // for the page, the same helper every other classifier calls.
+  // for the page, the same helper every other classifier calls (or the
+  // caller's shared read). A failed read THROWS: never "no open PR".
   const blocking =
     params.needsYouLens && !params.withoutOpenPrFact
-      ? await (
-          await import("../dev-loop/open-pr-blocking.js")
-        ).sessionIdsBlockingOpenPr(
-          { userId },
-          rows.map((r) => r.id)
-        )
+      ? params.openPrRead
+        ? await params.openPrRead(rows.map((r) => r.id))
+        : await (
+            await import("../dev-loop/open-pr-blocking.js")
+          ).sessionIdsBlockingOpenPr(
+            { userId },
+            rows.map((r) => r.id)
+          )
       : new Set<string>();
   const slots = rows
     .flatMap((r) => {

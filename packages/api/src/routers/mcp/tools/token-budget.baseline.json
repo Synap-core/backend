@@ -82,6 +82,7 @@
     "synap_organize_library": 2021,
     "synap_orient": 3369,
     "synap_pause_worker": 1341,
+    "synap_place_on_board": 3180,
     "synap_post_message": 7001,
     "synap_project_use_workspace": 1348,
     "synap_promote_cell_to_renderer": 2152,
@@ -129,8 +130,8 @@
     "synap_update_skill": 2648,
     "synap_update_space_brief": 1296,
     "synap_update_track": 5336,
-    "synap_update_view": 1615,
-    "synap_update_view_content": 1281,
+    "synap_update_view": 1610,
+    "synap_update_view_content": 1252,
     "synap_update_workspace": 848,
     "synap_wait_for_answer": 4727
   }

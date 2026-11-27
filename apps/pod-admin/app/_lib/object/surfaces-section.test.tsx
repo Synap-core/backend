@@ -136,7 +136,7 @@ describe("SurfacesSection", () => {
   it("says a failed read, with a retry, never an empty list", () => {
     read = { isError: true, data: undefined };
     const html = draw();
-    expect(html).toContain("couldn’t be read");
+    expect(html).toContain("Couldn’t load surfaces");
   });
 
   it("says when a store could not be read, even with no rows", () => {

@@ -31,6 +31,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  not,
   or,
   focusSessions,
   links,
@@ -48,7 +49,11 @@ import {
   type StatusSinceWindows,
 } from "./session-status-filter.js";
 import { triagePendingWhere, notTriagePendingWhere } from "./triage.js";
-import { sessionKindWhere, sessionAutomationWhere } from "./session-kind.js";
+import {
+  closedAutomationRunWhere,
+  sessionKindWhere,
+  sessionAutomationWhere,
+} from "./session-kind.js";
 import type { SessionKindFilter } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "./session-statuses.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -153,6 +158,12 @@ export interface SessionListQuery {
    * `kind: "all"` to see them beside the person's work.
    */
   subject?: SessionSubject;
+  /**
+   * Leave out CLOSED automation runs (`closedAutomationRunWhere`): the work
+   * graph's DEFAULT window, when its caller named no kind. A kind named
+   * explicitly (`all` included) keeps them.
+   */
+  withoutClosedAutomationRuns?: boolean;
 }
 
 /**
@@ -220,6 +231,7 @@ export function sessionListConditions({
   parentSessionId,
   roster,
   subject,
+  withoutClosedAutomationRuns,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [
     sessionReadableWhere({ userId: requireUserId(userId), roster }),
@@ -291,6 +303,9 @@ export function sessionListConditions({
     conditions.push(workAndTrackedRunsWhere());
   } else if (kind !== "all") {
     conditions.push(sessionKindWhere(kind));
+  }
+  if (withoutClosedAutomationRuns) {
+    conditions.push(not(closedAutomationRunWhere()));
   }
 
   // FLOW-DEFINITION filters, so a playbook or automation detail page lists its
