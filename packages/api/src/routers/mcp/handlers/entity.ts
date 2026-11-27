@@ -574,7 +574,7 @@ export const entityHandlers = {
       const offKey = await surfaceKeyRefusal({
         keyWorkspaceId: ctx.keyWorkspaceId,
         userId,
-        anchor: args.attachTo as SurfaceAnchor,
+        anchor: args.attachTo,
         bodyWorkspaceId: requestedWorkspaceId,
       });
       if (offKey) throw new Error(offKey.error);
