@@ -308,6 +308,17 @@ describe("the generic backend names no domain (per-file ratchet over the generic
     ).toEqual([]);
   });
 
+  // The two mechanism tests below start from counts AT the baseline, not from
+  // the live scan, so a real rise reds only the ratchet test above (one cause,
+  // one red; seen in the negative control of 2026-11-27).
+  const atCeiling: Counts = new Map();
+  for (const g of GROUPS)
+    for (const [f, n] of Object.entries(baseline.groups[g].files)) {
+      const c = atCeiling.get(f) ?? { dev: 0, domain: 0 };
+      c[g] = n;
+      atCeiling.set(f, c);
+    }
+
   it("the update never raises a ceiling or admits a new file, and the rise stays red", () => {
     const [victim, ceiling] = Object.entries(baseline.groups.dev.files).sort(
       (a, b) => b[1] - a[1]
@@ -319,7 +330,7 @@ describe("the generic backend names no domain (per-file ratchet over the generic
     const base = structuredClone(baseline.groups);
     base.dev.files[victim] = 1;
     const current: Counts = new Map([
-      ...scan.perFile,
+      ...atCeiling,
       ["packages/types/src/new-file.ts", { dev: 2, domain: 1 }],
     ]);
     const next = lowerBaseline(current, base);
@@ -356,7 +367,7 @@ describe("the generic backend names no domain (per-file ratchet over the generic
         extra.files,
         "the test file is skipped, the source file is read"
       ).toBe(1);
-      const merged: Counts = new Map([...scan.perFile, ...extra.perFile]);
+      const merged: Counts = new Map([...atCeiling, ...extra.perFile]);
       expect(rises(merged, baseline.groups)).toEqual([
         "dev packages/api/src/services/probe/probe.ts: baseline=0 current=1",
       ]);
