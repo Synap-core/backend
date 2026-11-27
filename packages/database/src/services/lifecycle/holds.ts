@@ -14,9 +14,9 @@
  *
  * ONE helper, five questions: the holds of given subjects (a read, the
  * carried hold of a `paused → paused` move), the holds whose `until.date` has
- * come (the hourly resume sweep), the holds waiting on a thing that just
+ * come (the resume sweep), the holds waiting on a thing that just
  * moved (the `until.moves` resume), the holds waiting on a dev fact
- * (`pr:` / `main:` / `job:` / `ai:`, the hourly sweep's second half), every
+ * (`pr:` / `main:` / `job:` / `ai:`, the sweep's second half), every
  * hold waiting on a thing's move (the sweep's safety net for a lost wake, read
  * with that thing's moves, `listSubjectMoves`), and the holds whose `reviewBy`
  * has passed (the status watcher, W6). A passed `reviewBy` never moves
@@ -67,7 +67,7 @@ export interface CurrentHold extends Required<HoldSubjectRef> {
   /** The person the paused thing's move was attributed to. */
   userId: string;
   workspaceId: string | null;
-  /** `until.date` has come: the hourly sweep resumes it. */
+  /** `until.date` has come: the resume sweep resumes it. */
   resumeDue: boolean;
   /** `reviewBy` has passed: a signal for the watcher, never a move. */
   reviewDue: boolean;
@@ -313,7 +313,7 @@ export interface SubjectMove {
  * Every move the transition log recorded for these things, oldest first: what
  * a hold on a thing's move (`until.moves` = `entity:<id>`, ...) is decided on
  * when the move's own delivery to the hold-resume reactor was not seen (the
- * hourly sweep, a pause recorded after the move). Read by the subject index
+ * sweep, a pause recorded after the move). Read by the subject index
  * (0374); one thing has few moves. A failed read throws: it is never "no move".
  */
 export async function listSubjectMoves(

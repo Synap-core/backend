@@ -2,7 +2,7 @@
  * HOLD RESUME (status-flow plan W4) — a paused thing goes back to the status
  * it left when what it waited on is over:
  *
- *   - `until.date`: the hourly sweep (this queue with no data) resumes every
+ *   - `until.date`: the sweep (this queue with no data, every 10 minutes) resumes every
  *     current hold whose date has come;
  *   - `until.moves`: the reactor below sends this queue the transition of
  *     every move; the job resumes the holds that waited on that thing (and,
@@ -11,18 +11,18 @@
  *     process without the reactor) or a pause recorded after the move is
  *     caught on the thing's recorded moves (`subjectHoldsMet`): when a pause
  *     on a thing is recorded (`pausedOn`, the reactor below) and on every
- *     hourly sweep;
+ *     sweep;
  *   - `until.moves` naming a DEV FACT (`pr:<owner/name>#<n>`,
  *     `main:<owner/name>`, `job:<name>`, plan P1.4): the observation door
  *     (api `record-observation.ts`) sends this queue `devFact` = that ref
- *     when a fact that may be it is recorded, and the hourly sweep re-checks
+ *     when a fact that may be it is recorded, and the sweep re-checks
  *     every dev hold (a fact recorded while the queue was down, or before
  *     the pause). Either way the ONE rule decides (`holdDevRefMet`,
  *     `@synap-core/types`) over the facts the hold's owner recorded.
  *   - `until.moves` = `ai:available`: the pod's pull of its AI availability
  *     (`cp-entitlement-sync`) wakes this queue (`wakeAiHolds`) when it sees
  *     AI come back and on every tick while AI holds wait and AI is
- *     available; the hourly sweep re-checks every AI hold too. Met while the
+ *     available; the sweep re-checks every AI hold too. Met while the
  *     latest pull reads available, checked after the pause began
  *     (`aiHoldMet`, over the pod's own record: availability is the pod's).
  *   - A session's CHECK GATE hold (`check:<stage>`, on AI or on a dated
@@ -37,7 +37,7 @@
  *     the reactor below sends it on every proposal's transition (a decision,
  *     an expiry, a withdrawal) and when a pause that names a wait is recorded
  *     (the Inngest trap: an answer given BEFORE the wait began must still
- *     resume it, at once); the hourly sweep re-checks every wait hold. Met = the slot of a session the hold's
+ *     resume it, at once); the sweep re-checks every wait hold. Met = the slot of a session the hold's
  *     OWNER owns carries an answer, or that session ENDED (closed, cancelled,
  *     failed) without one — nobody will answer it now, so the wait is over,
  *     as a proposal's is when it expires — or the proposal (filed under a
@@ -146,12 +146,18 @@ export async function wakeAiHolds(afterSeconds = 0): Promise<void> {
       : {}
   );
 }
-/** Hourly: a hold whose date has come resumes within the hour. */
-export const HOLD_RESUME_CRON = "23 * * * *";
+/**
+ * Every 10 minutes: a hold whose date has come resumes within 10 minutes, and
+ * a hold on a thing's move whose one wake was lost is resumed by the sweep
+ * within 10 minutes, not an hour (finding 4302f124). Measured on PGlite with
+ * the 0374 indexes: the sweep's four hold reads cost ~0.4 s over 200k
+ * transitions and ~2.4 s over 1M; the reactor's one-thing read 3 ms.
+ */
+export const HOLD_RESUME_CRON = "3,13,23,33,43,53 * * * *";
 
 /**
  * What moved, when the job was sent by the reactor, or the dev fact that may
- * have landed, when the observation door sent it (both absent: the hourly
+ * have landed, when the observation door sent it (both absent: the
  * sweep).
  */
 export interface HoldResumeJobData {
@@ -180,7 +186,7 @@ export interface HoldResumeJobData {
 
 /**
  * The facts the dev holds are decided on — ONE query per kind of ref, for
- * every hold at once (never one per hold: the hourly sweep re-checks every
+ * every hold at once (never one per hold: the sweep re-checks every
  * dev hold). Each hold then reads its own rows: its owner's, of its ref,
  * after its pause began where the ref is decided by the newest fact (a main,
  * a job). Returned per hold, in `held` order.
@@ -750,7 +756,7 @@ export async function handleHoldResume(
   // service's entitlement cache lags a top-up. Graded again once it caught up.
   if (aiStillHeld) await wakeAiHolds(AI_HOLD_RETRY_AFTER_S);
   // A move happens once: a failed wake is retried by pg-boss (what already
-  // resumed is no longer held, so a retry never moves it twice). The hourly
+  // resumed is no longer held, so a retry never moves it twice). The
   // sweep needs no retry: the next tick finds the hold still due.
   if (woken && failure) throw failure;
   if (held.length > 0) {
