@@ -188,10 +188,13 @@ describe("deriveDeviceStatus", () => {
       )
     ).toBe("offline");
   });
-  it("offline when retired, whatever it last said", () => {
+  it("retired when retired, whatever it last said: never a plain offline", () => {
     expect(
       deriveDeviceStatus({ lastReportAt: ago(1000), retiredAt: ago(500) }, now)
-    ).toBe("offline");
+    ).toBe("retired");
+    expect(
+      deriveDeviceStatus({ lastReportAt: null, retiredAt: ago(500) }, now)
+    ).toBe("retired");
   });
 });
 

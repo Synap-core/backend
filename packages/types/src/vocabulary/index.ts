@@ -58,7 +58,7 @@ import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type { ProcessStepRunnerKind } from "../processes/steps.js";
-import type { DeviceKind, DeviceStatus } from "../device-manifest/index.js";
+import type { DeviceStatus } from "../device-manifest/index.js";
 import type { ProcessNeed } from "../processes/read.js";
 import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
 import type {
@@ -1053,6 +1053,21 @@ const OBJECT_NOUN_ROWS = {
   bento: "Bento",
   whiteboard: "Whiteboard",
   site: "Site",
+  // The kinds of a device (`DEVICE_KINDS`, `@synap-core/types/device-manifest`)
+  // that the registry has no kind for: the Devices page names a device's kind
+  // through `resolveObjectNoun(kind)`. `computer` is an alias of `machine`
+  // (OBJECT_KIND_ALIASES): one word for a computer.
+  vm: "Virtual machine",
+  container: "Container",
+  cloud_server: "Cloud server",
+  storage: "Storage",
+  phone: "Phone",
+  printer: "Printer",
+  camera: "Camera",
+  sensor: "Sensor",
+  // `other` keeps the word it humanized to, so no other "other" token reads
+  // differently; only its French is new.
+  other: "Other",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1099,6 +1114,15 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   bento: "Bentos",
   whiteboard: "Whiteboards",
   site: "Sites",
+  vm: "Virtual machines",
+  container: "Containers",
+  cloud_server: "Cloud servers",
+  storage: "Storage",
+  phone: "Phones",
+  printer: "Printers",
+  camera: "Cameras",
+  sensor: "Sensors",
+  other: "Others",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -2608,37 +2632,19 @@ export const STEP_RUNNER_KIND_LABELS = {
 export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
 
 /**
- * What a device IS, in a person's words (`DEVICE_KINDS`,
- * `@synap-core/types/device-manifest`): the Devices page's kind mark and
- * filter. Keyed by EVERY kind: a kind added without its words stops the
- * build. The `device` noun is `OBJECT_KINDS.device`'s.
- */
-export const DEVICE_KIND_LABELS = {
-  computer: "Computer",
-  vm: "Virtual machine",
-  container: "Container",
-  cloud_server: "Cloud server",
-  storage: "Storage",
-  phone: "Phone",
-  printer: "Printer",
-  camera: "Camera",
-  sensor: "Sensor",
-  other: "Other",
-} as const satisfies Readonly<Record<DeviceKind, string>>;
-
-/** The device kind rows, exactly typed: the keys of the `deviceKind.*` catalog. */
-export type DeviceKindLabelRows = typeof DEVICE_KIND_LABELS;
-
-/**
  * A device's status, the read verdict `deriveDeviceStatus` (`DEVICE_STATUSES`,
- * `@synap-core/types/device-manifest`). `unknown` is a device that never
- * reported, so it says that. Keyed by EVERY status.
+ * `@synap-core/types/device-manifest`). Its own door, not `STATUS_LABELS`:
+ * `unknown` here is a device that never reported (so it says that, where the
+ * generic status reads "Unknown"), and `retired` is a device the person
+ * removed ("Removed", the group the Devices page folds it into). Keyed by
+ * EVERY status.
  */
 export const DEVICE_STATUS_LABELS = {
   online: "Online",
   offline: "Offline",
   degraded: "Degraded",
   unknown: "Not reported yet",
+  retired: "Removed",
 } as const satisfies Readonly<Record<DeviceStatus, string>>;
 
 /** The device status rows, exactly typed: the keys of the `deviceStatus.*` catalog. */
@@ -2822,24 +2828,6 @@ export function resolveStepRunnerLabel(
   return (
     translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
     STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
-  );
-}
-
-/**
- * What a device is (`vm` → "Virtual machine"), in `opts.locale` (else the
- * ambient catalog locale), through `deviceKind.<kind>`. An unknown kind (a
- * newer pod's) humanizes; none is "".
- */
-export function resolveDeviceKindLabel(
-  kind: string | null | undefined,
-  opts?: { locale?: Locale }
-): string {
-  if (!kind) return "";
-  const key = kind.trim().toLowerCase();
-  if (!Object.hasOwn(DEVICE_KIND_LABELS, key)) return humanizeToken(kind);
-  return (
-    translatedWord(`deviceKind.${key}`, catalogLocaleOf(opts?.locale)) ??
-    DEVICE_KIND_LABELS[key as keyof DeviceKindLabelRows]
   );
 }
 
@@ -4568,7 +4556,6 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
-  deviceKinds: DEVICE_KIND_LABELS,
   deviceStatuses: DEVICE_STATUS_LABELS,
   needs: NEED_LABELS,
   intents: INTENT_LABELS,

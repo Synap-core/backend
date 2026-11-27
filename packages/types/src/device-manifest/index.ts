@@ -444,6 +444,7 @@ export const DEVICE_STATUSES = [
   "offline",
   "degraded",
   "unknown",
+  "retired",
 ] as const;
 export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
 
@@ -461,9 +462,12 @@ export const DEVICE_REPORT_WRITE_MS = 60 * 1000;
  * THE status of a device, at read time:
  * - `unknown`: it never reported (a manual device, or a computer whose runner
  *   has not run since the registry existed);
- * - `offline`: its last report is older than the window, or it is retired;
+ * - `offline`: its last report is older than the window;
  * - `degraded`: it reports, and says its own health is degraded or failing;
- * - `online`: it reports.
+ * - `online`: it reports;
+ * - `retired`: the person removed it (a revoked computer): whatever it last
+ *   said, it is not a device that is merely off, and a reconnect brings it
+ *   back.
  */
 export function deriveDeviceStatus(
   device: {
@@ -473,7 +477,7 @@ export function deriveDeviceStatus(
   },
   now: Date | number = Date.now()
 ): DeviceStatus {
-  if (device.retiredAt) return "offline";
+  if (device.retiredAt) return "retired";
   if (!device.lastReportAt) return "unknown";
   const at = new Date(device.lastReportAt).getTime();
   if (Number.isNaN(at)) return "unknown";

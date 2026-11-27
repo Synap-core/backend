@@ -749,7 +749,13 @@ describe("a revoked computer retires its device; a reconnect brings it back", ()
     const names = async (includeRetired: boolean) =>
       (await fleetAs(A).list({ includeRetired })).devices.map((d) => d.name);
     expect(await names(false)).not.toContain("old-box");
-    expect(await names(true)).toContain("old-box");
+    // The Devices page folds it into "Removed": listed when asked, with its
+    // retirement time, and never read as a device that is merely off.
+    const removed = (
+      await fleetAs(A).list({ includeRetired: true })
+    ).devices.find((d) => d.name === "old-box");
+    expect(removed?.retiredAt).not.toBeNull();
+    expect(removed?.status).toBe("retired");
 
     // The terminal comes back as another host on the same computer.
     await ensureMachineAgent({

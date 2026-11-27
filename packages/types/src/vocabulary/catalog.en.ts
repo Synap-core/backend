@@ -9,8 +9,8 @@
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
  *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`,
- *   `stepRunner.<kind>`, `deviceKind.<kind>`, `deviceStatus.<status>`,
- *   `need.<slug>`, `intent.<slug>`. A row added to a table is a key of this
+ *   `stepRunner.<kind>`, `deviceStatus.<status>`, `need.<slug>`,
+ *   `intent.<slug>`. A row added to a table is a key of this
  *   catalog, and `Catalog<VocabularyEn>` then refuses every translation
  *   without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
@@ -31,7 +31,6 @@ import type {
   StatusLabelRows,
   WaitKindLabelRows,
   StepRunnerKindLabelRows,
-  DeviceKindLabelRows,
   DeviceStatusLabelRows,
   NeedLabelRows,
   IntentLabelRows,
@@ -63,7 +62,6 @@ type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 type WaitKindKey = `waitKind.${keyof WaitKindLabelRows & string}`;
 type StepRunnerKey = `stepRunner.${keyof StepRunnerKindLabelRows & string}`;
-type DeviceKindKey = `deviceKind.${keyof DeviceKindLabelRows & string}`;
 type DeviceStatusKey = `deviceStatus.${keyof DeviceStatusLabelRows & string}`;
 type NeedKey = `need.${keyof NeedLabelRows & string}`;
 type IntentKey = `intent.${keyof IntentLabelRows & string}`;
@@ -226,7 +224,6 @@ export type VocabularyEn = Readonly<
     | RunnerStateKey
     | WaitKindKey
     | StepRunnerKey
-    | DeviceKindKey
     | DeviceStatusKey
     | NeedKey
     | IntentKey,
@@ -248,7 +245,6 @@ export interface VocabularyTables {
   readonly runnerStates: Readonly<Record<string, string>>;
   readonly waitKinds: Readonly<Record<string, string>>;
   readonly stepRunners: Readonly<Record<string, string>>;
-  readonly deviceKinds: Readonly<Record<string, string>>;
   readonly deviceStatuses: Readonly<Record<string, string>>;
   readonly needs: Readonly<Record<string, string>>;
   readonly intents: Readonly<Record<string, string>>;
@@ -294,9 +290,6 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   }
   for (const [kind, label] of Object.entries(tables.stepRunners)) {
     words[`stepRunner.${kind}`] = label;
-  }
-  for (const [kind, label] of Object.entries(tables.deviceKinds)) {
-    words[`deviceKind.${kind}`] = label;
   }
   for (const [status, label] of Object.entries(tables.deviceStatuses)) {
     words[`deviceStatus.${status}`] = label;

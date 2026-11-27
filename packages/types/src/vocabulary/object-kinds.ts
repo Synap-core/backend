@@ -887,6 +887,9 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // link (Surfaces P3): the same kind as a cell.
   cell_instance: "cell",
   cell_instances: "cell",
+  // A device of kind `computer` (`DEVICE_KINDS`) is what the registry calls a
+  // machine: one word, "Computer", wherever either token is read.
+  computer: "machine",
   // The package layer's tag for a bundle (`workspace` package tagged `suite`).
   suite: "pack",
   suites: "pack",

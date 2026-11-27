@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEVICE_KIND_LABELS,
   DEVICE_STATUS_LABELS,
-  resolveDeviceKindLabel,
+  humanizeToken,
   resolveDeviceStatusLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
@@ -34,26 +33,36 @@ describe("the Device noun", () => {
   });
 });
 
-describe("device kinds and statuses", () => {
-  it("names exactly the declared kinds, in English and in French", () => {
-    expect(Object.keys(DEVICE_KIND_LABELS).sort()).toEqual(
-      [...DEVICE_KINDS].sort()
-    );
+describe("device kinds: the noun door names each one", () => {
+  it("every declared kind has its own words in English and in French", () => {
+    // A row of its own (`computer` through its alias, `machine`), never a
+    // humanized token.
     for (const kind of DEVICE_KINDS) {
-      const key = `deviceKind.${kind}` as const;
-      expect(vocabularyEn[key]).toBe(DEVICE_KIND_LABELS[kind]);
-      expect(vocabularyFr[key], key).toBeTruthy();
-      expect(resolveDeviceKindLabel(kind, { locale: "fr" })).toBe(
-        vocabularyFr[key]
+      const slug = kind === "computer" ? "machine" : kind;
+      const one = `kind.${slug}.one` as keyof typeof vocabularyFr;
+      const other = `kind.${slug}.other` as keyof typeof vocabularyFr;
+      expect(vocabularyFr[one], kind).toBeTruthy();
+      expect(resolveObjectNoun(kind, "fr"), kind).toBe(vocabularyFr[one]);
+      expect(resolveObjectNounPlural(kind, "fr"), kind).toBe(
+        vocabularyFr[other]
       );
     }
-    expect(resolveDeviceKindLabel("vm")).toBe("Virtual machine");
-    expect(resolveDeviceKindLabel("vm", { locale: "fr" })).toBe(
-      "Machine virtuelle"
-    );
-    expect(resolveDeviceKindLabel("cloud_server")).toBe("Cloud server");
   });
 
+  it("reads `vm` as a Virtual machine and `computer` as the Computer noun", () => {
+    expect(resolveObjectNoun("vm")).toBe("Virtual machine");
+    expect(resolveObjectNounPlural("vm")).toBe("Virtual machines");
+    expect(resolveObjectNoun("vm", "fr")).toBe("Machine virtuelle");
+    expect(resolveObjectNoun("cloud_server")).toBe("Cloud server");
+    expect(resolveObjectNoun("printer", "fr")).toBe("Imprimante");
+    expect(resolveObjectNoun("computer")).toBe(resolveObjectNoun("machine"));
+    expect(resolveObjectNoun("computer", "fr")).toBe("Ordinateur");
+    expect(resolveObjectNoun("other")).toBe(humanizeToken("other"));
+    expect(resolveObjectNoun("other", "fr")).toBe("Autre");
+  });
+});
+
+describe("device statuses: their own door", () => {
   it("names exactly the declared statuses, in English and in French", () => {
     expect(Object.keys(DEVICE_STATUS_LABELS).sort()).toEqual(
       [...DEVICE_STATUSES].sort()
@@ -71,15 +80,11 @@ describe("device kinds and statuses", () => {
       "Hors ligne"
     );
     expect(resolveDeviceStatusLabel("unknown")).toBe("Not reported yet");
+    expect(resolveDeviceStatusLabel("retired")).toBe("Removed");
   });
 
-  it("an unknown kind or status humanizes, never leaks; none is empty", () => {
-    expect(resolveDeviceKindLabel("drone")).toBe("Drone");
-    expect(resolveDeviceKindLabel("smart_plug", { locale: "fr" })).toBe(
-      "Smart plug"
-    );
+  it("an unknown status humanizes, never leaks; none is empty", () => {
     expect(resolveDeviceStatusLabel("rebooting")).toBe("Rebooting");
-    expect(resolveDeviceKindLabel(null)).toBe("");
     expect(resolveDeviceStatusLabel(undefined)).toBe("");
   });
 });
