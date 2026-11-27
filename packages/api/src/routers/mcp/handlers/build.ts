@@ -259,10 +259,24 @@ async function renderPlaybookDoorOutcome<T>(
  * `mergeProposalRevision`; this door simply had no way to express either, so an
  * agent could only ever rewrite the narrative and never the payload it described.
  */
-const REVISE_PATCH_SCHEMA = z.object({
-  kind: z.enum(["inner", "envelope"]),
-  fields: z.record(z.string(), z.unknown()),
-});
+const REVISE_PATCH_SCHEMA = z
+  .object({
+    kind: z.enum(["inner", "envelope"]),
+    fields: z.record(z.string(), z.unknown()).default({}),
+    textEdits: z
+      .array(
+        z.object({
+          field: z.string().min(1),
+          find: z.string().min(1),
+          replace: z.string(),
+        })
+      )
+      .min(1)
+      .optional(),
+  })
+  .refine((p) => Object.keys(p.fields).length > 0 || p.textEdits, {
+    message: "fields or textEdits",
+  });
 
 /**
  * What match_playbooks actually searched when it auto-picked a workspace —
@@ -1657,7 +1671,7 @@ export const buildHandlers: McpHandlerMap = {
       if (!parsed.success) {
         return ok({
           error:
-            'Invalid patch. Expected { kind: "inner" | "envelope", fields: object }.',
+            'Invalid patch. Expected { kind: "inner" | "envelope", fields?: object, textEdits?: [{ field, find, replace }] } with fields or textEdits.',
         });
       }
       patch = parsed.data;

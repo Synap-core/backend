@@ -7245,8 +7245,22 @@ export function toolDefinitions(): ToolDefinition[] {
                 description:
                   "The field edits to merge. Only the keys you pass change.",
               },
+              textEdits: {
+                type: "array",
+                description:
+                  "Change part of a long text field (a cell's source) without resending it: each `find` must occur exactly once in `field`.",
+                items: {
+                  type: "object",
+                  properties: {
+                    field: { type: "string" },
+                    find: { type: "string" },
+                    replace: { type: "string" },
+                  },
+                  required: ["field", "find", "replace"],
+                },
+              },
             },
-            required: ["kind", "fields"],
+            required: ["kind"],
           },
         },
         required: ["proposalId"],
