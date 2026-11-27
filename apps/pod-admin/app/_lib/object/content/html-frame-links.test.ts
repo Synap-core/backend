@@ -18,6 +18,7 @@ function env(over: Partial<FrameLinkEnv> = {}) {
     activated: () => true,
     here: (href) => calls.push(`here ${href}`),
     newTab: (href) => calls.push(`tab ${href}`),
+    confirmExternal: (l) => calls.push(`ask ${l.host} ${l.href}`),
     ...over,
   };
   return { e, calls };
@@ -40,14 +41,22 @@ describe("handleFrameLink — only THIS frame can ask the reader's browser to go
     expect(calls).toEqual([`here ${POD}/open/abc`]);
   });
 
-  it("an outside link opens a new tab and never replaces the console's", () => {
+  it("an outside link opens nothing on the page's word: the console asks, naming the host, with the query and fragment cut (H2)", () => {
     const { e, calls } = env();
-    handleFrameLink(
-      { source: FRAME, data: link("https://example.com/a") },
+    const done = handleFrameLink(
+      {
+        source: FRAME,
+        data: link("https://evil.example/a?d=%7B%22secret%22%7D#more"),
+      },
       FRAME,
       e
     );
-    expect(calls).toEqual(["tab https://example.com/a"]);
+    expect(done).toEqual({
+      action: "external",
+      href: "https://evil.example/a",
+      host: "evil.example",
+    });
+    expect(calls).toEqual(["ask evil.example https://evil.example/a"]);
   });
 
   it("a message from any other window is not the frame asking", () => {
@@ -126,7 +135,10 @@ describe("handleFrameLink — only THIS frame can ask the reader's browser to go
       FRAME,
       e
     );
-    expect(calls).toEqual([`tab ${POD}/open/a`, `here ${CONSOLE}/open/a`]);
+    expect(calls).toEqual([
+      `ask pod.example.live ${POD}/open/a`,
+      `here ${CONSOLE}/open/a`,
+    ]);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   HOLD_REQUIRED_MESSAGE,
   HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
   HOLD_WAIT_MOVES_HELP,
+  HOLD_WAKE_NOT_A_SESSION_MESSAGE,
   decideMoveHold,
   holdProblem,
   holdWaitSlotMatches,
@@ -262,6 +263,65 @@ describe("decideMoveHold — review fixes", () => {
       },
     });
     expect(d.ok && d.hold).toMatchObject({ since: since.toISOString() });
+  });
+});
+
+describe("a hold that asks to wake its holder (`wake`)", () => {
+  const given = {
+    on: "thing" as const,
+    reason: "waits for the contract",
+    until: { moves: "entity:e1" },
+    wake: true,
+  };
+
+  it("is recorded on a session's pause, by an agent or a person", () => {
+    for (const actorKind of ["agent", "human"] as const) {
+      const d = decideMoveHold({ ...pause, actorKind, given, wakeable: true });
+      expect(d.ok && d.hold).toMatchObject({
+        wake: true,
+        until: { moves: "entity:e1" },
+      });
+    }
+  });
+
+  it("is refused on a pause that is not a session's: nobody holds it to wake", () => {
+    expect(decideMoveHold({ ...pause, actorKind: "agent", given })).toEqual({
+      ok: false,
+      code: "HOLD_INVALID",
+      message: HOLD_WAKE_NOT_A_SESSION_MESSAGE,
+    });
+  });
+
+  it("is absent from the record unless asked: a hold without it keeps its shape", () => {
+    for (const wake of [undefined, false, null]) {
+      const d = decideMoveHold({
+        ...pause,
+        actorKind: "agent",
+        given: { ...given, wake },
+        wakeable: true,
+      });
+      expect(d.ok).toBe(true);
+      expect(d.ok && d.hold).not.toHaveProperty("wake");
+    }
+  });
+
+  it("carries across a move between two pauses, as the rest of the hold does", () => {
+    const first = decideMoveHold({
+      ...pause,
+      actorKind: "agent",
+      given,
+      wakeable: true,
+    });
+    const current = first.ok ? first.hold : null;
+    const stale = decideMoveHold({
+      ...pause,
+      from: "paused",
+      fromCategory: "paused",
+      actorKind: "system",
+      current,
+      wakeable: true,
+    });
+    expect(stale.ok && stale.hold).toMatchObject({ wake: true });
   });
 });
 

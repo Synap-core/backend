@@ -24,18 +24,41 @@ const SPACE = "11111111-1111-4111-8111-111111111111";
 const ENTITY = "22222222-2222-4222-8222-222222222222";
 const VIEW = "33333333-3333-4333-8333-333333333333";
 
+/**
+ * A fake frame window and the reply port its document hands over in its hello
+ * (`frame-channel.ts`). What reaches the frame on the port is in `posted`
+ * (target "port"); anything posted to the WINDOW is in `windowPosted`, which
+ * must stay empty: a window post reaches whatever document the frame holds
+ * by then (security review H1).
+ */
 function fakeFrame() {
   const posted: Array<{ message: Record<string, unknown>; target: string }> =
     [];
+  const windowPosted: Array<{ message: unknown; target: string }> = [];
   const frame: CellBridgeTarget = {
-    postMessage: (message, target) =>
-      posted.push({ message: message as Record<string, unknown>, target }),
+    postMessage: (message, target) => windowPosted.push({ message, target }),
   };
-  return { frame, posted };
+  const port = {
+    postMessage: (message: unknown) => {
+      if ((message as { type?: unknown }).type === "synap:channel:ready")
+        return;
+      posted.push({
+        message: message as Record<string, unknown>,
+        target: "port",
+      });
+    },
+  };
+  const hello = {
+    source: frame,
+    origin: "null",
+    data: { type: "synap:hello" },
+    ports: [port],
+  };
+  return { frame, posted, windowPosted, hello };
 }
 
 function setup(overrides: Partial<CellFrameHostOptions> = {}) {
-  const { frame, posted } = fakeFrame();
+  const { frame, posted, windowPosted, hello } = fakeFrame();
   let current: CellBridgeTarget | null = frame;
   const read = vi.fn(async () => ({ items: [1] }));
   const write = vi.fn(
@@ -48,6 +71,7 @@ function setup(overrides: Partial<CellFrameHostOptions> = {}) {
     status: vi.fn(),
     resize: vi.fn(),
     navigate: vi.fn(),
+    openExternal: vi.fn(),
     toast: vi.fn(),
     openPanel: vi.fn(),
     openSurface: vi.fn(),
@@ -65,9 +89,12 @@ function setup(overrides: Partial<CellFrameHostOptions> = {}) {
   });
   const send = (data: unknown, source: unknown = frame, origin = "null") =>
     host({ source, origin, data });
+  // The document says hello first, handing over its reply port.
+  void host(hello);
   return {
     frame,
     posted,
+    windowPosted,
     read,
     write,
     on,
@@ -109,7 +136,7 @@ describe("the module frame host", () => {
             sdkVersion: "2",
           },
         },
-        target: "*",
+        target: "port",
       },
     ]);
   });
@@ -183,6 +210,34 @@ describe("the module frame host", () => {
       entityId: "e1",
     });
     expect(on.contextUpdate).toHaveBeenCalledWith({ page: 2 });
+  });
+
+  it("a web address is never navigated to: the host is asked to confirm it, cut to its origin and path (H2)", async () => {
+    const { on, send } = setup();
+    const secret = encodeURIComponent('{"title":"the viewer\'s secret"}');
+    await send({
+      type: "synap:navigate",
+      target: {
+        type: "url",
+        url: `https://evil.example/x?d=${secret}#${secret}`,
+      },
+    });
+    expect(on.navigate).not.toHaveBeenCalled();
+    expect(on.openExternal).toHaveBeenCalledWith({
+      href: "https://evil.example/x",
+      host: "evil.example",
+    });
+  });
+
+  it("a host with no external door opens no web address at all", async () => {
+    const navigate = vi.fn();
+    const { send } = setup({ on: { navigate } });
+    await send({
+      type: "synap:navigate",
+      target: { type: "url", url: "https://example.com/" },
+    });
+    await send({ type: "synap:navigate", target: { type: "view", id: "v1" } });
+    expect(navigate.mock.calls).toEqual([[{ type: "view", id: "v1" }]]);
   });
 });
 

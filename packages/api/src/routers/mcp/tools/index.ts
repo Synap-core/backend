@@ -162,7 +162,10 @@ import {
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
 import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
-import { MOVE_HOLD_INPUT } from "../../../services/lifecycle/hold-input.js";
+import {
+  MOVE_HOLD_INPUT,
+  SESSION_MOVE_HOLD_INPUT,
+} from "../../../services/lifecycle/hold-input.js";
 
 /**
  * A plan step's time (B5), one wire shape for start/update_session and the
@@ -2906,7 +2909,7 @@ export function toolDefinitions() {
           .describe(
             "With `status`: the status you read the session in (synap_get_session) — send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing."
           ),
-        ...MOVE_HOLD_INPUT,
+        ...SESSION_MOVE_HOLD_INPUT,
         progress: z
           .number()
           .optional()

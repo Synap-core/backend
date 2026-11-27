@@ -57,6 +57,13 @@ export const HELD_RUN_META_KEY = "heldRun";
 export const MESSAGE_WAKE_META_KEY = "messageWake";
 
 /**
+ * The wakes a resumed hold gave the session's holder in the current window
+ * (`wake-session-holder.ts`): `{ since, count }`. Server-owned: a forged
+ * count would mute the holder, a forged window would lift the cap.
+ */
+export const HOLDER_WAKE_META_KEY = "holderWake";
+
+/**
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
  * revoked at close, the propose-only governance of a playbook run, the client
@@ -90,6 +97,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   RUN_TURNS_META_KEY,
   HELD_RUN_META_KEY,
   MESSAGE_WAKE_META_KEY,
+  HOLDER_WAKE_META_KEY,
   "run",
   DEV_LOOP_METADATA_KEY,
   CHECK_GATE_METADATA_KEY,

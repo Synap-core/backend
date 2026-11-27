@@ -36,7 +36,9 @@
  * Doors that read it (.github/workflows/docker-publish.yml): the v* tag
  * (stable) and "Run workflow" (fast) WAIT on the exact commit; the nightly
  * fast release PICKS the newest first-parent main commit that passes
- * (deploy/release/nightly-fast-pick.sh, `--once`). ci.yml's "Red main" job
+ * (deploy/release/nightly-fast-pick.sh, `--once`), and the per-commit fast
+ * release (workflow_run) checks the commit whose run just finished
+ * (nightly-fast-pick.sh --commit, `--once`). ci.yml's "Red main" job
  * names the culprit range (`--culprits`).
  *
  * Polls every RELEASE_GATE_POLL_SECONDS (default 60) for at most

@@ -698,6 +698,12 @@ export interface Hold {
 	until?: HoldUntil | null;
 	/** ISO date by which someone looks at it again (never a move). */
 	reviewBy?: string | null;
+	/**
+	 * Wake whoever holds the thing when this hold resumes (a session's pause
+	 * only: the agent working that session). The pauser ASKS for it; absent or
+	 * false wakes nobody, as before. See {@link HOLD_WAKE_HELP}.
+	 */
+	wake?: boolean | null;
 }
 /**
  * A hold as the transition records it: the mover's hold plus what the server
@@ -22130,6 +22136,19 @@ export interface PacketChildItem {
 	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
 	 */
 	skipped?: true;
+	/**
+	 * The key of the parent's output this child was spawned to deliver (W7:
+	 * `forOutput` on the start, recorded on the `spawned_from` edge as
+	 * `metadata.forOutput`; `lane-rollup.ts`). On `children` items only;
+	 * absent when it was spawned for no output.
+	 */
+	forOutput?: string;
+	/**
+	 * That output's label on the parent (`slotLabelForKey`), so a reader draws
+	 * "fills <label>" with no second read. Absent with `forOutput`, and when
+	 * the parent no longer declares that key (a withdrawn or renamed slot).
+	 */
+	forOutputLabel?: string;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -41897,6 +41916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				homeWorkspaceId?: string | null | undefined;
 				id: string;
@@ -42001,6 +42021,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				occurredAt?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
@@ -42088,6 +42109,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								moves: string;
 								to?: string | undefined;
 							} | null | undefined;
+							wake?: boolean | null | undefined;
 						} | undefined;
 						occurredAt?: string | undefined;
 						properties?: Record<string, unknown> | undefined;
@@ -43988,6 +44010,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				forOutput?: string | undefined;
 				forceCreate?: boolean | undefined;
 				goal: string;
 				params?: Record<string, unknown> | undefined;
@@ -45403,6 +45426,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;
@@ -63659,6 +63683,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;

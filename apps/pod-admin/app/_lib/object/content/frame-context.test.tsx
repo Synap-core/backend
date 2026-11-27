@@ -163,6 +163,22 @@ describe("the module host carries the context", () => {
       theme: () => "dark",
       ...(context ? { context } : {}),
     });
+
+    // The frame's document hands over its reply port first (`frame-channel.ts`
+    // in the types leaf): every answer reaches it there, never on its window.
+    void onMessage({
+      source: frame,
+      origin: "null",
+      data: { type: "synap:hello" },
+      ports: [
+        {
+          postMessage: (m: unknown) => {
+            if ((m as { type?: unknown }).type !== "synap:channel:ready")
+              frame.postMessage(m);
+          },
+        },
+      ],
+    });
     const send = (data: unknown) =>
       onMessage({ source: frame, origin: "null", data });
     return { posted, send };

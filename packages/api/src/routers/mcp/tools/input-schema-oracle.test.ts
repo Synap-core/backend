@@ -3,7 +3,7 @@
  * conversion) derives the JSON Schema each tool advertised BEFORE it, modulo
  * key order. `__fixtures__/input-schemas.pre-zod.json` is a frozen copy of
  * every `inputSchema` in the committed manifest at origin/main 611a2ea4,
- * refrozen at origin/main 80c2a35b when main was merged in (27 Nov 2026), so
+ * refrozen at origin/main ec23334f when main was merged in (27 Nov 2026), so
  * main's own schema changes are the baseline, not differences (the manifest
  * is regenerated from the zod inputs afterwards, so comparing with it would
  * be a tautology).

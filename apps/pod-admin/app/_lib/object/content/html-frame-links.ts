@@ -13,6 +13,7 @@ import {
   parseFrameNavigate,
   parseFrameOpen,
   resolveFrameLink,
+  type FrameExternalLink,
   type FrameLinkAction,
 } from "@synap-core/types/cell-bridge";
 import { publicPodUrl } from "../../../../lib/public-pod-url";
@@ -28,6 +29,13 @@ export interface FrameLinkEnv {
   here: (href: string) => void;
   /** A new tab, opened `noopener`. */
   newTab: (href: string) => void;
+  /**
+   * Another site: ask the reader first, showing `link.host`, and open
+   * `link.href` (origin and path only) in a new tab only on their yes
+   * (security review H2: a page that read the viewer's data must not carry
+   * it out through a link). The console's own confirmation, never the page's.
+   */
+  confirmExternal: (link: FrameExternalLink) => void;
 }
 
 /**
@@ -50,6 +58,8 @@ export function handleFrameLink(
   });
   if (action.action === "here") env.here(action.href);
   else if (action.action === "newTab") env.newTab(action.href);
+  else if (action.action === "external")
+    env.confirmExternal({ href: action.href, host: action.host });
   return action;
 }
 
@@ -79,9 +89,16 @@ export function handleFrameOpen(
 
 type UserActivation = { isActive: boolean };
 
-/** The browser's own environment for `handleFrameLink`. */
-export function browserFrameLinkEnv(): FrameLinkEnv {
+/**
+ * The browser's own environment for `handleFrameLink`. `confirmExternal` is
+ * the host's question to the reader (`useFrameLinkDoor` shows it); its yes
+ * calls `env.newTab`, a click of its own, so the browser lets the tab open.
+ */
+export function browserFrameLinkEnv(
+  confirmExternal: (link: FrameExternalLink) => void
+): FrameLinkEnv {
   return {
+    confirmExternal,
     ownOrigins: () => {
       const origins = [window.location.origin];
       try {

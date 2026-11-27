@@ -35,6 +35,7 @@ import {
   userVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { statusAtCreate } from "@synap-core/types/units";
+import { skillObjectKind, skillTitleName } from "@synap-core/types/skill-rule";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
@@ -1613,7 +1614,27 @@ export async function enrichProposalsForDisplay(
         ? request.data
         : undefined;
     const entityMeta = entityById.get(request.targetId);
+    // A skill is named and NOUNED from its row as the viewer may read it now
+    // (floored by `readSkillUpdateTargets`), through the one rule predicate:
+    // a rule reads `Update Rule "work-units"`, never "Update Tool". Its row
+    // wins over the stored name, which rows filed before 27 Nov 2026 hold as
+    // the raw `rules_work_units` the title door drops.
+    const skillTarget =
+      row.targetType === "skill"
+        ? skillTargetById.get(row.targetId)
+        : undefined;
+    const skillTitle = skillTarget
+      ? {
+          name: skillTitleName(skillTarget),
+          kind: skillObjectKind({
+            category: skillTarget.values.category as string | null,
+            metadata: skillTarget.values.metadata,
+            slug: skillTarget.slug,
+          }),
+        }
+      : undefined;
     const targetName =
+      skillTitle?.name ??
       request.targetName ??
       titleFieldOverrideValue(request.targetType, payload) ??
       (request.targetType === "document"
@@ -1625,10 +1646,6 @@ export async function enrichProposalsForDisplay(
       (row.targetType === "playbook"
         ? playbookById.get(row.targetId)?.name
         : undefined) ??
-      // A skill rewrite carries `name` only when it renames.
-      (row.targetType === "skill"
-        ? skillTargetById.get(row.targetId)?.name
-        : undefined) ??
       entityMeta?.title ??
       entityMeta?.preview ??
       undefined;
@@ -1636,6 +1653,7 @@ export async function enrichProposalsForDisplay(
       stringProp(payload, "profileSlug") ??
       stringProp(payload, "type") ??
       entityMeta?.type ??
+      skillTitle?.kind ??
       undefined;
     const governanceRuleId = autoApproveRuleId(row.data);
     const askedBy = askedByFor(
@@ -2179,6 +2197,9 @@ function playbookUpdateReads(
 /** A skill as an update's review reads it: its name and its values now. */
 type SkillTargetRead = {
   name: string;
+  /** Its ref (`rules/work-units`): with the category and metadata among
+   * `values`, what makes it a rule and what a rule is called by. */
+  slug: string | null;
   values: Record<string, unknown>;
   /** The tools it declares it calls (`requires`), for its reach. */
   requiredTools?: string[];
@@ -2223,6 +2244,7 @@ async function readSkillUpdateTargets(
     .select({
       id: skills.id,
       name: skills.name,
+      slug: skills.slug,
       kind: skills.kind,
       scope: skills.scope,
       agentTypes: skills.agentTypes,
@@ -2253,9 +2275,9 @@ async function readSkillUpdateTargets(
     found.map((row) => row.id)
   );
   return new Map(
-    found.map(({ id, ...values }) => [
+    found.map(({ id, slug, ...values }) => [
       id,
-      { name: values.name, values, requiredTools: required.get(id) },
+      { name: values.name, slug, values, requiredTools: required.get(id) },
     ])
   );
 }

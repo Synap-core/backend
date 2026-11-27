@@ -19,14 +19,37 @@ import {
 } from "./index.js";
 
 /** A fake frame window that records what the host posts to it. */
+/**
+ * A fake frame window and the reply port its document hands over in its hello
+ * (`frame-channel.ts`). What reaches the frame on the port is in `posted`
+ * (target "port"); anything posted to the WINDOW is in `windowPosted`, which
+ * must stay empty: a window post reaches whatever document the frame holds
+ * by then (security review H1).
+ */
 function fakeFrame() {
   const posted: Array<{ message: Record<string, unknown>; target: string }> =
     [];
+  const windowPosted: Array<{ message: unknown; target: string }> = [];
   const frame: CellBridgeTarget = {
-    postMessage: (message, target) =>
-      posted.push({ message: message as Record<string, unknown>, target }),
+    postMessage: (message, target) => windowPosted.push({ message, target }),
   };
-  return { frame, posted };
+  const port = {
+    postMessage: (message: unknown) => {
+      if ((message as { type?: unknown }).type === "synap:channel:ready")
+        return;
+      posted.push({
+        message: message as Record<string, unknown>,
+        target: "port",
+      });
+    },
+  };
+  const hello = {
+    source: frame,
+    origin: "null",
+    data: { type: "synap:hello" },
+    ports: [port],
+  };
+  return { frame, posted, windowPosted, hello };
 }
 
 type Read = (
@@ -35,7 +58,7 @@ type Read = (
 ) => Promise<unknown>;
 
 function setup(read: Read = async () => ({ ok: true })) {
-  const { frame, posted } = fakeFrame();
+  const { frame, posted, windowPosted, hello } = fakeFrame();
   let current: CellBridgeTarget | null = frame;
   const readSpy = vi.fn(read);
   const host = createCellBridgeHost({
@@ -44,9 +67,12 @@ function setup(read: Read = async () => ({ ok: true })) {
   });
   const send = (data: unknown, source: unknown = frame, origin = "null") =>
     host({ source, origin, data });
+  // The document says hello first, handing over its reply port.
+  void host(hello);
   return {
     frame,
     posted,
+    windowPosted,
     read: readSpy,
     send,
     replaceFrame: (next: CellBridgeTarget | null) => {
@@ -86,7 +112,7 @@ describe("the page bridge host — what it refuses", () => {
           status: "denied",
           error: CELL_BRIDGE_WRITE_REFUSED,
         },
-        target: "*",
+        target: "port",
       }))
     );
   });
@@ -203,7 +229,7 @@ describe("the page bridge host — what it answers", () => {
             ],
           },
         },
-        target: "*",
+        target: "port",
       },
     ]);
   });

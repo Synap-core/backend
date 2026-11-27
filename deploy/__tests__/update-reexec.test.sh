@@ -10,7 +10,8 @@
 #   2. same pid, and the lock it holds is recognised (no "already running")
 #   3. the re-exec happens once (the probe sees SYNAP_UPDATE_SYNCED=1)
 #   4. installer unchanged by the sync → no re-exec (the probe never fires)
-#   5. without --dev-host a typed --from-source is honoured (warning, then sync + build)
+#   5. without --dev-host a typed --from-source is honoured (sync, then pull or build;
+#      the build warning comes only once a build is decided)
 # Does NOT cover the rest of the update (update-engine.test.sh does).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -61,7 +62,12 @@ printf '%s\n' "$out" | grep -q 'continuing with the new one' && bad "no-change: 
 ( cd "$TMP/origin" && echo "# v3" >> synap && git commit -qam v3 )
 out=$(cd "$TMP/pod" && ./synap update --from-source 2>&1); rc=$?
 printf '%s\n' "$out" | grep -q 'not declared a dev host' && bad "pod: refused although a person typed --from-source" || ok "pod: --from-source without --dev-host is not refused"
-printf '%s\n' "$out" | grep -q 'building from source uses a lot of memory' && ok "pod: one warning before the build" || { bad "pod: no warning"; printf '%s\n' "$out" | tail -5; }
+# The "uses a lot of memory" warning is printed when a build is DECIDED, after
+# the sync (pull first, decision ce5fb987: a commit CI already released is
+# pulled, not built, so a warning before the sync would be wrong). The v3 probe
+# exits before that point; update-engine.test.sh asserts it instead (sourcepod:
+# exactly one warning when it builds; sourcepull: none when it pulls).
+printf '%s\n' "$out" | grep -q 'building from source uses a lot of memory' && bad "pod: the build warning was printed before a build was decided" || ok "pod: no build warning before the pull-or-build decision"
 printf '%s\n' "$out" | grep -q 'Syncing checkout' && ok "pod: the checkout is synced, then built" || bad "pod: no sync (rc=$rc)"
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

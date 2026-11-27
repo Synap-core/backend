@@ -49,6 +49,8 @@ import type {
 } from "./types.js";
 import {
   IDLE_STALL_MINUTES,
+  RUNNING_RUNS_LIMIT,
+  cappedCount,
   classifyStalls,
   type StallReport,
 } from "./stall.js";
@@ -195,6 +197,11 @@ export interface GlobalSignals {
    * section says nothing about idleness rather than claiming none.
    */
   stall?: StallReport;
+  /**
+   * True when the running-runs read hit its limit, so `stuck` may be a floor.
+   * Optional: absent = not computed, and the headline claims nothing.
+   */
+  stuckCapped?: boolean;
   /** Minutes of no-progress that counts as idle (echoed into thresholds). */
   idleMinutes?: number;
   failedFlows: Array<{
@@ -292,7 +299,7 @@ export function summarizeGlobalHealth(
           : "ok",
     headline:
       signals.stuck.length > 0
-        ? `${signals.stuck.length} run(s) still running past ${signals.stuckHours}h` +
+        ? `${cappedCount(signals.stuck.length, signals.stuckCapped === true)} run(s) still running past ${signals.stuckHours}h` +
           (idle.length > 0 ? `, ${idle.length} more idle` : "")
         : idle.length > 0
           ? `${idle.length} run(s) running but idle${
@@ -303,6 +310,7 @@ export function summarizeGlobalHealth(
           : "No stuck runs",
     detail: {
       count: signals.stuck.length,
+      capped: signals.stuckCapped === true,
       thresholdHours: signals.stuckHours,
       oldest: signals.stuck.slice(0, 5),
       idleCount: idle.length,
@@ -402,12 +410,7 @@ export function summarizeGlobalHealth(
         : cap.verbsAwaitingEnable > 0
           ? `${cap.verbsAwaitingEnable} verb(s) in ${cap.capabilitiesAwaitingEnable} capability(ies) not turned on — they refuse to run until turned on`
           : `${cap.installed} capability(ies) installed, all ${cap.verbs} verb(s) turned on`,
-    detail: {
-      ...cap,
-      // Read by the desktop app's FlowHealthBand until it reads
-      // `verbsAwaitingEnable`; drop it once that reader moves.
-      unapproved: cap.capabilitiesAwaitingEnable,
-    },
+    detail: { ...cap },
   });
 
   // Agent activity — degraded when an agent is at/over the daily cap.
@@ -695,7 +698,12 @@ export async function diagnoseGlobal(params: {
   ] = await Promise.all([
     // Stuck: running runs across flows (per-flow cap 100), aged client-side.
     // Includes chat turns still `running` past the threshold.
-    listRuns({ userId, status: "running", scope, limit: 100 }),
+    listRuns({
+      userId,
+      status: "running",
+      scope,
+      limit: RUNNING_RUNS_LIMIT,
+    }),
     // Failed: the flows (automation/playbook) that failed inside the window,
     // counted in-DB. Only those: aggregating every run of every flow
     // (`listRunGroups`) cost ~220 ms on 64k runs to keep a handful of rows.
@@ -893,6 +901,7 @@ export async function diagnoseGlobal(params: {
     {
       stuckHours,
       stuck,
+      stuckCapped: runningRuns.length >= RUNNING_RUNS_LIMIT,
       stall,
       idleMinutes: IDLE_STALL_MINUTES,
       failedFlows,

@@ -25,6 +25,9 @@
 #   pull        a pull fails                     → nothing changes at all
 #   source      --from-source --dev-host         → synap-dev/* only, never ghcr
 #   sourcepod   --from-source typed on a pod (no --dev-host) → builds, with one warning
+#   sourcepull* --from-source of a commit CI released → pulls that release, never builds;
+#               SYNAP_SOURCE_PULL_FIRST=0 → builds (decision ce5fb987)
+#   sourceslow  a build past SYNAP_BUILD_TIMEOUT_SEC is stopped, the update aborted
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
 #   eve-unpinned / port80 / skip-edge             → edge refusals + eve pin
 #   kprefer/kgood  rollback kratos.yml: valid .before wins; a broken one → kratos.yml.good (W6-HEAL N5)
@@ -233,6 +236,7 @@ case "$*" in
   "build "*)
     t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done
     [ -n "${FAKE_BUILD_FAIL:-}" ] && { echo "build failed (injected)" >&2; exit 1; }
+    [ -n "${FAKE_BUILD_SLEEP:-}" ] && exec sleep "$FAKE_BUILD_SLEEP"   # a hung build client
     echo "$t" >> "$F/images"; exit 0 ;;
   "run --rm --entrypoint sh "*" -c "*)
     # The postgres image's TimescaleDB libraries: FAKE_TSDB_LIBS_NEW for a
@@ -789,6 +793,14 @@ echo "$builds" | grep -q -- "-t synap-dev/backend:$tag12 " && echo "$builds" | g
 grep -qE "^(compose build|tag .* ghcr)" "$FAKE/log" && bad "source: compose build / ghcr retag used" || ok "source: no compose build, no ghcr retag"
 grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: build cache capped after the update (disk)" || bad "source: build cache never pruned — every from-source update grows it"
 ! grep -qE "^builder prune .*-a|^(system|volume) prune" "$FAKE/log" && ok "source: cache prune is capped, never -a / system / volume" || bad "source: an unbounded prune ran"
+# The build regrows the cache it capped before building; the preflight disk
+# check comes next (perso, 27 Nov 2026: 9.7 GB of cache, update aborted "not
+# enough disk" after the build). A cap must sit between the last build and the
+# pre-update backup, not only after an applied update.
+lb="$(grep -n '^build ' "$FAKE/log" | tail -1 | cut -d: -f1)"
+bk="$(grep -nE 'pg_dump' "$FAKE/log" | head -1 | cut -d: -f1)"
+[ -n "$lb" ] && [ -n "$bk" ] && sed -n "${lb},${bk}p" "$FAKE/log" | grep -qE "^builder prune -f --max-used-space 2gb" \
+  && ok "source: the build cache is capped again after the build, before the disk check and the backup" || bad "source: no cache cap between the last build (line ${lb:-?}) and the backup (line ${bk:-?})"
 [ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
@@ -863,6 +875,8 @@ SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
 [ "$(grep -c 'building from source uses a lot of memory' "$S/out")" = 1 ] && grep -q 'synap update --release' "$S/out" \
   && ok "sourcepod: one warning, naming the release path" || bad "sourcepod: warning count=$(grep -c 'building from source uses' "$S/out")"
 ! grep -q 'not declared a dev host' "$S/out" && ok "sourcepod: not refused" || bad "sourcepod: refusal text present"
+grep -q "BUILDING THE IMAGES ON THIS HOST: no release main-${LOCAL_SHA:0:7} is published for commit ${LOCAL_SHA:0:12}" "$S/out" \
+  && ok "sourcepod: no CI release for the commit → it says loudly that it builds here, and why" || bad "sourcepod: the fallback build was silent"
 # SYNAP_ALLOW_SOURCE_BUILD in deploy/.env declares a dev host for every run (the unattended source channel too)
 setup sourceenv r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
@@ -905,6 +919,61 @@ LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
 UE_SOURCE_EXPLICIT=1 SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
 [ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
   && ok "sourceinherit: an inherited UE_SOURCE_EXPLICIT=1 does not pass the unattended refusal" || { bad "sourceinherit: rc=$rc builds=$(grep -c '^build ' "$FAKE/log") record=$(last status)"; show; }
+
+# ── 6d. pull first (decision ce5fb987): a commit CI already released is PULLED ──
+# The perso pod built every deploy itself (tsc at 150% CPU, load 18 on 4 CPUs).
+# CI now publishes main-<sha7> for each all-green main commit, so --from-source
+# of a clean checkout applies that release (by digest, through the handoff to
+# its own engine) and never runs `docker build`. Each fixture commit carries its
+# scenario's name, so its sha differs from the fixtures above (whose release is
+# never published).
+source_fixture() { # <scenario>
+  mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+  cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+  cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+  : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
+  ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm "fixture $1" ) || bad "$1: git fixture"
+  LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+  : > "$FAKE/log"
+}
+setup sourcepull r1; source_fixture sourcepull
+PULL_ID="main-${LOCAL_SHA:0:7}"
+NEW_SHA="$LOCAL_SHA" publish "$PULL_ID" 0012_new.sql bundle
+NEW_SHA="$LOCAL_SHA" SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$PULL_ID" ] && ok "sourcepull: --from-source of a released commit applied release $PULL_ID" || { bad "sourcepull: rc=$rc current=$(cur_id)"; show; }
+! grep -q '^build ' "$FAKE/log" && ok "sourcepull: no docker build ran on the host" || bad "sourcepull: built anyway: $(grep '^build ' "$FAKE/log" | head -2)"
+[ "$(envpin SYNAP_IMAGE_BACKEND)" = "ghcr.io/synap-core/backend@sha256:$NEW_DIGEST" ] && ok "sourcepull: the backend is the CI image, pinned by digest" || bad "sourcepull: backend pin=$(envpin SYNAP_IMAGE_BACKEND)"
+grep -q "CI already built this commit: applying release $PULL_ID" "$S/out" && ! grep -qE 'BUILDING THE IMAGES|building from source uses a lot of memory' "$S/out" \
+  && ok "sourcepull: it says it pulls, and prints no build warning" || bad "sourcepull: wrong messages"
+grep -q "Handing the rest of the update to release $PULL_ID" "$S/out" && ok "sourcepull: the release's own engine ran the rest (handoff applies the release, it does not build again)" || bad "sourcepull: no handoff"
+
+setup sourcepulloff r1; source_fixture sourcepulloff
+NEW_SHA="$LOCAL_SHA" publish "main-${LOCAL_SHA:0:7}" 0012_new.sql
+SYNAP_SOURCE_PULL_FIRST=0 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c '^build ' "$FAKE/log")" = 2 ] && [ "$(cur_id)" = "local-${LOCAL_SHA:0:12}" ] \
+  && ok "sourcepulloff: SYNAP_SOURCE_PULL_FIRST=0 builds even though the release exists" || { bad "sourcepulloff: rc=$rc builds=$(grep -c '^build ' "$FAKE/log") current=$(cur_id)"; show; }
+
+setup sourcepulldirty r1; source_fixture sourcepulldirty
+NEW_SHA="$LOCAL_SHA" publish "main-${LOCAL_SHA:0:7}" 0012_new.sql
+echo "# a local edit" >> "$REPO/apps/pod-admin/Dockerfile"
+SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c '^build ' "$FAKE/log")" = 2 ] && grep -q "has local changes" "$S/out" \
+  && ok "sourcepulldirty: a checkout with local changes builds (no release holds them), and says why" || { bad "sourcepulldirty: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
+
+# ── 6e. a host build is bounded (decision ce5fb987) ──────────────────────────
+# Two `docker build` clients hung on perso for 76 days and 39 hours, holding the
+# update lock. A build past SYNAP_BUILD_TIMEOUT_SEC is stopped like a failed one.
+if command -v timeout >/dev/null 2>&1; then
+  setup sourceslow r1; source_fixture sourceslow
+  started=$SECONDS
+  FAKE_BUILD_SLEEP=60 SYNAP_BUILD_TIMEOUT_SEC=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+  [ "$rc" != 0 ] && [ $((SECONDS - started)) -lt 30 ] && grep -q "backend image build did not finish within 1 s" "$S/out" \
+    && ok "sourceslow: a hung build is stopped at SYNAP_BUILD_TIMEOUT_SEC and the update aborts" || { bad "sourceslow: rc=$rc after $((SECONDS - started)) s"; show; }
+  grep -qE "^builder prune -af" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+    && ok "sourceslow: cache reset as after any failed build; the release and .env unchanged" || bad "sourceslow: current=$(cur_id)"
+else
+  ok "sourceslow: skipped (no coreutils timeout on this machine; the engine then builds unbounded)"
+fi
 
 # ── 7. edge=traefik: caddy never touched, every other service comes up ───────
 setup traefik r1; publish "$R2" 0012_new.sql

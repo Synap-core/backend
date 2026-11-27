@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRuleSkill } from "../../../../lib/rule-skill";
+import { isRuleSkill } from "@synap-core/types/skill-rule";
 import { toolCounts, toolItems, type SkillLike } from "./tools-model";
 import { rulesOf } from "../../rules/_lib/rules-model";
 

@@ -9,6 +9,7 @@ import {
   CELL_FRAME_MOUNT_TIMEOUT_MS,
   CELL_FRAME_READY_TIMEOUT_MS,
   CELL_MODULE_FRAME_SANDBOX,
+  CELL_FRAME_CHANNEL_SCRIPT,
   FRAME_BLOB_URLS_SCRIPT,
   FRAME_IMPORT_MAP_SCRIPT,
   FRAME_INIT_QUEUE_SCRIPT,
@@ -96,7 +97,7 @@ describe("the module frame", () => {
     );
   });
 
-  it("runs the classic scripts in order: blob URLs, import map, SDKs, ready + init queue, then the module", () => {
+  it("runs the classic scripts in order: the reply channel, blob URLs, import map, SDKs, ready + init queue, then the module", () => {
     const srcdoc = buildCellModuleFrameSrcdoc({
       code: CELL,
       language: "react",
@@ -104,6 +105,8 @@ describe("the module frame", () => {
       hostModules: MODULES,
     });
     const at = [
+      // The hello (with the reply port) goes before `synap:ready`.
+      srcdoc.indexOf(CELL_FRAME_CHANNEL_SCRIPT),
       srcdoc.indexOf('id="synap-frame-modules"'),
       srcdoc.indexOf(FRAME_BLOB_URLS_SCRIPT),
       srcdoc.indexOf(FRAME_IMPORT_MAP_SCRIPT),
@@ -223,6 +226,7 @@ describe("the module frame", () => {
 
   it("no inlined script contains a closing script tag", () => {
     for (const s of [
+      CELL_FRAME_CHANNEL_SCRIPT,
       FRAME_BLOB_URLS_SCRIPT,
       FRAME_IMPORT_MAP_SCRIPT,
       FRAME_INIT_QUEUE_SCRIPT,

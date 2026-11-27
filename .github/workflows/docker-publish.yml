@@ -30,11 +30,25 @@ on:
   #               cancels an older nightly still waiting for approval (runs
   #               from before this change) so only the newest commit is ever
   #               offered.
-  # The old `workflow_run: CI completed` trigger built a fast release (and asked
-  # for a production approval) after every merge.
+  #   - EVERY GREEN MAIN COMMIT (decision ce5fb987, 2026-11-27) → FAST release
+  #               main-<sha7> of the commit whose post-merge CI run just
+  #               finished (`workflow_run`), when that run is all green. A pod
+  #               deploys a commit by PULLING its release instead of building
+  #               it on the host (a host build ran tsc at 150% CPU, load 18 on
+  #               4 CPUs, and the pod served slowly for every deploy). Like the
+  #               nightly: `nightly-fast` environment (no reviewer, main only),
+  #               no Control Plane notification (client pods stay on stable),
+  #               and channel-fast only moves forward.
+  # The old `workflow_run: CI completed` trigger (removed 2026-10-18) built a
+  # fast release and asked for a production approval after every merge; this
+  # one asks for none and notifies no one.
   push:
     tags:
       - "v*"
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
   schedule:
     # 18:30 UTC (decision c4978f50, Q4): GitHub starts this schedule hours
@@ -56,6 +70,14 @@ on:
 permissions:
   contents: read
 
+# The automatic fast releases (per commit and nightly) run one at a time, so
+# two never move channel-fast at once; a newer one waiting replaces an older
+# one waiting (GitHub keeps one pending run per group), and the running one is
+# never cancelled mid-publish. A tag or a "Run workflow" is its own group.
+concurrency:
+  group: ${{ (github.event_name == 'workflow_run' || github.event_name == 'schedule') && 'docker-publish-fast-auto' || format('docker-publish-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
 
@@ -73,6 +95,14 @@ jobs:
   # out that commit (outputs sha / build).
   ci-gate:
     runs-on: ubuntu-latest
+    # workflow_run: only the post-merge (push) run of main in this repository.
+    # A merge-queue or pull-request run of CI never releases; every later job
+    # needs this one, so they are skipped with it.
+    if: >
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       checks: read
       contents: read
@@ -84,7 +114,7 @@ jobs:
     steps:
       # The gate script only (no credential kept): it reads GitHub, never the tree.
       - name: Checkout the release gate script
-        if: github.event_name != 'schedule'
+        if: github.event_name != 'schedule' && github.event_name != 'workflow_run'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -97,7 +127,7 @@ jobs:
       # 40704054177). No push run, or a required check that ended in anything
       # but success, still fails at once.
       - name: Post-merge run all green on this commit
-        if: github.event_name != 'schedule'
+        if: github.event_name != 'schedule' && github.event_name != 'workflow_run'
         timeout-minutes: 95
         env:
           GH_TOKEN: ${{ github.token }}
@@ -105,19 +135,28 @@ jobs:
           SHA: ${{ github.sha }}
         run: node scripts/ci/release-gate-wait.mjs "$REPO" "$SHA"
 
-      - name: Checkout main (nightly)
-        if: github.event_name == 'schedule'
+      - name: Checkout main (nightly, per commit)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_run'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 50
 
-      - name: Pick the newest main commit whose post-merge run was all green (nightly)
+      # Nightly: the newest main commit whose post-merge run was all green.
+      # Per commit: the commit whose post-merge run just finished, if it was.
+      - name: Pick the commit to release (nightly, per commit)
         id: pick
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: bash deploy/release/nightly-fast-pick.sh "$REPO" 30 >> "$GITHUB_OUTPUT"
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            bash deploy/release/nightly-fast-pick.sh --commit "$RUN_HEAD_SHA" "$REPO" >> "$GITHUB_OUTPUT"
+          else
+            bash deploy/release/nightly-fast-pick.sh "$REPO" 30 >> "$GITHUB_OUTPUT"
+          fi
 
       # Approving an older nightly after a newer release would move channel-fast
       # BACKWARDS, and two open prompts for one day's work is noise. A run that
@@ -149,11 +188,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
-      (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.build == 'true')
     permissions:
       contents: read
     steps:
@@ -161,7 +196,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The nightly builds the commit ci-gate picked, not main's head.
-          ref: ${{ github.event_name == 'schedule' && needs.ci-gate.outputs.sha || github.sha }}
+          ref: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -182,7 +217,7 @@ jobs:
           push: false
           load: true
           tags: synap-backend:release-check
-          build-args: GIT_SHA=${{ github.event_name == 'schedule' && needs.ci-gate.outputs.sha || github.sha }}
+          build-args: GIT_SHA=${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.sha || github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -193,22 +228,19 @@ jobs:
   build-and-push-backend-api:
     needs: [ci-gate, release-checks]
     runs-on: ubuntu-latest
-    # Only run if CI passed (workflow_run), or if triggered by tag push / manual dispatch
+    # A tag, a "Run workflow", or a commit ci-gate picked (nightly, per commit)
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
-      (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.build == 'true')
     # D16: a production build (main via CI, or a v* tag) waits for the
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
-    # only (decision c4978f50, see the header).
-    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
+    # The nightly (schedule) and the per-commit release (workflow_run) use
+    # `nightly-fast` instead: no reviewer, main only (decisions c4978f50 and
+    # ce5fb987, see the header).
+    environment: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'nightly-fast' || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -241,16 +273,11 @@ jobs:
         # (a branch name is attacker-controlled text).
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
           NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
-            REF="refs/heads/${RUN_HEAD_BRANCH}"
-            SHA="${RUN_HEAD_SHA}"
-          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/main"
             SHA="${NIGHTLY_SHA}"
           else
@@ -392,18 +419,15 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
-      (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.build == 'true')
     # D16: a production build (main via CI, or a v* tag) waits for the
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
-    # only (decision c4978f50, see the header).
-    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
+    # The nightly (schedule) and the per-commit release (workflow_run) use
+    # `nightly-fast` instead: no reviewer, main only (decisions c4978f50 and
+    # ce5fb987, see the header).
+    environment: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'nightly-fast' || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -417,16 +441,11 @@ jobs:
         # (a branch name is attacker-controlled text).
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
           NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
-            REF="refs/heads/${RUN_HEAD_BRANCH}"
-            SHA="${RUN_HEAD_SHA}"
-          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/main"
             SHA="${NIGHTLY_SHA}"
           else
@@ -499,18 +518,15 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
-      (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_run') && needs.ci-gate.outputs.build == 'true')
     # D16: a production build (main via CI, or a v* tag) waits for the
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
-    # only (decision c4978f50, see the header).
-    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
+    # The nightly (schedule) and the per-commit release (workflow_run) use
+    # `nightly-fast` instead: no reviewer, main only (decisions c4978f50 and
+    # ce5fb987, see the header).
+    environment: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'nightly-fast' || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -524,16 +540,11 @@ jobs:
         # (a branch name is attacker-controlled text).
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
           NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
-            REF="refs/heads/${RUN_HEAD_BRANCH}"
-            SHA="${RUN_HEAD_SHA}"
-          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/main"
             SHA="${NIGHTLY_SHA}"
           else
@@ -727,11 +738,11 @@ jobs:
     needs:
       - build-and-push-backend-api
       - publish-release
-    # Never for the nightly: the CP marks the notified tag isLatest, and
-    # claim-warm-pod plus legacy auto_latest pods would then take a fast build
-    # (decision c4978f50: client pods unchanged). The dogfood pod reads
-    # channel-fast on its own timer.
-    if: github.event_name != 'schedule'
+    # Never for the nightly or a per-commit release: the CP marks the notified
+    # tag isLatest, and claim-warm-pod plus legacy auto_latest pods would then
+    # take a fast build (decisions c4978f50, ce5fb987: client pods unchanged).
+    # The dogfood pod reads channel-fast on its own timer.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_run'
 
     steps:
       - name: Compute image tag
