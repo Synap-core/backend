@@ -52,7 +52,12 @@ export type HtmlPageCheck =
       /** The declared reads, checked; null = the page declares none. */
       reads: CellBridgeDeclaredReads | null;
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      /** What was refused: the page itself, or its declared reads. */
+      field: "content" | "reads";
+      error: string;
+    };
 
 /**
  * The door's checks, pure: the size cap, then the declared reads. `reads`
@@ -66,6 +71,7 @@ export function checkHtmlPage(input: {
   if (bytes > HTML_PAGE_MAX_BYTES) {
     return {
       ok: false,
+      field: "content",
       error: `This HTML page is ${bytes} bytes; a page is at most ${HTML_PAGE_MAX_BYTES} bytes (2 MB), the size a host runs. Make it smaller (inline less, or split it into several pages).`,
     };
   }
@@ -75,7 +81,7 @@ export function checkHtmlPage(input: {
   const parsed = parseDeclaredReads(input.reads);
   return parsed.ok
     ? { ok: true, reads: parsed.value }
-    : { ok: false, error: parsed.error };
+    : { ok: false, field: "reads", error: parsed.error };
 }
 
 /** A page the door refused; `message` says why and what to do. */

@@ -105,7 +105,7 @@ export function surfaceSpecProblem(
       }
       {
         const page = htmlPageCheck(spec);
-        return page.ok ? null : `spec: ${page.error}`;
+        return page.ok ? null : `spec.${page.field}: ${page.error}`;
       }
     case "cell":
       return typeof spec.cellKey === "string" && spec.cellKey.trim()
@@ -403,7 +403,7 @@ async function makeBody(input: {
         const page =
           body === "html" ? htmlPageCheck(spec) : ({ ok: true } as const);
         if (!page.ok) {
-          return { ok: false, why: `spec: ${page.error}` };
+          return { ok: false, why: `spec.${page.field}: ${page.error}` };
         }
         await materializeApprovedDocument({
           documentId: id,
