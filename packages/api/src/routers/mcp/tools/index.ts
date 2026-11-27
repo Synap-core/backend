@@ -4013,7 +4013,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
+          "Who can take the person's work, and on which COMPUTER — read-only. `devices[]`: their devices (kind, status, resources; a computer's `principalUserId` is its agentUserId; `null` with `devicesError` when not granted or unreadable). `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -7343,6 +7343,10 @@ export const tools = {
               type: "string",
               description: "One computer's id (synap_list_agents).",
             },
+            deviceId: {
+              type: "string",
+              description: "Or that computer's device id (devices[]).",
+            },
             capabilityKey: {
               type: "string",
               description:
@@ -7365,7 +7369,7 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
+          'Ask to install a capability on one of the person\'s computers, or on the pod. Name where with `computer` (or `device`, its device id): one of the two is required. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
         inputSchema: {
           type: "object",
           properties: {
@@ -7381,7 +7385,12 @@ export const tools = {
             computer: {
               type: "string",
               description:
-                'One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.',
+                'Required unless `device` is given. One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.',
+            },
+            device: {
+              type: "string",
+              description:
+                "Required unless `computer` is given: that computer's device id (synap_list_agents `devices[]`).",
             },
             action: {
               type: "string",
@@ -7394,7 +7403,7 @@ export const tools = {
               description: "For update: the version to move to.",
             },
           },
-          required: ["capabilityKey", "computer"],
+          required: ["capabilityKey"],
         },
       },
       {

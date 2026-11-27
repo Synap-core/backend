@@ -39,6 +39,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { TRPCError } from "@trpc/server";
+import { createLogger } from "@synap-core/core";
 import {
   and,
   db,
@@ -60,6 +61,7 @@ import {
   HOST_RUNNER_SCOPE,
   apiKeys,
   deviceAuthRequests,
+  devices,
   installationBindings,
   installations,
   podSettings,
@@ -112,11 +114,14 @@ import {
   provisionSurfaceAgentKey,
 } from "./agent-identity-service.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
+import { ensureComputerDevice } from "./fleet/devices.js";
 import {
   AGENT_KEY_ROTATION_LEAD_DAYS,
   AGENT_KEY_TTL_DAYS,
   SETUP_AGENT_HUB_SCOPES,
 } from "./hub-integration-registration.js";
+
+const logger = createLogger({ module: "machine-connect" });
 
 // ── Contract constants ──────────────────────────────────────────────────────
 
@@ -1257,6 +1262,15 @@ export async function ensureMachineAgent(args: {
       args.approverId,
       args.writeMode ?? null
     );
+  // Its device: one per computer, made at the first connect, reused (and
+  // brought back if retired) by a reconnect. A registry failure never fails
+  // connecting a computer: the runner's first report makes the device then
+  // (`recordDeviceReport`).
+  try {
+    await ensureComputerDevice(machineId);
+  } catch (err) {
+    logger.warn({ err, machineId }, "device not recorded at connect");
+  }
   return machineId;
 }
 
@@ -1595,6 +1609,12 @@ export async function setMachineBelongsTo(
       .where(
         and(eq(users.id, machineId), eq(users.agentType, MACHINE_AGENT_TYPE))
       );
+    // Its device says the same: whose it is decides who reads it on the
+    // Devices page.
+    await tx
+      .update(devices)
+      .set({ belongsTo, updatedAt: new Date() })
+      .where(eq(devices.principalUserId, machineId));
     const seedsRevoked =
       belongsTo === "agent" ? 0 : await revokeAllHostSeedsOn(tx, machineId);
     return { seedsRevoked };
@@ -1638,6 +1658,17 @@ export async function revokeMachine(args: {
     revokedBy: args.by,
     reason: args.reason ?? "Computer revoked",
   });
+  // A revoked computer no longer answers: its device is retired with it, and
+  // a reconnect brings it back (`ensureComputerDevice`).
+  await db
+    .update(devices)
+    .set({ retiredAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        eq(devices.principalUserId, args.machineUserId),
+        isNull(devices.retiredAt)
+      )
+    );
   return rows.length;
 }
 

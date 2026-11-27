@@ -139,6 +139,7 @@ import {
   BUILTIN_VERBS,
   DE_ESCALATION_BUILTIN_VERBS,
   READ_ONLY_BUILTIN_VERBS,
+  resolveBuiltinParamAliases,
 } from "./builtin-verbs.js";
 import { filingRefusalOf } from "../proposals/can-apply.js";
 import { declaredReadOnly } from "./capability-drift.js";
@@ -599,7 +600,7 @@ export async function executeCapability(input: {
    */
   automationRun?: AutomationRunContext | null;
 }): Promise<ExecuteCapabilityResult> {
-  const { verbId, skillId, parameters, workspaceId, userId } = input;
+  const { verbId, skillId, workspaceId, userId } = input;
   if (!verbId && !skillId) {
     return {
       kind: "not_found",
@@ -663,6 +664,18 @@ export async function executeCapability(input: {
       }. Search what's available with list_capabilities({query: "…"}); if nothing matches, tell the user exactly what's missing — never fabricate a result.`,
     };
   }
+
+  // A builtin's parameter aliases (`device` for `computer`) become the word it
+  // declares here, before anything reads the call or files it.
+  const aliased =
+    skillRow.kind === "builtin"
+      ? await resolveBuiltinParamAliases(skillRow.name, input.parameters, {
+          userId,
+          agentUserId: input.agentUserId ?? null,
+        })
+      : { ok: true as const, parameters: input.parameters };
+  if (!aliased.ok) return { kind: "error", message: aliased.error };
+  const parameters = aliased.parameters;
 
   // A read-only BUILTIN verb is not a mutation — mark the gate `readOnly` so it
   // auto-runs (no grant, no propose) once it clears the approval gate; its scope
