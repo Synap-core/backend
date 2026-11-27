@@ -161,11 +161,23 @@ describe("tripwire: one definition per MCP tool", () => {
     );
   });
 
-  it("no hand-written tool list or tool-keyed map anywhere in src, beyond ALLOWED", () => {
+  const scan = () => {
     const files = sourceFiles(SRC);
+    return {
+      files: files.map((f) => relative(SRC, f)),
+      hits: files.flatMap((f) =>
+        handWrittenToolTables(readFileSync(f, "utf8")).map((h) => ({
+          ...h,
+          file: relative(SRC, f),
+        }))
+      ),
+    };
+  };
+
+  it("no hand-written tool list or tool-keyed map anywhere in src, beyond ALLOWED", () => {
+    const { files: rel, hits } = scan();
     // Non-vacuity: the scan reads the whole package and the files that used
     // to hold the tables.
-    const rel = files.map((f) => relative(SRC, f));
     for (const f of [
       "routers/mcp/tool-profiles.ts",
       "access/grant-door-fence.ts",
@@ -177,12 +189,6 @@ describe("tripwire: one definition per MCP tool", () => {
       expect(rel).toContain(f);
     expect(rel.length).toBeGreaterThan(500);
 
-    const hits = files.flatMap((f) =>
-      handWrittenToolTables(readFileSync(f, "utf8")).map((h) => ({
-        ...h,
-        file: relative(SRC, f),
-      }))
-    );
     const allowed = (h: (typeof hits)[number]) =>
       ALLOWED.some((a) => a.shape === h.shape && a.file.test(h.file));
     // Non-vacuity: the allowed dispatch maps are seen by the same scan.
@@ -191,6 +197,10 @@ describe("tripwire: one definition per MCP tool", () => {
       hits.filter((h) => !allowed(h)).map((h) => `${h.file}: ${h.hit}`),
       "A fact about a tool is a field on its defineTool (tools/index.ts), read through define-tool.ts; if this list must stay, declare it in ALLOWED with its reason."
     ).toEqual([]);
+  });
+
+  it("every ALLOWED entry still matches a hit (the allow-list cannot rot)", () => {
+    const { hits } = scan();
     expect(
       ALLOWED.filter(
         (a) => !hits.some((h) => h.shape === a.shape && a.file.test(h.file))
