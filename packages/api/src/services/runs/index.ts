@@ -1601,19 +1601,36 @@ export interface ListRunGroupsInput {
 }
 
 /**
+ * A run that STOPPED at its budget: `failed` with `stop_reason = 'budget'` (its
+ * token budget or step limit, `run-turn-end.ts`; an automation parent whose
+ * every failed child stopped so, `automation-parent-settle.ts`). Nothing broke,
+ * so it is never a failure: the breakers skip it, the worker mark reads it
+ * `skipped`, and every count here keeps it apart from `failedCount`.
+ */
+function budgetStopWhere(cols: {
+  status: AnyPgColumn;
+  stopReason: AnyPgColumn;
+}): SQL {
+  return drizzleSql`(${cols.status} = 'failed' and ${cols.stopReason} is not distinct from 'budget')`;
+}
+
+/**
  * A run that FAILED within the health window: `failed` only (a
- * `blocked_by_policy` run is a calm governance outcome), dated by
- * `coalesce(completedAt, startedAt)`, newer than `RECENT_FAILURE_WINDOW_DAYS`.
- * ONE rule for both ledgers and both readers: the groupers' `recentFailedCount`
- * and `listRecentlyFailingFlows` read this same predicate, so "failing" can
- * never mean two things. `isRecentFailure` is its client-side twin for chat.
+ * `blocked_by_policy` run is a calm governance outcome, a budget stop is not a
+ * failure: `budgetStopWhere`), dated by `coalesce(completedAt, startedAt)`,
+ * newer than `RECENT_FAILURE_WINDOW_DAYS`. ONE rule for both ledgers and both
+ * readers: the groupers' `recentFailedCount` and `listRecentlyFailingFlows`
+ * read this same predicate, so "failing" can never mean two things.
+ * `isRecentFailure` is its client-side twin for chat (a chat turn has no
+ * stop reason).
  */
 function recentFailureWhere(cols: {
   status: AnyPgColumn;
+  stopReason: AnyPgColumn;
   startedAt: AnyPgColumn;
   completedAt: AnyPgColumn;
 }): SQL {
-  return drizzleSql`${cols.status} = 'failed' and coalesce(${cols.completedAt}, ${cols.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')`;
+  return drizzleSql`${cols.status} = 'failed' and not ${budgetStopWhere(cols)} and coalesce(${cols.completedAt}, ${cols.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')`;
 }
 
 /**
@@ -2023,7 +2040,8 @@ async function groupAutomationRuns(
       // A policy-block still needs a human's eye, so it counts toward the
       // needs-attention 'failed' rollup alongside genuine failures (the run-detail
       // surface renders the two with distinct calm/red tones).
-      failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
+      failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy') and not ${budgetStopWhere(automationRuns)}))::int`,
+      stoppedCount: drizzleSql<number>`(count(*) filter (where ${budgetStopWhere(automationRuns)}))::int`,
       recentFailedCount: drizzleSql<number>`(count(*) filter (where ${recentFailureWhere(automationRuns)}))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'running'))::int`,
@@ -2071,6 +2089,7 @@ async function groupAutomationRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    stoppedCount: r.stoppedCount,
     recentFailedCount: r.recentFailedCount,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
@@ -2110,7 +2129,8 @@ async function groupPlaybookRuns(
       flowName: playbooks.name,
       runCount: drizzleSql<number>`count(*)::int`,
       completedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'completed'))::int`,
-      failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
+      failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed' and not ${budgetStopWhere(playbookRuns)}))::int`,
+      stoppedCount: drizzleSql<number>`(count(*) filter (where ${budgetStopWhere(playbookRuns)}))::int`,
       recentFailedCount: drizzleSql<number>`(count(*) filter (where ${recentFailureWhere(playbookRuns)}))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'running'))::int`,
@@ -2158,6 +2178,7 @@ async function groupPlaybookRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    stoppedCount: r.stoppedCount,
     recentFailedCount: r.recentFailedCount,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
