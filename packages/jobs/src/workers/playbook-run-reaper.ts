@@ -14,8 +14,12 @@
  * playbook runs sat 'running' forever (live: 98 runs stuck > 24h) with no reaper.
  *
  * Staleness signal: `playbook_runs` has no `updatedAt`, so "actively worked" is
- * read off the linked focus_sessions.updatedAt (every real step touches it) —
- * the same activity signal `focus-session-reaper` keys on. A run older than the
+ * read off the linked session: its `updatedAt`, or its newest agent evidence
+ * (`sessionLastAgentActivitySql`: an agent post in its room, a chat turn, an
+ * agent's proposal or event), whichever is later. A room post does not touch
+ * `updatedAt`, so an agent that only reported in its room read as dead
+ * (finding c573d32d: a wave lane failed at 2 h with room notes posted
+ * after it). A run older than the
  * threshold whose session is NO LONGER active/paused-and-fresh is presumed
  * orphaned and force-failed; a genuinely long external-agent run that keeps its
  * session warm is EXEMPT. The threshold is generous (24h) precisely because an
@@ -51,6 +55,8 @@ import {
   sessionWaitsOnPersonWhere,
   stageRunWaitsWhere,
   stageRunAgentLiveWhere,
+  sessionLastAgentActivitySql,
+  SESSION_STARTED_BY_AGENT_KEY,
   setRunStatus,
   setSessionStatus,
 } from "@synap/database";
@@ -89,7 +95,8 @@ function sessionQuietFor(hours: number) {
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
-    AND fs.updated_at > now() - (${hours}::int * interval '1 hour')
+    AND GREATEST(fs.updated_at, ${sessionLastAgentActivitySql("fs")})
+      > now() - (${hours}::int * interval '1 hour')
 )`;
 }
 
@@ -139,9 +146,17 @@ export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
  *     agent STARTED from a playbook (`start_session` + `templateId`): that run
  *     copies the playbook's `executor` — `is-agent` on every playbook the pod
  *     has — although nothing was dispatched to the IS.
- * A run `runPlaybook` dispatched to the IS matches neither (its session is
- * minted by `instantiateSession`, which stamps no client) and keeps the
- * failure verdict.
+ *   • its session was STARTED BY AN AGENT that no automation launched and the
+ *     pod's AI never took a turn in: `metadata.startedByAgentId` set, no
+ *     `clientKey`, no `automationRunId` / `source` (the automation and run
+ *     doors' stamps), no `chat_turns` row in its room. This is a lane a lead
+ *     agent opens for its wave (finding c573d32d): `decideNewSessionClientKey`
+ *     stamps no client key on a lane of the lead's own conversation, so the
+ *     arm above missed it and the 2-hour IS window failed live lanes.
+ * A run `runPlaybook` dispatched to the IS matches none (its session is
+ * minted by `instantiateSession`, which stamps no client, and the IS's turn
+ * lands in `chat_turns`) and keeps the failure verdict; so does every
+ * automation's run.
  *
  * AND its session is still OPEN (active / paused / stale): `stale` promises a
  * revival, and only an open session can be written to again. A run under a
@@ -153,6 +168,17 @@ const RUN_EXTERNAL_HOLDER = drizzleSql`(
     SELECT 1 FROM focus_sessions fs
     WHERE fs.id = ${playbookRuns.sessionId}
       AND fs.metadata ->> 'clientKey' LIKE 'key:%'
+  )
+  OR EXISTS (
+    SELECT 1 FROM focus_sessions fs
+    WHERE fs.id = ${playbookRuns.sessionId}
+      AND fs.metadata ->> ${SESSION_STARTED_BY_AGENT_KEY} IS NOT NULL
+      AND fs.metadata ->> 'clientKey' IS NULL
+      AND fs.metadata ->> 'automationRunId' IS NULL
+      AND fs.metadata ->> 'source' IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM chat_turns ct WHERE ct.channel_id = fs.channel_id
+      )
   )
 )`;
 

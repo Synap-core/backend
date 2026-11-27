@@ -33,6 +33,8 @@ import {
   messages,
   proposals,
   automationRuns,
+  chatTurns,
+  events,
   lifecycleTransitionOutbox,
   sessionStageRuns,
   apiKeys,
@@ -64,19 +66,24 @@ async function run(opts: {
   startedHours: number;
   idleHours: number;
   clientKey?: string;
+  metadata?: Record<string, unknown>;
   outputs?: unknown[];
-}): Promise<{ run: string; sess: string }> {
+}): Promise<{ run: string; sess: string; channel: string }> {
   const sess = randomUUID();
+  const channel = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at, channel_id)
      values ($1, 'u1', 'g', 'active', $2::jsonb, $3::jsonb, now() - ($4::int * interval '1 hour'), now() - ($5::int * interval '1 hour'), $6)`,
     [
       sess,
-      JSON.stringify(opts.clientKey ? { clientKey: opts.clientKey } : {}),
+      JSON.stringify({
+        ...(opts.clientKey ? { clientKey: opts.clientKey } : {}),
+        ...opts.metadata,
+      }),
       JSON.stringify(opts.outputs ?? []),
       opts.startedHours,
       opts.idleHours,
-      randomUUID(),
+      channel,
     ]
   );
   const id = randomUUID();
@@ -85,8 +92,35 @@ async function run(opts: {
      values ($1, $2, $3, $4, 'running', now() - ($5::int * interval '1 hour'), 'u1', '{}'::jsonb)`,
     [id, randomUUID(), sess, opts.executor, opts.startedHours]
   );
-  return { run: id, sess };
+  return { run: id, sess, channel };
 }
+
+/** A room post `minutesAgo` by `authorType` in `channel`. */
+async function post(
+  channel: string,
+  authorType: "ai_agent" | "human",
+  minutesAgo: number
+) {
+  await q(
+    `insert into messages (id, channel_id, role, author_type, content, user_id, timestamp, hash)
+     values ($1, $2, $3, $4, 'note', 'u1', now() - ($5::int * interval '1 minute'), 'h')`,
+    [
+      randomUUID(),
+      channel,
+      authorType === "ai_agent" ? "assistant" : "user",
+      authorType,
+      minutesAgo,
+    ]
+  );
+}
+
+const sessionStatusOf = async (id: string) =>
+  (
+    await q<{ status: string }>(
+      `select status from focus_sessions where id = $1`,
+      [id]
+    )
+  ).rows[0]!.status;
 
 const statusOf = async (id: string) =>
   (
@@ -103,6 +137,8 @@ beforeAll(async () => {
     messages,
     proposals,
     automationRuns,
+    chatTurns,
+    events,
     lifecycleTransitionOutbox,
     // Both windows skip a run whose step waits (0422): they read it.
     sessionStageRuns,
@@ -122,7 +158,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   closed.length = 0;
   await h.client!.exec(
-    "delete from focus_sessions; delete from playbook_runs; delete from messages; delete from proposals; delete from automation_runs; delete from lifecycle_transition_outbox;"
+    "delete from focus_sessions; delete from playbook_runs; delete from messages; delete from proposals; delete from automation_runs; delete from lifecycle_transition_outbox; delete from chat_turns; delete from events;"
   );
 });
 
@@ -190,5 +226,96 @@ describe("the playbook run reaper's window follows who holds the run", () => {
     await handlePlaybookRunReaper();
     expect(await statusOf(owing.run)).toBe("waiting_on_you");
     expect(closed).toEqual([]);
+  });
+
+  // Finding c573d32d: a wave lane (a session a lead agent starts for its
+  // wave, no client key) was failed at 2 h while its agent kept posting in
+  // its room, because a room post does not touch `updated_at`.
+  const LANE = { startedByAgentId: "agent-lead" };
+
+  it("spares a lane whose agent posted in its room within the window, though its session row is quiet", async () => {
+    const lane = await run({
+      executor: "is-agent",
+      startedHours: 6,
+      idleHours: 6,
+      metadata: LANE,
+    });
+    await post(lane.channel, "ai_agent", 30);
+    // An IS run kept alive by its own agent post too: the evidence, not the holder.
+    const isRun = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+    });
+    await post(isRun.channel, "ai_agent", 30);
+    await handlePlaybookRunReaper();
+    expect(await statusOf(lane.run)).toBe("running");
+    expect(await statusOf(isRun.run)).toBe("running");
+    expect(closed).toEqual([]);
+  });
+
+  it("a person's post does not keep a dead IS run alive", async () => {
+    const dead = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+    });
+    await post(dead.channel, "human", 10);
+    await handlePlaybookRunReaper();
+    expect(await statusOf(dead.run)).toBe("failed");
+  });
+
+  it("a quiet lane is not failed at 2 hours, and goes STALE (not failed) past 24, its session open", async () => {
+    const early = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+      metadata: LANE,
+    });
+    const late = await run({
+      executor: "is-agent",
+      startedHours: 30,
+      idleHours: 30,
+      metadata: LANE,
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf(early.run)).toBe("running");
+    expect(await statusOf(late.run)).toBe("stale");
+    expect(await sessionStatusOf(late.sess)).toBe("stale");
+    expect(closed).toEqual([]);
+  });
+
+  it("an automation's dead run still FAILS at 2 hours, though an agent principal started it", async () => {
+    const byAutomation = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+      metadata: { ...LANE, automationRunId: randomUUID() },
+    });
+    const byRunDoor = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+      metadata: { ...LANE, source: "automation" },
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf(byAutomation.run)).toBe("failed");
+    expect(await statusOf(byRunDoor.run)).toBe("failed");
+  });
+
+  it("an agent-started run the pod's AI took a turn in still FAILS at 2 hours", async () => {
+    const dispatched = await run({
+      executor: "is-agent",
+      startedHours: 3,
+      idleHours: 3,
+      metadata: LANE,
+    });
+    await q(
+      `insert into chat_turns (id, channel_id, status, updated_at)
+       values ($1, $2, 'failed', now() - interval '3 hours')`,
+      [randomUUID(), dispatched.channel]
+    );
+    await handlePlaybookRunReaper();
+    expect(await statusOf(dispatched.run)).toBe("failed");
   });
 });
