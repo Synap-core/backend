@@ -87,13 +87,13 @@ describe("computers: one rule, shared", () => {
   it("scans a plausible, derived set of files", () => {
     expect(FILES.length).toBeGreaterThan(50);
     expect(FILES.map((f) => f.path)).toContain(
-      join("app", "(admin)", "computers", "_lib", "computer-model.ts")
+      join("app", "(admin)", "devices", "_lib", "computer-model.ts")
     );
   });
 
   it("the console's computer model reads the shared rule", () => {
     const model = FILES.find((f) =>
-      f.path.endsWith("computers/_lib/computer-model.ts")
+      f.path.endsWith("devices/_lib/computer-model.ts")
     );
     expect(model?.src).toContain('"@synap-core/types/computers"');
     expect(model?.src).toContain("computerKeyRead(");
