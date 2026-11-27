@@ -115,6 +115,7 @@ import {
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
 import { PLAYBOOK_OFFERED_AT_KEY } from "./session-nudges.js";
+import { PLAYBOOK_DECLINED_AT_METADATA_KEY } from "./resolve-binding-rung.js";
 // Types only: the writer is loaded lazily by `session-birth.ts`.
 import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
@@ -184,15 +185,20 @@ function readConversationCwd(metadata: unknown): string | null {
 /**
  * `templateId: null` is the caller's explicit "no playbook": recorded as the
  * offer already made (`PLAYBOOK_OFFERED_AT_KEY`), so a later update's nudge
- * does not offer the pod's playbooks again (ticket dddeb66c). Absent = the
- * caller said nothing, and the offer stays open.
+ * does not offer the pod's playbooks again (ticket dddeb66c), and as declined
+ * (`PLAYBOOK_DECLINED_AT_METADATA_KEY`), so no bind ever inherits the parent's
+ * playbook (finding 42e4af30). Absent = the caller said nothing, and the offer
+ * stays open.
  */
 function playbookOptOutPatch(
   templateId: string | null | undefined
 ): Record<string, string> {
-  return templateId === null
-    ? { [PLAYBOOK_OFFERED_AT_KEY]: new Date().toISOString() }
-    : {};
+  if (templateId !== null) return {};
+  const at = new Date().toISOString();
+  return {
+    [PLAYBOOK_OFFERED_AT_KEY]: at,
+    [PLAYBOOK_DECLINED_AT_METADATA_KEY]: at,
+  };
 }
 
 /** `reasonCode` of an agent's start that declares no criterion. */
@@ -1637,6 +1643,7 @@ export async function createFocusSession(
           workspaceId: sessionOut.workspaceId ?? null,
           subjectEntityId: sessionOut.subjectEntityId ?? null,
           parentSessionId,
+          declinedPlaybook: params.templateId === null,
         });
         binding = bound.line;
         if (bound.decision === "bind") {

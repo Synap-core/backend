@@ -367,6 +367,39 @@ describe("at start: a fact binds through the follow door", () => {
     expect(row.playbook_id).toBe(OTHER);
     expect(row.metadata.boundBy).toMatchObject({ rung: "parent" });
   });
+
+  it("templateId: null refuses the parent's playbook and its criteria (finding 42e4af30)", async () => {
+    const parent = await start({ templateId: OTHER });
+    const child = await start({
+      parentSessionId: parent.session.id,
+      templateId: null,
+    });
+    const row = await rowOf(child.session.id);
+    expect(row.playbook_id).toBeNull();
+    expect(row.metadata.boundBy).toBeUndefined();
+    expect(typeof row.metadata.playbookDeclinedAt).toBe("string");
+    expect(await runsOf(child.session.id)).toEqual([]);
+    expect(child.binding).toBeUndefined();
+    const [{ criteria }] = (
+      await q<{ criteria: Array<{ key: string }> | null }>(
+        `select criteria from focus_sessions where id = $1`,
+        [child.session.id]
+      )
+    ).rows;
+    expect((criteria ?? []).map((c) => c.key)).not.toContain(
+      "something-else-done"
+    );
+
+    // The late re-resolve keeps refusing it when a subject first arrives.
+    const up = await updateFocusSession({
+      sessionId: child.session.id,
+      userId: USER,
+      subjectEntityId: await entityOf(NOTE_PROFILE),
+    });
+    if (up.status !== "updated") throw new Error(up.status);
+    expect(up.session.playbookId ?? null).toBeNull();
+    expect((await rowOf(child.session.id)).playbook_id).toBeNull();
+  });
 });
 
 describe("binding reads the space the session space ladder placed (W3)", () => {

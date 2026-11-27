@@ -292,6 +292,21 @@ describe("rung 3: the parent's playbook", () => {
     );
     expect(outside.kind).toBe("offer");
   });
+
+  it("templateId: null (declinedPlaybook) refuses the parent's playbook; the subject still decides (finding 42e4af30)", () => {
+    const wave = pb({ name: "Run a wave" });
+    const fix = pb({ subjectProfile: { profileSlug: "issue" } });
+    const parent = { id: "5e2a465b", playbookId: wave.id, currentStage: null };
+    expect(
+      resolveBindingRung(at({ parent, declinedPlaybook: true }), [wave, fix])
+    ).toEqual({ kind: "none" });
+    expect(
+      resolveBindingRung(
+        at({ parent, subject: issue(), declinedPlaybook: true }),
+        [wave, fix]
+      )
+    ).toMatchObject({ kind: "bind", rung: "subject", playbookId: fix.id });
+  });
 });
 
 describe("rung 4: the `main red:` title (rules/github-ci)", () => {

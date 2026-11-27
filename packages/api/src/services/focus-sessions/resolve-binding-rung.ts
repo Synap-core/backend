@@ -26,7 +26,9 @@
  *                   tried before pod-wide ones; exactly ONE binds, several
  *                   are an offer.
  *   3 `parent`    — the parent session follows an active playbook: the child
- *                   (a lane of that work) follows it too.
+ *                   (a lane of that work) follows it too, unless the caller
+ *                   said `templateId: null` (`declinedPlaybook`): an explicit
+ *                   "no playbook" refuses the inheritance (finding 42e4af30).
  *   4 `main-red`  — the title starts with `main red:` (the grammar
  *                   `.claude/rules/github-ci.md` mandates, `main red: <repo>
  *                   <check> @<sha8>`): the active playbook named for main red.
@@ -89,7 +91,18 @@ export interface BindingSituation {
     playbookId: string | null;
     currentStage: string | null;
   } | null;
+  /**
+   * The caller started with `templateId: null`: rung 3 is skipped. Facts about
+   * the session itself (its subject, its `main red:` title) still decide.
+   */
+  declinedPlaybook?: boolean;
 }
+
+/**
+ * Stamped at start when the caller passed `templateId: null`, so the late
+ * re-resolve (`rebindOnFirstFact`) keeps refusing the parent's playbook.
+ */
+export const PLAYBOOK_DECLINED_AT_METADATA_KEY = "playbookDeclinedAt";
 
 export type BindingDecision =
   | {
@@ -233,7 +246,7 @@ export function resolveBindingRung(
     (restrictTo === null || restrictTo.has(p.id)) && subjectFits(p, subject);
 
   // Rung 3 — the parent's playbook.
-  const parent = situation.parent;
+  const parent = situation.declinedPlaybook ? null : situation.parent;
   if (parent?.playbookId) {
     const p = live.find((x) => x.id === parent.playbookId);
     if (p && allowed(p)) {

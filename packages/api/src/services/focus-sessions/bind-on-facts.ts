@@ -43,6 +43,7 @@ import { mergeSessionMetadata } from "./session-metadata.js";
 import { UNFOLLOWED_AT_METADATA_KEY } from "./follow-playbook.js";
 import {
   bindingLine,
+  PLAYBOOK_DECLINED_AT_METADATA_KEY,
   resolveBindingRung,
   type BindingDecision,
   type BindingPlaybook,
@@ -81,6 +82,8 @@ export interface BindOnFactsInput {
   workspaceId: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
+  /** The caller said `templateId: null`: the parent's playbook is not inherited. */
+  declinedPlaybook?: boolean;
 }
 
 /** The facts the ladder reads, loaded through the owner floor. */
@@ -90,6 +93,7 @@ export async function loadBindingFacts(input: {
   title: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
+  declinedPlaybook?: boolean;
 }): Promise<{ situation: BindingSituation; pool: BindingPlaybook[] }> {
   // The pool the follow door can see (`userVisibleWhere`, its own floor), so
   // a decision is always one the door can apply. Active only: a draft never
@@ -164,6 +168,7 @@ export async function loadBindingFacts(input: {
       workspaceId: input.workspaceId,
       subject,
       parent,
+      ...(input.declinedPlaybook ? { declinedPlaybook: true } : {}),
     },
     pool,
   };
@@ -328,6 +333,7 @@ export async function rebindOnFirstFact(input: {
       // The `spawned_from` edge, read-only: a lane's parent may follow a
       // playbook (rung 3). Never a close path (`session-detour-pop.test.ts`).
       parentSessionId: await getParentSessionId(session.id),
+      declinedPlaybook: meta[PLAYBOOK_DECLINED_AT_METADATA_KEY] !== undefined,
     });
   } catch (err) {
     logger.warn(
