@@ -54,7 +54,10 @@ function measure(): { tools: Record<string, number>; entryChars: number } {
       inputSchema: t.inputSchema,
     }).length;
   }
-  const entryChars = entryToolNames().reduce((n, name) => n + (tools[name] ?? 0), 0);
+  const entryChars = entryToolNames().reduce(
+    (n, name) => n + (tools[name] ?? 0),
+    0
+  );
   return { tools, entryChars };
 }
 
@@ -85,7 +88,8 @@ describe("tool definition token budget (ratchet)", () => {
   const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Baseline;
 
   it("measures every ENTRY tool (a missing one would hide a growth)", () => {
-    for (const name of entryToolNames()) expect(now.tools[name]).toBeGreaterThan(0);
+    for (const name of entryToolNames())
+      expect(now.tools[name]).toBeGreaterThan(0);
   });
 
   it("no tool grew past its baseline", () => {

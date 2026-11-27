@@ -213,8 +213,7 @@ function reg(): Registry {
   return registry;
 }
 
-const registered = (name: string) =>
-  reg().byName.get(canonicalToolName(name));
+const registered = (name: string) => reg().byName.get(canonicalToolName(name));
 
 /** The tool a name answers as: itself, or the tool an alias names. */
 export function canonicalToolName(name: string): string {

@@ -278,18 +278,27 @@ export function applyTextEdits(
   const stored = patchedLevel(envelope, patch);
   const fields = { ...patch.fields };
   for (const { field, find, replace } of patch.textEdits) {
-    const current = Object.hasOwn(fields, field) ? fields[field] : stored[field];
+    const current = Object.hasOwn(fields, field)
+      ? fields[field]
+      : stored[field];
     if (typeof current !== "string") {
-      throw bad(`textEdits: \`${field}\` is not a text field of this proposal.`);
+      throw bad(
+        `textEdits: \`${field}\` is not a text field of this proposal.`
+      );
     }
     const at = find === "" ? -1 : current.indexOf(find);
     if (at === -1) {
-      throw bad(`textEdits: \`${field}\` does not contain ${JSON.stringify(find.slice(0, 80))}. Nothing was revised.`);
+      throw bad(
+        `textEdits: \`${field}\` does not contain ${JSON.stringify(find.slice(0, 80))}. Nothing was revised.`
+      );
     }
     if (current.indexOf(find, at + 1) !== -1) {
-      throw bad(`textEdits: ${JSON.stringify(find.slice(0, 80))} occurs more than once in \`${field}\`; include more of the text around it. Nothing was revised.`);
+      throw bad(
+        `textEdits: ${JSON.stringify(find.slice(0, 80))} occurs more than once in \`${field}\`; include more of the text around it. Nothing was revised.`
+      );
     }
-    fields[field] = current.slice(0, at) + replace + current.slice(at + find.length);
+    fields[field] =
+      current.slice(0, at) + replace + current.slice(at + find.length);
   }
   return { kind: patch.kind, fields };
 }

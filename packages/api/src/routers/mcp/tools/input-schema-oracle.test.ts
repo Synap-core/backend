@@ -38,8 +38,7 @@ const TEXT_EDITS =
 const ACCEPTED: Record<string, string> = {
   "synap_start_session.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_update_session.properties.params.additionalProperties": VACUOUS_OPEN,
-  "synap_set_track_params.properties.params.additionalProperties":
-    VACUOUS_OPEN,
+  "synap_set_track_params.properties.params.additionalProperties": VACUOUS_OPEN,
   "synap_create_playbook.properties.expectedOutputs.items.additionalProperties":
     VACUOUS_OPEN,
   "synap_create_playbook.properties.stages.items.properties.expectedOutputs.items.additionalProperties":
@@ -126,8 +125,6 @@ describe("oracle: the zod inputs derive the JSON Schema the tools advertised", (
       differences(canon(frozen), canon(derived.get(name)), name)
     );
     expect(found.filter((p) => !(p in ACCEPTED))).toEqual([]);
-    expect(Object.keys(ACCEPTED).filter((p) => !found.includes(p))).toEqual(
-      []
-    );
+    expect(Object.keys(ACCEPTED).filter((p) => !found.includes(p))).toEqual([]);
   });
 });

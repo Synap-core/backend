@@ -1412,7 +1412,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_entity",
       group: "data",
-      hidden: "A data door of synap_capture (entities[]); kept callable for the frozen connector name pod__create_entity.",
+      hidden:
+        "A data door of synap_capture (entities[]); kept callable for the frozen connector name pod__create_entity.",
       teaches: ["entity.create", "create_entity"],
       annotations: {
         title: "Create entity",
@@ -1666,7 +1667,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_create_document",
       group: "data",
-      hidden: "A data door of synap_capture (documents[]); kept callable for the frozen connector name pod__create_document.",
+      hidden:
+        "A data door of synap_capture (documents[]); kept callable for the frozen connector name pod__create_document.",
       teaches: ["document.create", "create_document"],
       annotations: {
         title: "Create document",
@@ -2940,7 +2942,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_continue_session",
       group: "sessions",
-      cpOmit: "Person-only on the pod; not exposed to connectors yet (founder, 17 Nov 2026).",
+      cpOmit:
+        "Person-only on the pod; not exposed to connectors yet (founder, 17 Nov 2026).",
       annotations: {
         title: "Continue a stopped run",
         readOnlyHint: false,
@@ -3072,7 +3075,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_wait_for_answer",
       group: "entry",
-      cpOmit: "A long poll (up to 90 s): claude.ai times a connector call out before it ends; a connector agent reads answers through the session reads.",
+      cpOmit:
+        "A long poll (up to 90 s): claude.ai times a connector call out before it ends; a connector agent reads answers through the session reads.",
       annotations: {
         title: "Wait for the person's answer",
         // Not read-only: an agent's read stamps the "Picked up" receipt.
@@ -4555,9 +4559,9 @@ export function toolDefinitions() {
               toTrackId: z.string().optional(),
               option: z.string().optional(),
             } satisfies Record<
-                Exclude<keyof CompositeCreateLinkOp, "op">,
-                unknown
-              >)
+              Exclude<keyof CompositeCreateLinkOp, "op">,
+              unknown
+            >)
           )
           .optional()
           .describe(
@@ -5041,7 +5045,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_start_stage_session",
       group: "tracks",
-      hidden: "Legacy staged goals: synap_start_session with trackId; kept for the frozen connector name pod__start_stage_session.",
+      hidden:
+        "Legacy staged goals: synap_start_session with trackId; kept for the frozen connector name pod__start_stage_session.",
       annotations: {
         title: "Start step session",
         readOnlyHint: false,
@@ -6227,7 +6232,11 @@ export function toolDefinitions() {
       name: "synap_list_cells",
       group: "build",
       aliases: [
-        { name: "synap_list_widgets", reason: "Founder, 23 Nov 2026: the word is Cell; the old name stays frozen on the connector." },
+        {
+          name: "synap_list_widgets",
+          reason:
+            "Founder, 23 Nov 2026: the word is Cell; the old name stays frozen on the connector.",
+        },
       ],
       teaches: ["list_cells", "list_widgets"],
       annotations: {
@@ -7057,7 +7066,8 @@ export function toolDefinitions() {
     defineTool({
       name: "synap_run_playbook",
       group: "build",
-      hidden: "Folded into synap_start_session (templateId); kept one release for the frozen connector name pod__run_playbook.",
+      hidden:
+        "Folded into synap_start_session (templateId); kept one release for the frozen connector name pod__run_playbook.",
       annotations: {
         title: "Run process",
         readOnlyHint: false,

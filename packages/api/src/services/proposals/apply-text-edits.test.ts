@@ -5,10 +5,7 @@
  * revise checks run, so every protection sees an ordinary `fields` patch.
  */
 import { describe, expect, it } from "vitest";
-import {
-  applyTextEdits,
-  computeRevisedEnvelope,
-} from "./proposals-service.js";
+import { applyTextEdits, computeRevisedEnvelope } from "./proposals-service.js";
 
 const SOURCE = [
   "export default function Card() {",
@@ -29,7 +26,11 @@ describe("applyTextEdits", () => {
       kind: "inner",
       fields: {},
       textEdits: [
-        { field: "rendererSource", find: '"#ff0000"', replace: "var(--synap-accent)" },
+        {
+          field: "rendererSource",
+          find: '"#ff0000"',
+          replace: "var(--synap-accent)",
+        },
       ],
     });
     expect(out.fields.rendererSource).toBe(

@@ -15,29 +15,26 @@ import { noteLimitClamped } from "./call-notices.js";
  * object is refused saying so, never read as "nobody supplied it".
  */
 export function jsonObjectInput(name: string) {
-  return z.preprocess(
-    (v, ctx) => {
-      if (typeof v !== "string") return v;
-      if (v.trim() === "") return undefined;
-      try {
-        const parsed: unknown = JSON.parse(v);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          return parsed;
-        }
-        ctx.addIssue({
-          code: "custom",
-          message: `\`${name}\` must be a JSON OBJECT of answers keyed by param name, not ${Array.isArray(parsed) ? "an array" : `a ${typeof parsed}`}.`,
-        });
-      } catch {
-        ctx.addIssue({
-          code: "custom",
-          message: `\`${name}\` was sent as a string that is not JSON. Send it as a JSON object, e.g. {"clientName": "Acme"}.`,
-        });
+  return z.preprocess((v, ctx) => {
+    if (typeof v !== "string") return v;
+    if (v.trim() === "") return undefined;
+    try {
+      const parsed: unknown = JSON.parse(v);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
       }
-      return z.NEVER;
-    },
-    z.record(z.string(), z.unknown()).optional()
-  );
+      ctx.addIssue({
+        code: "custom",
+        message: `\`${name}\` must be a JSON OBJECT of answers keyed by param name, not ${Array.isArray(parsed) ? "an array" : `a ${typeof parsed}`}.`,
+      });
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        message: `\`${name}\` was sent as a string that is not JSON. Send it as a JSON object, e.g. {"clientName": "Acme"}.`,
+      });
+    }
+    return z.NEVER;
+  }, z.record(z.string(), z.unknown()).optional());
 }
 
 /**
@@ -100,10 +97,7 @@ function wireNode(node: unknown, unbounded = false): unknown {
     out[k] =
       k === "properties"
         ? Object.fromEntries(
-            Object.entries(v as object).map(([p, s]) => [
-              p,
-              wireNode(s, strip),
-            ])
+            Object.entries(v as object).map(([p, s]) => [p, wireNode(s, strip)])
           )
         : DATA_KEYWORDS.has(k)
           ? v

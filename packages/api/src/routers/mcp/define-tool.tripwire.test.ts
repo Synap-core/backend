@@ -83,9 +83,9 @@ describe("tripwire: one definition per MCP tool", () => {
     const defined = new Set(definedToolNames());
     const listed = (await tools.list()).map((t) => t.name);
     expect(listed).toContain("synap_list_widgets");
-    expect(
-      listed.filter((n) => !defined.has(canonicalToolName(n)))
-    ).toEqual([]);
+    expect(listed.filter((n) => !defined.has(canonicalToolName(n)))).toEqual(
+      []
+    );
   });
 
   it("no hand-written tool list or tool-to-tool map beside the definitions", () => {

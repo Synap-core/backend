@@ -75,7 +75,7 @@ describe("the valid set is the declared schema, and covers what the handler read
   });
 
   it("every declared key and every door-injected lens key passes", async () => {
-    const declared = (declaredArgNames("synap_update_session"))!;
+    const declared = declaredArgNames("synap_update_session")!;
     const all = Object.fromEntries(
       [...declared, ...DOOR_INJECTED_ARGS].map((k) => [k, 1])
     );
@@ -103,7 +103,7 @@ describe("the valid set is the declared schema, and covers what the handler read
     for (const k of ["sessionId", "completeOutput", "addOutput", "outcomes"]) {
       expect(read).toContain(k);
     }
-    const declared = (declaredArgNames("synap_update_session"))!;
+    const declared = declaredArgNames("synap_update_session")!;
     const notDeclared = [...read].filter(
       (k) =>
         !declared.includes(k) &&
