@@ -144,18 +144,13 @@ const sourceFiles = ["packages/api/src", "packages/types/src"].flatMap((dir) =>
 
 /**
  * KNOWN, a ledger that only shrinks: texts that still name the old tool and
- * belong to an open change. Both MCP descriptions and the bento view type's
- * blurb are lines of backend#1286 (the bento catalog), which owns them; its
- * lane renames them and lowers this ledger. Exact, so a stale entry fails.
+ * belong to an open change. Empty since the surfaces wave renamed the last
+ * ones (the `synap_create_view` / `synap_update_view` descriptions and the
+ * bento view type's blurb, left by backend#1286). Exact, so a stale entry
+ * fails; a new entry needs an open change that owns it.
  */
-const KNOWN_MANIFEST = [
-  "synap_create_view.description",
-  "synap_update_view.description",
-];
-const KNOWN_SOURCE: Record<string, number> = {
-  "packages/api/src/routers/mcp/tools/index.ts": 2,
-  "packages/types/src/renderables/views.ts": 1,
-};
+const KNOWN_MANIFEST: string[] = [];
+const KNOWN_SOURCE: Record<string, number> = {};
 const catalogFiles = readdirSync(VOCABULARY)
   .filter((name) => /^catalog\.[a-z]+\.ts$/.test(name))
   .map((name) => join(VOCABULARY, name));
