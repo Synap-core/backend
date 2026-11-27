@@ -16,11 +16,7 @@
  * an `OverviewMark`), the retro-impact input, and date formatting.
  */
 
-import {
-  createT,
-  type Catalog,
-  type Catalogs,
-} from "../i18n/translator.js";
+import { createT, type Catalog, type Catalogs } from "../i18n/translator.js";
 import type { Locale } from "../i18n/locale.js";
 import {
   buildObjectActionTitle,
@@ -231,11 +227,10 @@ export function podSwitchWords(
 }
 
 /** Each governance number's slot, by its `config_settings` key. */
-const SETTING_SLOT: Readonly<Record<string, "ownWorkHours" | "evidenceMin">> =
-  {
-    "governance.own_work_fresh_hours": "ownWorkHours",
-    "governance.project_evidence_min": "evidenceMin",
-  };
+const SETTING_SLOT: Readonly<Record<string, "ownWorkHours" | "evidenceMin">> = {
+  "governance.own_work_fresh_hours": "ownWorkHours",
+  "governance.project_evidence_min": "evidenceMin",
+};
 
 /** A governance number in words; a key with no words reads as its humanized token. */
 export function podSettingWords(

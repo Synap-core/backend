@@ -132,9 +132,7 @@ export function settingsOf(
   read: FloorsQuery,
   pattern: string | null
 ): PodSetting[] {
-  return (read.data?.settings ?? []).filter(
-    (s) => s.parameterOf === pattern
-  );
+  return (read.data?.settings ?? []).filter((s) => s.parameterOf === pattern);
 }
 
 /** The value of the setting `pattern`'s sentence names; null when it was not read. */

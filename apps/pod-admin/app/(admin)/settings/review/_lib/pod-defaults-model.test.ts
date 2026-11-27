@@ -156,9 +156,9 @@ describe("a governance number", () => {
 
 describe("where a governance number is drawn", () => {
   it("under the switch it is a parameter of, or on its own", () => {
-    expect(settingsOf(floorsRead, "@own-organise").map((s) => s.key)).toEqual(
-      [HOURS]
-    );
+    expect(settingsOf(floorsRead, "@own-organise").map((s) => s.key)).toEqual([
+      HOURS,
+    ]);
     expect(settingsOf(floorsRead, null).map((s) => s.key)).toEqual([
       "governance.project_evidence_min",
     ]);

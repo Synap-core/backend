@@ -510,7 +510,7 @@ async function revokeRulesIn(
  * pod switch that lets the other approval rules decide it (`floorClassOf`);
  * absent, no switch lifts it.
  */
-interface PlatformFloor {
+export interface PlatformFloor {
   key:
     | "admin"
     | "agent-schema"

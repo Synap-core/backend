@@ -37,7 +37,10 @@ import {
   useSetPodSetting,
   useSetReversibleDefault,
 } from "../../../../_lib/presence/use-sensitive-actions";
-import { useConsoleLocale, useT } from "../../../../../lib/i18n/locale-provider";
+import {
+  useConsoleLocale,
+  useT,
+} from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import {
   dialState,

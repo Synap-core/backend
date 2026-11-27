@@ -312,9 +312,9 @@ describe("POD_SWITCH_WORDS — one catalog for every switch, en and fr", () => {
         expect(words.line.length, `${pattern} ${locale}`).toBeGreaterThan(0);
       }
     }
-    expect(podSwitchWords(REVERSIBLE_CLASS_PATTERN, { locale: "fr" }).label).not.toBe(
-      podSwitchWords(REVERSIBLE_CLASS_PATTERN).label
-    );
+    expect(
+      podSwitchWords(REVERSIBLE_CLASS_PATTERN, { locale: "fr" }).label
+    ).not.toBe(podSwitchWords(REVERSIBLE_CLASS_PATTERN).label);
   });
 
   it("the tidy line names the pod's window; an unread one says recently, never a guessed day", () => {
