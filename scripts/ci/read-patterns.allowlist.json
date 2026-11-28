@@ -145,10 +145,6 @@
         "count": 1,
         "reason": "the backend#1341 shape on automation_runs: fix with uuidFromTextSql"
       },
-      "packages/api/src/services/focus-sessions/session-interactions.ts": {
-        "count": 2,
-        "reason": "the exact backend#1341 shape (automation_runs.id::text = metadata ->> 'automationRunId', and events.id::text): fix with uuidFromTextSql"
-      },
       "packages/api/src/services/focus-sessions/session-list-conditions.ts": {
         "count": 2,
         "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"

@@ -401,6 +401,12 @@ const FIXED: Array<{
     regressed: "ar.id::text = ${m} ->> 'automationRunId'",
   },
   {
+    pattern: "key-cast-to-text",
+    file: "packages/api/src/services/focus-sessions/session-interactions.ts",
+    fixed: "eq(events.id, uuidFromTextSql(triggerEventText))",
+    regressed: "eq(drizzleSql`${events.id}::text`, triggerEventText)",
+  },
+  {
     pattern: "proposal-data-whole",
     file: "packages/api/src/services/diagnose/review-queue.ts",
     fixed:
@@ -419,8 +425,9 @@ const FIXED: Array<{
 /** One real offender per pattern the scan must keep seeing (fix it: pin another). */
 const KNOWN_POSITIVE: Record<ReadPattern, string> = {
   "events-unbounded": "packages/database/src/repositories/event-repository.ts",
+  // session-interactions.ts was the pin until backend#1381 fixed it (now in FIXED).
   "key-cast-to-text":
-    "packages/api/src/services/focus-sessions/session-interactions.ts",
+    "packages/api/src/services/diagnose/automation-dispatch.ts",
   "proposal-data-whole":
     "packages/database/src/repositories/proposal-repository.ts",
 };
