@@ -29,6 +29,7 @@ import {
   focusSessions,
   proposals,
   messages,
+  channels,
   sessionStageRuns,
   lifecycleTransitionOutbox,
 } from "@synap/database/schema";
@@ -85,6 +86,8 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
   await h.client!.exec(ddlFor(proposals as unknown as PgTable));
   await h.client!.exec(ddlFor(messages as unknown as PgTable));
+  // A post in its own room is activity: SESSION_IS_STALE reads the room.
+  await h.client!.exec(ddlFor(channels as unknown as PgTable));
   // A step that waits keeps its session (0422): SESSION_IS_STALE reads it.
   await h.client!.exec(ddlFor(sessionStageRuns as unknown as PgTable));
   // A session paused on a wait hold keeps itself (SESSION_IS_STALE reads
@@ -183,5 +186,56 @@ describe("SESSION_IS_STALE", () => {
     expect(ids).not.toContain(curating);
     expect(ids).toContain(done);
     expect(ids).toContain(plain);
+  });
+
+  /** A quiet session (`updated_at` 72 h ago) with its own room. */
+  async function quietWithRoom(): Promise<{ id: string; room: string }> {
+    const id = await session({ metadata: {}, idleHours: 72 });
+    const room = randomUUID();
+    await q(
+      `insert into channels (id, context_object_type, context_object_id) values ($1, 'focus_session', $2)`,
+      [room, id]
+    );
+    await q(`update focus_sessions set channel_id = $1 where id = $2`, [
+      room,
+      id,
+    ]);
+    return { id, room };
+  }
+  const post = (
+    room: string,
+    hoursAgo: number,
+    authorType: string,
+    metadata: Record<string, unknown> = {}
+  ) =>
+    q(
+      `insert into messages (id, channel_id, author_type, metadata, timestamp)
+       values ($1, $2, $3, $4::jsonb, now() - ($5::int * interval '1 hour'))`,
+      [randomUUID(), room, authorType, JSON.stringify(metadata), hoursAgo]
+    );
+
+  it("never stales a session whose agent or person posted in its own room in the window (the run reaper's rule)", async () => {
+    const agentPosted = await quietWithRoom();
+    await post(agentPosted.room, 2, "ai_agent");
+    const personPosted = await quietWithRoom();
+    await post(personPosted.room, 2, "human");
+    const ids = await staleIds();
+    expect(ids).not.toContain(agentPosted.id);
+    expect(ids).not.toContain(personPosted.id);
+  });
+
+  it("stales a quiet session whose room has only notices, a coordination post, or an old post", async () => {
+    const notices = await quietWithRoom();
+    await post(notices.room, 2, "bot");
+    const coordination = await quietWithRoom();
+    await post(coordination.room, 2, "human", {
+      sessionPost: { from: randomUUID() },
+    });
+    const old = await quietWithRoom();
+    await post(old.room, 30, "ai_agent");
+    const ids = await staleIds();
+    expect(ids).toContain(notices.id);
+    expect(ids).toContain(coordination.id);
+    expect(ids).toContain(old.id);
   });
 });

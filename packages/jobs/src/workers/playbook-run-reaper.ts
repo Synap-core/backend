@@ -70,18 +70,13 @@ import {
   stageRunAgentLiveWhere,
   setRunStatus,
   setSessionStatus,
-  MessageAuthorType,
+  sessionRoomPostedWithinHours,
 } from "@synap/database";
-import { SESSION_ROOM_CONTEXT_TYPE } from "@synap/database/channel-visibility";
 import { createLogger } from "@synap-core/core";
 import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
 import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import type { RunHolder } from "@synap-core/types/units";
-import {
-  passedOverLine,
-  SESSION_POST_META_KEY,
-  type RunOn,
-} from "@synap-core/types/agents";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
 import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
@@ -209,16 +204,9 @@ const STALE_RUN_ERROR_MESSAGE =
  * reapable. Interval arithmetic in SQL (no bound Date param — postgres.js 3.4.8
  * crashes on Date binds on the pod image, same as automation-run-reaper).
  *
- * The room post that counts is narrow, so a dead run is never kept alive by
- * someone else's words:
- *   • the session's OWN room (`contextObjectType = 'focus_session'`, its id):
- *     a borrowed channel other work also posts in is not its activity;
- *   • written by a person or an agent: the pod's own notices (`bot`: recall,
- *     dispatch, run summaries, status notices) are not;
- *   • not a coordination post from another session (`sessionPost` stamp): a
- *     lead writing to a lane says nothing about the lane's agent;
- *   • not deleted, not ephemeral.
- * Read on `messages_channel_timestamp_idx` (channel_id, timestamp).
+ * Which room post counts is ONE rule, `sessionRoomPostedWithinHours`
+ * (@synap/database `session-room-activity.ts`), shared with the session
+ * reaper and the runs feed's `lastActivityAt`.
  */
 function sessionQuietFor(hours: number) {
   return drizzleSql`NOT EXISTS (
@@ -227,18 +215,10 @@ function sessionQuietFor(hours: number) {
     AND fs.status IN ('active', 'paused')
     AND (
       fs.updated_at > now() - (${hours}::int * interval '1 hour')
-      OR EXISTS (
-        SELECT 1 FROM channels room
-        JOIN messages m ON m.channel_id = room.id
-        WHERE room.id = fs.channel_id
-          AND room.context_object_type = ${SESSION_ROOM_CONTEXT_TYPE}
-          AND room.context_object_id = fs.id
-          AND m.timestamp > now() - (${hours}::int * interval '1 hour')
-          AND m.author_type IN (${MessageAuthorType.HUMAN}, ${MessageAuthorType.AI_AGENT})
-          AND m.deleted_at IS NULL
-          AND m.ephemeral IS NOT TRUE
-          AND (m.metadata -> ${SESSION_POST_META_KEY}::text) IS NULL
-      )
+      OR ${sessionRoomPostedWithinHours(
+        { id: drizzleSql`fs.id`, channelId: drizzleSql`fs.channel_id` },
+        hours
+      )}
     )
 )`;
 }

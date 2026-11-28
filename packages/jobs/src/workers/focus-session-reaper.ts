@@ -18,7 +18,11 @@
  * (progress, stage, goal, output, metadata patch — see update-session.ts,
  * focus-sessions.ts PATCH, hub-protocol/rest/focus-sessions.ts PATCH) bumps
  * `updatedAt`, so a long-running-but-actively-worked session is never reaped
- * on age alone — only genuine silence trips this.
+ * on age alone — only genuine silence trips this. A post by a person or an
+ * agent in the session's own room is activity too (founder Q14, finding
+ * c573d32d): a lane that only reports in its room never moves `updatedAt`.
+ * Which post counts is the one rule the playbook-run reaper reads,
+ * `sessionRoomPostedWithinHours`.
  */
 
 import {
@@ -36,6 +40,7 @@ import {
   personTouchedSubjectIds,
   setSessionStatus,
   onlyOpenPullRequestsWhere,
+  sessionRoomPostedWithinHours,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -175,6 +180,12 @@ export function focusSessionHoldWaitsWhere(): SQL {
   )`;
 }
 
+/** The session these sweeps read, and its own room. */
+const sessionRoom = {
+  id: focusSessions.id,
+  channelId: focusSessions.channelId,
+};
+
 /**
  * The staleness predicate, exported so a test can lock its SHAPE: it must key
  * off `updated_at` (bumped by every real touch — progress/stage/goal/output/
@@ -192,6 +203,8 @@ export function focusSessionHoldWaitsWhere(): SQL {
 export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`,
+  // A post in its own room is activity (the run reaper's rule, #1383).
+  drizzleSql`NOT ${sessionRoomPostedWithinHours(sessionRoom, REAPER_STALE_HOURS)}`,
   drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`,
   // A step that waits on a child run or on tools being installed (0422) is
   // waiting, not idle (runner engine spec 7111934d, risk 3).
@@ -229,6 +242,8 @@ export const AGENT_SESSION_MAY_BE_ABANDONED = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.origin} = 'agent'`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${AGENT_SESSION_ABANDONED_DAYS}::int * interval '1 day')`,
+  // An agent still posting in its room has not walked away.
+  drizzleSql`NOT ${sessionRoomPostedWithinHours(sessionRoom, AGENT_SESSION_ABANDONED_DAYS * 24)}`,
   focusSessionWaitsOnPersonWhere()
 );
 

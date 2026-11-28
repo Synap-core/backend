@@ -11,8 +11,8 @@
  *   childRuns7d / childFailed7d — playbook runs whose session names one of the
  *                     rule's runs (`metadata.automationRunId`, indexed by 0303);
  *   childStopped7d — those that stopped at their token budget or step limit
- *                     (`failed` + `stop_reason = 'budget'`): nothing broke, so
- *                     they are counted apart, never in childFailed7d.
+ *                     (`budgetStopWhere`, the run groups' rule): nothing
+ *                     broke, so they are counted apart, never in childFailed7d.
  *
  * Only automations with a run in the last 7 days are listed. Visibility is the
  * automations table's own floor (`userVisibleWhere`).
@@ -33,6 +33,7 @@ import {
   readMaxAiDispatchesPerDay,
 } from "@synap-core/types/automations";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { budgetStopWhere } from "../runs/index.js";
 
 export interface AutomationDispatchFootprint {
   automationId: string;
@@ -87,8 +88,9 @@ export async function automationDispatchFootprints(input: {
     .select({
       automationId: automationRuns.automationId,
       total: drizzleSql<number>`COUNT(${playbookRuns.id})::int`,
-      failed: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed' AND ${playbookRuns.stopReason} IS DISTINCT FROM 'budget')::int`,
-      stopped: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed' AND ${playbookRuns.stopReason} = 'budget')::int`,
+      // `budgetStopWhere`: the ONE budget-stop rule the run groups count with.
+      failed: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed' AND NOT ${budgetStopWhere(playbookRuns)})::int`,
+      stopped: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${budgetStopWhere(playbookRuns)})::int`,
     })
     .from(automationRuns)
     .innerJoin(
