@@ -35,6 +35,8 @@ import {
   ProviderUpsertSchema,
   AiProviderProposalPayload,
   providerKeyForRow,
+  providerPatch,
+  newProviderRow,
   type AiProviderProposalPayloadInput,
 } from "../../ai-providers.schema.js";
 import {
@@ -51,8 +53,9 @@ const logger = createLogger({ module: "hub-ai-providers" });
 
 // ── IS sync ───────────────────────────────────────────────────────────────────
 // Payload construction + endpoint/key resolution live in the shared
-// pushProvidersToIS() door. Best-effort here: the DB write has committed, so an
-// IS that is down must not fail the request — log and move on.
+// pushProvidersToIS() door. Best-effort after a write: the DB write has
+// committed, so an IS that is down must not fail the request — log and move
+// on. `POST /ai-providers/sync` is not best-effort (see there).
 
 async function syncToIS(): Promise<void> {
   try {
@@ -150,6 +153,11 @@ async function gateProviderWrite(
 /**
  * Build the payload the gate stores and the approve-executor replays.
  *
+ * It carries what the caller SENT, nothing more (the schema has no defaults):
+ * applied to an existing provider it changes only those fields
+ * (`providerPatch`), so an edit that names no `models` keeps them; a new
+ * provider takes the defaults for the rest (`newProviderRow`).
+ *
  * The plaintext key is encrypted HERE and never reaches `proposals.data`;
  * `keepExistingKey` records "this write supplied no key" so an approved edit
  * does not blank a working credential.
@@ -195,11 +203,15 @@ async function applyUpsert(
   if (existing) {
     await db
       .update(aiProviders)
-      .set({ ...rest, encryptedApiKey: resolvedKey, updatedAt: now })
+      .set({
+        ...providerPatch(rest),
+        encryptedApiKey: resolvedKey,
+        updatedAt: now,
+      })
       .where(eq(aiProviders.providerId, rest.providerId));
   } else {
     await db.insert(aiProviders).values({
-      ...rest,
+      ...newProviderRow(rest),
       id: rowId,
       encryptedApiKey: resolvedKey,
       createdAt: now,
@@ -407,11 +419,32 @@ export function registerAiProvidersRoutes(app: HubHono): void {
   });
 
   // POST /ai-providers/sync — re-push all to IS (must be before /:id routes)
+  //
+  // The push IS the act here, so its failure is the answer (the tRPC `sync`
+  // answers the same): 503 when no IS is configured, 502 when it refused or
+  // could not be reached. It used to go through the best-effort `syncToIS`
+  // and answered `ok: true` with the IS down.
   app.post("/ai-providers/sync", async (c) => {
     const refused = await providerWriteRefusal(c);
     if (refused) return c.json({ error: refused }, 403);
     const count = await db.query.aiProviders.findMany().then((r) => r.length);
-    await syncToIS();
+    try {
+      await pushProvidersToIS();
+    } catch (err) {
+      if (err instanceof ISProviderError) {
+        return c.json(
+          { ok: false, error: err.message },
+          err.code === "IS_NOT_CONFIGURED" ? 503 : 502
+        );
+      }
+      return c.json(
+        {
+          ok: false,
+          error: `IS provider sync failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+        502
+      );
+    }
     return c.json({ ok: true, count });
   });
 

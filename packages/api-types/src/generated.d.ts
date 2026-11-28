@@ -52,6 +52,23 @@ declare const SESSION_CLOSE_OUTCOMES: readonly [
 	"not_done"
 ];
 export type SessionClosedAs = (typeof SESSION_CLOSE_OUTCOMES)[number];
+export interface GrantScope {
+	/** Permission patterns (see the grammar above). */
+	permissions: readonly string[];
+	/** null/undefined = any workspace the human can reach. */
+	workspaceIds?: readonly string[] | null;
+	/** null/undefined = no project narrowing. */
+	projectIds?: readonly string[] | null;
+	/** null/undefined = no object pinning. */
+	entityIds?: readonly string[] | null;
+	/**
+	 * The APPLICATION this credential acts as — the app's `public_id`
+	 * (`grants.client_id`), or null/undefined for a bare key with no app
+	 * identity. ATTRIBUTION ONLY: it lets a write be recorded "via <app>"
+	 * alongside the connecting human; it NEVER widens what the grant permits.
+	 */
+	clientId?: string | null;
+}
 export interface GrantDraft {
 	/** Permission patterns, `<subject>[.<kind>].<action>`. */
 	readonly permissions: readonly string[];
@@ -10738,6 +10755,24 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
+/**
+ * What ONE key may touch: the UNION of its active grant scopes. A request is
+ * permitted when ANY scope permits it on its own — scopes never combine, so an
+ * app approved for "create People in Sales" and "read Notes in Finance" holds
+ * two scopes and can NOT create People in Finance (one flattened scope would
+ * have been the cross product). Never empty: a revoked/expired grant arrives as
+ * one deny-all scope (`permissions: []`).
+ */
+export interface KeyGrant {
+	readonly scopes: readonly GrantScope[];
+	/**
+	 * The APPLICATION this credential acts as (`grants.client_id` = the app's
+	 * `public_id`), or null for a bare key. Attribution, and never a widening:
+	 * the one place it is enforced TIGHTENS — an app's run of an outward verb
+	 * always proposes (`@synap/capability-gate`, decision 4A).
+	 */
+	readonly clientId: string | null;
+}
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -27867,6 +27902,19 @@ export interface ISProviderProbe {
 	latencyMs: number;
 	error?: string;
 }
+/** Where a person's Synap AI stands, as their console shows it (`synapAi.status`). */
+export interface SynapAiStatus {
+	/** It has at least one live grant: the person set what it may read and do. */
+	connected: boolean;
+	/** The person paused it: it does nothing for anyone, whatever its grants. */
+	paused: boolean;
+	/** The pod-held key its grants are set on (the Keys page row). */
+	keyId: string;
+	/** The person's personal agent, which IS Synap AI. */
+	agentUserId: string;
+	/** Its live grants, one scope each (empty when not connected). */
+	grants: KeyGrant["scopes"];
+}
 export interface TriageProjection {
 	/** Waiting for a human to accept or discard it. */
 	pending: boolean;
@@ -32648,9 +32696,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: {
+				access: KeyAccess;
 				createdAt: Date;
 				createdBy: string | null;
 				expiresAt: Date | null;
+				grants: Pick<{
+					apiKeyId: string;
+					clientId: string | null;
+					createdAt: Date;
+					createdBy: string;
+					entityIds: string[] | null;
+					expiresAt: Date | null;
+					id: string;
+					label: string | null;
+					onBehalfOf: string;
+					permissions: string[];
+					principalUserId: string;
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					revokedBy: string | null;
+					roleId: string | null;
+					workspaceIds: string[] | null;
+				}, "entityIds" | "expiresAt" | "label" | "permissions" | "projectIds" | "roleId" | "workspaceIds">[];
 				holder: KeyHolder | null;
 				hubId: string | null;
 				id: string;
@@ -35888,7 +35955,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					pricing: string;
 					serviceId: string;
 					version: string | null;
-					webhookUrl: string | null;
+					webhookUrl: string;
 				}[];
 				plugins: {
 					enabled: boolean;
@@ -62048,6 +62115,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: RendererUsageReport;
+		}>;
+	}>>;
+	synapAi: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		status: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: SynapAiStatus;
 		}>;
 	}>>;
 	sync: import("@trpc/server").TRPCBuiltRouter<{

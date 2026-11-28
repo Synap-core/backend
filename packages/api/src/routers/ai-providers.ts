@@ -13,7 +13,11 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { ProviderUpsertSchema } from "./ai-providers.schema.js";
+import {
+  ProviderUpsertSchema,
+  newProviderRow,
+  providerPatch,
+} from "./ai-providers.schema.js";
 import { router, podProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, drizzleSql } from "@synap/database";
@@ -32,7 +36,8 @@ const logger = createLogger({ module: "ai-providers" });
 // Payload construction + endpoint/key resolution live in the shared
 // pushProvidersToIS() door. The CRUD mutations treat the sync as best-effort:
 // the DB write has already committed, so an IS that is down must not fail the
-// request — log and move on.
+// request — log and move on. The explicit `sync` below is NOT best-effort:
+// syncing is the whole act there, so its failure is the answer.
 
 async function syncToIS(): Promise<void> {
   try {
@@ -90,14 +95,16 @@ export const aiProvidersRouter = router({
     const now = new Date();
 
     if (existing) {
+      // Only what was sent: a field the edit did not name keeps its stored
+      // value (pod admin's form sends no models; they must survive its save).
       await db
         .update(aiProviders)
-        .set({ ...rest, encryptedApiKey, updatedAt: now })
+        .set({ ...providerPatch(rest), encryptedApiKey, updatedAt: now })
         .where(eq(aiProviders.providerId, input.providerId));
       logger.info({ providerId: input.providerId }, "Provider updated");
     } else {
       await db.insert(aiProviders).values({
-        ...rest,
+        ...newProviderRow(rest),
         id: rowId,
         encryptedApiKey,
         createdAt: now,
@@ -205,9 +212,35 @@ export const aiProvidersRouter = router({
 
   /**
    * Re-push all providers to the IS (idempotent, safe after IS redeploy).
+   *
+   * The push IS the act here, so its failure is the answer: an IS that is not
+   * configured is PRECONDITION_FAILED, one that refused is BAD_GATEWAY, any
+   * other failure (unreachable, timeout) is INTERNAL_SERVER_ERROR. It used to
+   * go through the best-effort `syncToIS`, which swallowed every error, so
+   * "Sync to IS" said success with the IS down.
    */
   sync: podAdminProcedure.mutation(async () => {
-    await syncToIS();
+    try {
+      await pushProvidersToIS();
+    } catch (err) {
+      if (err instanceof ISProviderError) {
+        throw new TRPCError({
+          code:
+            err.code === "IS_NOT_CONFIGURED"
+              ? "PRECONDITION_FAILED"
+              : "BAD_GATEWAY",
+          message: err.message,
+          cause: err,
+        });
+      }
+      // Anything else (the IS unreachable, a timeout, a failed read) is still
+      // a sync that did not happen: never a success.
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `IS provider sync failed: ${err instanceof Error ? err.message : String(err)}`,
+        cause: err,
+      });
+    }
     const [{ count }] = await db
       .select({ count: drizzleSql<number>`count(*)::int` })
       .from(aiProviders);

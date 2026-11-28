@@ -11,6 +11,7 @@ import { agentHref, computerHref, navHref } from "../../../../lib/console-nav";
 import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import { appHref } from "../../applications/_lib/app-inventory";
+import { en as KEYS_EN } from "./copy";
 
 /**
  * Who holds a key — `apiKeys.list` / `adminListAll` project it (`KeyHolder`
@@ -24,6 +25,15 @@ import { appHref } from "../../applications/_lib/app-inventory";
 export type KeyHolder = NonNullable<
   inferRouterOutputs<AppRouter>["apiKeys"]["list"][number]["holder"]
 >;
+
+/**
+ * What a key may touch — `apiKeys.list` / `adminListAll` carry it (`KeyAccess`
+ * in `packages/database/src/repositories/grant-repository.ts`): `ungranted`
+ * (never had a grant) and `ended` (none is live) both mean it may touch
+ * NOTHING (deny by default, P5); `granted` = at least one live grant.
+ */
+export type KeyAccess =
+  inferRouterOutputs<AppRouter>["apiKeys"]["list"][number]["access"];
 
 export interface UnifiedKey {
   id: string;
@@ -50,6 +60,8 @@ export interface UnifiedKey {
     userType?: string | null;
   };
   holder?: KeyHolder | null;
+  /** What it may touch; absent = a list that does not carry it (`listSystemKeys`). */
+  access?: KeyAccess;
 }
 
 export type KeyCategory =
@@ -166,17 +178,26 @@ export function keysOfHolderHref(holderName: string): string {
   return navHref("keys", { q: holderName });
 }
 
+/**
+ * A key's status pill. An active key with no live grant is "No access", a
+ * warning: it authenticates but may touch nothing (deny by default), so
+ * "Active" would promise access it does not have (the Synap AI key before the
+ * person sets what it may read is one). Only a list that carries `access`
+ * can say so; without it the pill keeps to what it knows.
+ */
 export function keyStatus(apiKey: {
   isActive: boolean;
   expiresAt?: Date | string | null;
+  access?: KeyAccess;
 }): { kind: StatusKind; label: string } {
   if (!apiKey.isActive) return { kind: "down", label: "Revoked" };
-  if (apiKey.expiresAt) {
-    const exp = new Date(apiKey.expiresAt).getTime();
-    if (exp < Date.now()) return { kind: "stale", label: "Expired" };
-    if (exp - Date.now() < 7 * DAY_MS)
-      return { kind: "stale", label: "Expiring soon" };
-  }
+  const exp = apiKey.expiresAt ? new Date(apiKey.expiresAt).getTime() : null;
+  if (exp !== null && exp < Date.now())
+    return { kind: "stale", label: "Expired" };
+  if (apiKey.access === "ungranted" || apiKey.access === "ended")
+    return { kind: "stale", label: KEYS_EN["status.noAccess"] };
+  if (exp !== null && exp - Date.now() < 7 * DAY_MS)
+    return { kind: "stale", label: "Expiring soon" };
   return { kind: "healthy", label: "Active" };
 }
 
@@ -230,7 +251,11 @@ function matchesStatus(k: UnifiedKey, status: KeyStatusFilter): boolean {
   if (status === "revoked") return !k.isActive;
   if (!k.isActive) return false;
   if (status === "live") return true;
-  const label = keyStatus(k).label;
+  // Expiry only: a key with no access that expires soon is still "expiring".
+  const label = keyStatus({
+    isActive: k.isActive,
+    expiresAt: k.expiresAt,
+  }).label;
   return status === "expired" ? label === "Expired" : label === "Expiring soon";
 }
 

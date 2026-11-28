@@ -7,6 +7,8 @@ import { reportApproved } from "./shared.js";
 import {
   AiProviderProposalPayload,
   providerKeyForRow,
+  providerPatch,
+  newProviderRow,
   type AiProviderProposalPayloadInput,
 } from "../../ai-providers.schema.js";
 import { pushProvidersToIS } from "../../../utils/push-providers-to-is.js";
@@ -30,7 +32,9 @@ import { pushProvidersToIS } from "../../../utils/push-providers-to-is.js";
  * how `session-outputs` silently dropped `delegatedTo`/`returnedReason`: a
  * second, hand-maintained projection of one shape. `AiProviderProposalPayload`
  * is derived from `ProviderUpsertSchema`, so a field added to the door arrives
- * here by existing.
+ * here by existing. The payload holds what the caller SENT: on an existing
+ * provider it changes only those fields (`providerPatch`), never resets the
+ * others to defaults.
  *
  * SECRET HANDLING: the plaintext `apiKey` is NEVER written to `proposals.data`
  * — a pending proposal is a broadly-readable row, and a provider key sitting in
@@ -64,11 +68,15 @@ export function registerAiProviderExecutors(): void {
     if (existing) {
       await db
         .update(aiProviders)
-        .set({ ...rest, encryptedApiKey: resolvedKey, updatedAt: now })
+        .set({
+          ...providerPatch(rest),
+          encryptedApiKey: resolvedKey,
+          updatedAt: now,
+        })
         .where(eq(aiProviders.providerId, rest.providerId));
     } else {
       await db.insert(aiProviders).values({
-        ...rest,
+        ...newProviderRow(rest),
         id: rowId,
         encryptedApiKey: resolvedKey,
         createdAt: now,

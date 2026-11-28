@@ -462,13 +462,21 @@ export const apiKeysRouter = router({
         where: workspaceId ? eq(apiKeys.workspaceId, workspaceId) : undefined,
         orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
       });
-      const holderOf = await loadKeyHolders(keys.map((k) => k.userId));
+      // What each key may touch: the Keys page marks an active key with no
+      // live grant "No access" (deny by default, P5), so it must read it here
+      // too, from the same one read as `list`.
+      const [holderOf, reachOf] = await Promise.all([
+        loadKeyHolders(keys.map((k) => k.userId)),
+        loadKeyReach(keys.map((k) => k.id)),
+      ]);
 
       return keys.map((key) => ({
         id: key.id,
         userId: key.userId,
         /** What holds it — an app, a computer, an agent or a person (`KeyHolder`). */
         holder: holderOf(key.userId),
+        /** What this key may touch: `access` + every live grant (as `list`). */
+        ...reachOf(key.id),
         keyName: key.keyName,
         keyPrefix: key.keyPrefix,
         keyType: key.keyType,

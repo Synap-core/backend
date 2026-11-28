@@ -1,6 +1,6 @@
 /**
  * The words of "change what a key may do" (the Keys drawer's door and the
- * editor it opens), as catalogs (`@synap-core/types/i18n`): English is the
+ * editor it opens) and of a key's status, as catalogs (`@synap-core/types/i18n`): English is the
  * source and the type. DRAFT French ("vous"), awaiting the founder's review.
  */
 import type { Catalog } from "@synap-core/types/i18n";
@@ -34,6 +34,7 @@ export const en = {
     "Only the person this key belongs to can change what it may do.",
   "edit.whoFailed": "Couldn’t check whether you may change this key.",
   "edit.agentKeys": "Open its keys",
+  "status.noAccess": "No access",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -66,6 +67,7 @@ export const fr: Catalog<typeof en> = {
     "Seule la personne à qui appartient cette clé peut modifier ce qu’elle peut faire.",
   "edit.whoFailed": "Impossible de vérifier si vous pouvez modifier cette clé.",
   "edit.agentKeys": "Ouvrir ses clés",
+  "status.noAccess": "Aucun accès",
 };
 
 export const KEYS_CATALOGS = { en, fr };
