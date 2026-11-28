@@ -29,6 +29,51 @@ export const kratosAdmin = new IdentityApi(
   })
 );
 
+// ── Session verification cache ─────────────────────────────────────────────
+// Every /trpc/* and API request used to make a Kratos /sessions/whoami HTTP
+// round-trip (~3s across apps). Sessions are validated via Kratos at most once
+// per TTL per cookie/token instead of per request.
+//
+// In-memory, per-process, short-TTL. Only SUCCESSFUL session resolutions are
+// cached (errors and 401/403 are never cached, and 401/403 clear any entry).
+const KRATOS_SESSION_CACHE_TTL_MS = Number(
+  process.env.KRATOS_SESSION_CACHE_TTL_MS ?? 60_000
+);
+
+interface SessionCacheEntry {
+  session: any;
+  expiry: number;
+}
+
+const sessionCache = new Map<string, SessionCacheEntry>();
+
+function readCachedSession(key: string): any | undefined {
+  const entry = sessionCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiry <= Date.now()) {
+    sessionCache.delete(key);
+    return undefined;
+  }
+  return entry.session;
+}
+
+function writeCachedSession(key: string, session: any): void {
+  if (session == null) return; // null is never cached (invalid sessions)
+  sessionCache.set(key, {
+    session,
+    expiry: Date.now() + KRATOS_SESSION_CACHE_TTL_MS,
+  });
+}
+
+function clearCachedSession(key: string): void {
+  sessionCache.delete(key);
+}
+
+/** Test hook: drop every cached session. Exported for vitest isolation. */
+export function __clearKratosSessionCache(): void {
+  sessionCache.clear();
+}
+
 /**
  * Get session from Kratos
  *
@@ -36,9 +81,16 @@ export const kratosAdmin = new IdentityApi(
  * @returns Session data or null if invalid
  */
 export async function getKratosSession(cookie: string): Promise<any | null> {
+  const cacheKey = `cookie:${cookie}`;
+
   // LOCAL MODE: resolve via the fixed local identity (no Kratos call)
   if (isLocalModeEnabled()) {
     return buildLocalSession();
+  }
+
+  const cached = readCachedSession(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   // MOCK: In test mode with disabled OAuth, accept mock cookies
@@ -47,7 +99,7 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
     process.env.ENABLE_OAUTH2 === "false"
   ) {
     if (cookie.includes("mock-session-cookie")) {
-      return {
+      const mockSession = {
         active: true,
         identity: {
           id: "test-user-id",
@@ -57,16 +109,20 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
           },
         },
       };
+      writeCachedSession(cacheKey, mockSession);
+      return mockSession;
     }
   }
 
   try {
     const { data: session } = await kratosPublic.toSession({ cookie });
+    writeCachedSession(cacheKey, session);
     return session;
   } catch (error: any) {
     const status = error.response?.status as number | undefined;
     // 401/403 = session is genuinely invalid or expired — caller returns 401
     if (status === 401 || status === 403) {
+      clearCachedSession(cacheKey);
       return null;
     }
     // Network error or Kratos unavailable — throw so caller can surface 503
@@ -243,19 +299,28 @@ export async function attachOidcCredentialToIdentity(input: {
 export async function getKratosSessionByToken(
   token: string
 ): Promise<any | null> {
+  const cacheKey = `token:${token}`;
+
   // LOCAL MODE: resolve via the fixed local identity (no Kratos call)
   if (isLocalModeEnabled()) {
     return buildLocalSession();
+  }
+
+  const cached = readCachedSession(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   try {
     const { data: session } = await kratosPublic.toSession({
       xSessionToken: token,
     });
+    writeCachedSession(cacheKey, session);
     return session;
   } catch (error: any) {
     const status = error.response?.status as number | undefined;
     if (status === 401 || status === 403) {
+      clearCachedSession(cacheKey);
       return null;
     }
     console.error(

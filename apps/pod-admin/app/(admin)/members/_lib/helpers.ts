@@ -54,9 +54,11 @@ export function groupByPrimaryRole(
   return out;
 }
 
-export function rolePillKind(role: string): StatusKind {
+export function rolePillKind(role: MemberRole): StatusKind {
   if (role === "owner") return "healthy";
   if (role === "admin") return "stale";
+  if (role === "editor") return "unknown";
+  if (role === "viewer") return "unknown";
   return "unknown";
 }
 

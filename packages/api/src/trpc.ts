@@ -548,3 +548,9 @@ export { trialGuardMiddleware };
 
 export const workspaceMutationProcedure =
   workspaceProcedure.use(trialGuardMiddleware);
+
+/**
+ * Read-only procedure (no auth required) with read-only guard.
+ * Use for read-only operations that should fail on any mutation attempt.
+ */
+export const readOnlyProcedure = publicProcedure.use(readOnlyGuardMiddleware);

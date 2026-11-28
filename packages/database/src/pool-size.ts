@@ -12,3 +12,19 @@ export function dbPoolSize(raw = process.env.DB_POOL_SIZE): number {
   const n = parseInt(raw || "", 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_DB_POOL_SIZE;
 }
+
+/**
+ * Read replica pool cap: half of the writer default (or the explicit
+ * READ_REPLICA_DB_POOL_SIZE). Read-only traffic does not need a second full
+ * writer-sized pool — both pools point at one Postgres unless a replica URL
+ * is set, so a full-size replica pool doubles the process's connection
+ * footprint for the same database.
+ */
+export function readReplicaPoolSize(
+  raw = process.env.READ_REPLICA_DB_POOL_SIZE
+): number {
+  const n = parseInt(raw || "", 10);
+  if (Number.isFinite(n) && n > 0) return n;
+  const writer = dbPoolSize();
+  return Math.max(1, Math.floor(writer / 2));
+}

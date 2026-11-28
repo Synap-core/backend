@@ -22,17 +22,23 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 
 const ROLE_OPTIONS: Array<{
-  key: "admin" | "editor" | "viewer";
+  key: "admin" | "member";
   label: string;
   hint: string;
+  apiRole: "admin" | "viewer";
 }> = [
   {
     key: "admin",
     label: "Admin",
     hint: "Full access, can sign in to the Pod Console",
+    apiRole: "admin",
   },
-  { key: "editor", label: "Editor", hint: "Can read and write content" },
-  { key: "viewer", label: "Viewer", hint: "Read-only access" },
+  {
+    key: "member",
+    label: "Member",
+    hint: "Simplified UI — Home, Entities, Views, Documents, Sessions",
+    apiRole: "viewer",
+  },
 ];
 
 type InviteResultItem = {
