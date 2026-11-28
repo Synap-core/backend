@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const h = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
@@ -33,16 +34,18 @@ const h = vi.hoisted(() => ({
 vi.mock("../entity-query-scope.js", () => ({
   runEntityVisibilityWhere: () => undefined,
 }));
-vi.mock("@synap/database", () => ({
-  db: { query: { entities: { findFirst: async () => h.subject } } },
-  and: (...a: unknown[]) => a,
-  eq: (...a: unknown[]) => a,
-  isNull: (...a: unknown[]) => a,
-  entities: { id: "id" },
-  events: {},
-  countWorkerPendingApprovals: async () => 0,
-  WORKER_HELD_OUTPUT_KEY: "__held",
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: { query: { entities: { findFirst: async () => h.subject } } },
+    and: (...a: unknown[]) => a,
+    eq: (...a: unknown[]) => a,
+    isNull: (...a: unknown[]) => a,
+    entities: { id: "id" },
+    events: {},
+    countWorkerPendingApprovals: async () => 0,
+    WORKER_HELD_OUTPUT_KEY: "__held",
+  })
+);
 vi.mock("../capability-dispatch.js", () => ({
   getPlaybookRunner: () => async (input: Record<string, unknown>) => {
     h.runs.push(input);

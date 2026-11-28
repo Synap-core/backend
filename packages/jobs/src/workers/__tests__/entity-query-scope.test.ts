@@ -20,6 +20,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 // Pod-membership fixture — the mocked `podSharedEntityIdsFor` subquery consults
 // this (the real builder carries `podMemberWhere(userId)` inside it), so the
@@ -34,34 +35,36 @@ const POD_MEMBERS = new Set(["owner-1"]);
 // opaque marker carrying its caller; matching it with `inArray(entities.id, …)`
 // is the row's `has_pod_wide_facet` flag AND the caller's pod membership.
 const FACET_SUBQUERY = { _sub: "podWideFacetEntityIds" };
-vi.mock("@synap/database", () => ({
-  and: (...args: unknown[]) => ({ _tag: "and", args }),
-  or: (...args: unknown[]) => ({ _tag: "or", args }),
-  eq: (col: unknown, val: unknown) => ({ _tag: "eq", col, val }),
-  isNull: (col: unknown) => ({ _tag: "isNull", col }),
-  inArray: (col: unknown, sub: unknown) => ({ _tag: "inArray", col, sub }),
-  podSharedEntityIdsFor: (userId: string) => ({
-    _sub: "podWideFacetEntityIds",
-    userId,
-  }),
-  // The real builder is `workspace_id IS NULL AND home ∈ caller's spaces`
-  // (utils/home-space-visibility.ts, proven on PGlite in
-  // access/home-space-visibility.pglite.test.ts); this models that shape so the
-  // test proves the WIRING into the query-node predicate.
-  homeSpaceSharedWhere: (ws: unknown, home: unknown, userId: string) => ({
-    _tag: "and",
-    args: [
-      { _tag: "isNull", col: ws },
-      { _tag: "homeIn", col: home, userId },
-    ],
-  }),
-  entities: {
-    id: { _colName: "id" },
-    workspaceId: { _colName: "workspace_id" },
-    homeWorkspaceId: { _colName: "home_workspace_id" },
-    userId: { _colName: "user_id" },
-  },
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    and: (...args: unknown[]) => ({ _tag: "and", args }),
+    or: (...args: unknown[]) => ({ _tag: "or", args }),
+    eq: (col: unknown, val: unknown) => ({ _tag: "eq", col, val }),
+    isNull: (col: unknown) => ({ _tag: "isNull", col }),
+    inArray: (col: unknown, sub: unknown) => ({ _tag: "inArray", col, sub }),
+    podSharedEntityIdsFor: (userId: string) => ({
+      _sub: "podWideFacetEntityIds",
+      userId,
+    }),
+    // The real builder is `workspace_id IS NULL AND home ∈ caller's spaces`
+    // (utils/home-space-visibility.ts, proven on PGlite in
+    // access/home-space-visibility.pglite.test.ts); this models that shape so the
+    // test proves the WIRING into the query-node predicate.
+    homeSpaceSharedWhere: (ws: unknown, home: unknown, userId: string) => ({
+      _tag: "and",
+      args: [
+        { _tag: "isNull", col: ws },
+        { _tag: "homeIn", col: home, userId },
+      ],
+    }),
+    entities: {
+      id: { _colName: "id" },
+      workspaceId: { _colName: "workspace_id" },
+      homeWorkspaceId: { _colName: "home_workspace_id" },
+      userId: { _colName: "user_id" },
+    },
+  })
+);
 
 // The spaces each caller belongs to (the home-space builder's member/owner set).
 const SPACES: Record<string, string[]> = { "owner-1": ["ws-a"] };

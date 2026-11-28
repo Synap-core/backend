@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const h = vi.hoisted(() => ({
   ctx: null as Record<string, unknown> | null,
   input: null as Record<string, unknown> | null,
   result: { status: "created", id: "d1" } as Record<string, unknown>,
 }));
-vi.mock("@synap/database", () => ({ db: { marker: "db" } }));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, { db: { marker: "db" } })
+);
 vi.mock("../../../routers/entities.js", () => ({
   entitiesRouter: {
     createCaller: (ctx: Record<string, unknown>) => {

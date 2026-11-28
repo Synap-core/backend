@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 // Mock the three substrate stores so we test ONLY the router's
 // classify → route → fuse logic, not the underlying retrievers.
@@ -10,17 +11,19 @@ const libraryLaneMock = vi.fn();
 vi.mock("../retrieval/retrieve.js", () => ({
   retrieve: (...args: unknown[]) => retrieveMock(...args),
 }));
-vi.mock("@synap/database", () => ({
-  // `db` handle — only forwarded to the pending scan (mocked below); a bare
-  // stub is enough for these router tests, which never touch a real store.
-  db: {},
-  knowledgeRepository: {
-    searchFacts: (...args: unknown[]) => searchFactsMock(...args),
-  },
-  knowledgeKeysRepository: {
-    searchFullText: (...args: unknown[]) => searchFullTextMock(...args),
-  },
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    // `db` handle — only forwarded to the pending scan (mocked below); a bare
+    // stub is enough for these router tests, which never touch a real store.
+    db: {},
+    knowledgeRepository: {
+      searchFacts: (...args: unknown[]) => searchFactsMock(...args),
+    },
+    knowledgeKeysRepository: {
+      searchFullText: (...args: unknown[]) => searchFullTextMock(...args),
+    },
+  })
+);
 // The Library lane has its own suite (library/__tests__/ask-lane.pglite.test.ts);
 // here it is a stub so these tests stay on classify → route → fuse → degrade.
 vi.mock("../library/ask-lane.js", () => ({

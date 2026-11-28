@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const CP = "https://api.cp.example.test";
 const POD = "https://pod.example.test";
@@ -32,51 +33,53 @@ const m = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@synap/database", () => ({
-  TrustedIssuerService: class {
-    getByUrl = m.getByUrl;
-  },
-  consumeFederatedAssertionReceipt: m.consumeReceipt,
-  TRUSTED_ISSUER_CAPABILITIES: {
-    USER_EXCHANGE: "auth:exchange-user",
-    IDENTITY_LINK: "identity:link-user",
-    MEMBERSHIP_GRANT: "membership:grant",
-    SOURCE_CONFIG_WRITE: "source-config:write",
-  },
-  CONTROL_PLANE_ISSUER_SCOPES: [
-    "auth:exchange-user",
-    "identity:link-user",
-    "membership:grant",
-    "source-config:write",
-  ],
-  db: {
-    select: () => ({
-      from: () => ({
-        orderBy: () => ({ limit: () => Promise.resolve([{ id: "ps-1" }]) }),
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    TrustedIssuerService: class {
+      getByUrl = m.getByUrl;
+    },
+    consumeFederatedAssertionReceipt: m.consumeReceipt,
+    TRUSTED_ISSUER_CAPABILITIES: {
+      USER_EXCHANGE: "auth:exchange-user",
+      IDENTITY_LINK: "identity:link-user",
+      MEMBERSHIP_GRANT: "membership:grant",
+      SOURCE_CONFIG_WRITE: "source-config:write",
+    },
+    CONTROL_PLANE_ISSUER_SCOPES: [
+      "auth:exchange-user",
+      "identity:link-user",
+      "membership:grant",
+      "source-config:write",
+    ],
+    db: {
+      select: () => ({
+        from: () => ({
+          orderBy: () => ({ limit: () => Promise.resolve([{ id: "ps-1" }]) }),
+        }),
       }),
+      update: (...a: unknown[]) => {
+        m.update(...a);
+        return {
+          set: (v: unknown) => {
+            m.update(v);
+            return { where: () => Promise.resolve() };
+          },
+        };
+      },
+      insert: (...a: unknown[]) => {
+        m.insert(...a);
+        return { values: () => Promise.resolve() };
+      },
+    },
+    podSettings: { id: "id", settings: "settings", createdAt: "created_at" },
+    drizzleSql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+      strings,
+      values,
     }),
-    update: (...a: unknown[]) => {
-      m.update(...a);
-      return {
-        set: (v: unknown) => {
-          m.update(v);
-          return { where: () => Promise.resolve() };
-        },
-      };
-    },
-    insert: (...a: unknown[]) => {
-      m.insert(...a);
-      return { values: () => Promise.resolve() };
-    },
-  },
-  podSettings: { id: "id", settings: "settings", createdAt: "created_at" },
-  drizzleSql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-    strings,
-    values,
-  }),
-  eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
-  encryptField: m.encryptField,
-}));
+    eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
+    encryptField: m.encryptField,
+  })
+);
 
 vi.mock("node:https", () => ({ request: m.httpsRequest }));
 

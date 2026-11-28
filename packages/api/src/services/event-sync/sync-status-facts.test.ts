@@ -4,6 +4,7 @@
  * enable request those failures offer already APPROVED.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const rowsFor = vi.hoisted(() => ({
   secrets: [] as Array<{
@@ -14,17 +15,19 @@ const rowsFor = vi.hoisted(() => ({
   proposals: [] as Array<{ id: string; status: string }>,
 }));
 
-vi.mock("@synap/database", () => ({
-  inArray: () => undefined,
-  db: {
-    select: (cols: Record<string, unknown>) => ({
-      from: () => ({
-        where: async () =>
-          "accountHint" in cols ? rowsFor.secrets : rowsFor.proposals,
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    inArray: () => undefined,
+    db: {
+      select: (cols: Record<string, unknown>) => ({
+        from: () => ({
+          where: async () =>
+            "accountHint" in cols ? rowsFor.secrets : rowsFor.proposals,
+        }),
       }),
-    }),
-  },
-}));
+    },
+  })
+);
 vi.mock("@synap/database/schema", () => ({
   ProposalStatus: {
     PENDING: "pending",

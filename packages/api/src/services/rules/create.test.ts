@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const inserted: Array<Record<string, unknown>> = [];
 let permResult: Record<string, unknown> = { allowed: true };
@@ -17,48 +18,50 @@ let permResult: Record<string, unknown> = { allowed: true };
 const archived: Array<Record<string, unknown>> = [];
 const deleted: string[] = [];
 
-vi.mock("@synap/database", () => ({
-  db: {
-    // snapshotBehaviours' select — no automation rows in these tests.
-    select: () => ({ from: () => ({ where: async () => [] }) }),
-    insert: () => ({
-      values: (values: Record<string, unknown>) => {
-        inserted.push(values);
-        return { returning: async () => [{ id: values.id }] };
-      },
-    }),
-    update: (table: { __table?: string }) => ({
-      set: (values: Record<string, unknown>) => ({
-        where: async () => {
-          archived.push({ table: table.__table, ...values });
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      // snapshotBehaviours' select — no automation rows in these tests.
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+      insert: () => ({
+        values: (values: Record<string, unknown>) => {
+          inserted.push(values);
+          return { returning: async () => [{ id: values.id }] };
         },
       }),
-    }),
-    delete: (table: { __table?: string }) => ({
-      where: async () => {
-        deleted.push(table.__table ?? "?");
-      },
-    }),
-  },
-  skills: { __table: "skills", id: "id" },
-  automations: {
-    __table: "automations",
-    id: "id",
-    flowDefinition: "flowDefinition",
-  },
-  eq: () => ({}),
-  inArray: () => ({}),
-  // The status door, recorded like the raw write it replaced.
-  setAutomationStatus: async (_db: unknown, input: { to: string }) => {
-    archived.push({ table: "automations", status: input.to });
-    return [];
-  },
-  ownerAndActor: async (
-    _db: unknown,
-    ownerId: string,
-    agentUserId?: string | null
-  ) => ({ ownerId, agentUserId: agentUserId ?? null }),
-}));
+      update: (table: { __table?: string }) => ({
+        set: (values: Record<string, unknown>) => ({
+          where: async () => {
+            archived.push({ table: table.__table, ...values });
+          },
+        }),
+      }),
+      delete: (table: { __table?: string }) => ({
+        where: async () => {
+          deleted.push(table.__table ?? "?");
+        },
+      }),
+    },
+    skills: { __table: "skills", id: "id" },
+    automations: {
+      __table: "automations",
+      id: "id",
+      flowDefinition: "flowDefinition",
+    },
+    eq: () => ({}),
+    inArray: () => ({}),
+    // The status door, recorded like the raw write it replaced.
+    setAutomationStatus: async (_db: unknown, input: { to: string }) => {
+      archived.push({ table: "automations", status: input.to });
+      return [];
+    },
+    ownerAndActor: async (
+      _db: unknown,
+      ownerId: string,
+      agentUserId?: string | null
+    ) => ({ ownerId, agentUserId: agentUserId ?? null }),
+  })
+);
 
 vi.mock("../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: async (args: Record<string, unknown>) => {

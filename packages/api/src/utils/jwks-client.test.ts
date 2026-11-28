@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const mocks = vi.hoisted(() => ({
   getByUrl: vi.fn(),
@@ -9,24 +10,26 @@ const mocks = vi.hoisted(() => ({
   resolvePublicIssuerEndpoint: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => ({
-  TrustedIssuerService: class {
-    getByUrl = mocks.getByUrl;
-  },
-  consumeFederatedAssertionReceipt: mocks.consumeReceipt,
-  TRUSTED_ISSUER_CAPABILITIES: {
-    USER_EXCHANGE: "auth:exchange-user",
-    IDENTITY_LINK: "identity:link-user",
-    MEMBERSHIP_GRANT: "membership:grant",
-    SOURCE_CONFIG_WRITE: "source-config:write",
-  },
-  CONTROL_PLANE_ISSUER_SCOPES: [
-    "auth:exchange-user",
-    "identity:link-user",
-    "membership:grant",
-    "source-config:write",
-  ],
-}));
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    TrustedIssuerService: class {
+      getByUrl = mocks.getByUrl;
+    },
+    consumeFederatedAssertionReceipt: mocks.consumeReceipt,
+    TRUSTED_ISSUER_CAPABILITIES: {
+      USER_EXCHANGE: "auth:exchange-user",
+      IDENTITY_LINK: "identity:link-user",
+      MEMBERSHIP_GRANT: "membership:grant",
+      SOURCE_CONFIG_WRITE: "source-config:write",
+    },
+    CONTROL_PLANE_ISSUER_SCOPES: [
+      "auth:exchange-user",
+      "identity:link-user",
+      "membership:grant",
+      "source-config:write",
+    ],
+  })
+);
 
 vi.mock("node:https", () => ({
   request: mocks.httpsRequest,

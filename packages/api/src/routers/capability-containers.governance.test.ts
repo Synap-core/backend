@@ -12,6 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const h = vi.hoisted(() => ({
   gateCalls: [] as Array<Record<string, unknown>>,
@@ -49,65 +50,67 @@ vi.mock("@synap/database/schema", async (importOriginal) => ({
   links: linksTable,
 }));
 
-vi.mock("@synap/database", () => ({
-  db: {
-    select: vi.fn(() => ({
-      from: (table: unknown) => ({
-        where: () => {
-          const rows =
-            table === capabilitiesTable
-              ? h.capabilityRow
-                ? [h.capabilityRow]
-                : []
-              : table === toolsTable || table === skillsTable
-                ? h.partRow
-                  ? [h.partRow]
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () => {
+            const rows =
+              table === capabilitiesTable
+                ? h.capabilityRow
+                  ? [h.capabilityRow]
                   : []
-                : [];
-          // Awaitable AND chainable: `container-address.ts` resolves the
-          // address with `.where(...).limit(1)`, while the older call sites
-          // await `.where(...)` directly. The stub must model both or it
-          // fails on a shape the real driver supports.
-          const q = Promise.resolve(rows) as Promise<unknown[]> & {
-            limit: (n: number) => Promise<unknown[]>;
-          };
-          q.limit = async (n: number) => rows.slice(0, n);
-          return q;
+                : table === toolsTable || table === skillsTable
+                  ? h.partRow
+                    ? [h.partRow]
+                    : []
+                  : [];
+            // Awaitable AND chainable: `container-address.ts` resolves the
+            // address with `.where(...).limit(1)`, while the older call sites
+            // await `.where(...)` directly. The stub must model both or it
+            // fails on a shape the real driver supports.
+            const q = Promise.resolve(rows) as Promise<unknown[]> & {
+              limit: (n: number) => Promise<unknown[]>;
+            };
+            q.limit = async (n: number) => rows.slice(0, n);
+            return q;
+          },
+        }),
+      })),
+      insert: vi.fn((table: unknown) => ({
+        values: (v: Record<string, unknown>) => {
+          if (table === capabilitiesTable) {
+            h.insertedCapabilities.push(v);
+            const rows = [{ id: "new-cap-1", ...v }];
+            // The one insert door writes `.onConflictDoNothing().returning()` —
+            // the address index makes a bare insert crash-prone.
+            return {
+              returning: async () => rows,
+              onConflictDoNothing: () => ({ returning: async () => rows }),
+            };
+          }
+          if (table === linksTable) {
+            h.insertedLinks.push(v);
+            return { onConflictDoNothing: async () => undefined };
+          }
+          return { returning: async () => [v] };
         },
-      }),
-    })),
-    insert: vi.fn((table: unknown) => ({
-      values: (v: Record<string, unknown>) => {
-        if (table === capabilitiesTable) {
-          h.insertedCapabilities.push(v);
-          const rows = [{ id: "new-cap-1", ...v }];
-          // The one insert door writes `.onConflictDoNothing().returning()` —
-          // the address index makes a bare insert crash-prone.
-          return {
-            returning: async () => rows,
-            onConflictDoNothing: () => ({ returning: async () => rows }),
-          };
-        }
-        if (table === linksTable) {
-          h.insertedLinks.push(v);
-          return { onConflictDoNothing: async () => undefined };
-        }
-        return { returning: async () => [v] };
-      },
-    })),
-  },
-  eq: vi.fn((a, b) => ({ op: "eq", a, b })),
-  and: vi.fn((...c) => ({ op: "and", c })),
-  or: vi.fn((...c) => ({ op: "or", c })),
-  isNull: vi.fn((a) => ({ op: "isNull", a })),
-  inArray: vi.fn((a, b) => ({ op: "inArray", a, b })),
-  desc: vi.fn((a) => ({ op: "desc", a })),
-  ownerAndActor: async (
-    _db: unknown,
-    principalId: string,
-    agentUserId?: string | null
-  ) => ({ ownerId: principalId, agentUserId: agentUserId ?? null }),
-}));
+      })),
+    },
+    eq: vi.fn((a, b) => ({ op: "eq", a, b })),
+    and: vi.fn((...c) => ({ op: "and", c })),
+    or: vi.fn((...c) => ({ op: "or", c })),
+    isNull: vi.fn((a) => ({ op: "isNull", a })),
+    inArray: vi.fn((a, b) => ({ op: "inArray", a, b })),
+    desc: vi.fn((a) => ({ op: "desc", a })),
+    ownerAndActor: async (
+      _db: unknown,
+      principalId: string,
+      agentUserId?: string | null
+    ) => ({ ownerId: principalId, agentUserId: agentUserId ?? null }),
+  })
+);
 
 vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: async (opts: Record<string, unknown>) => {

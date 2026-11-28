@@ -18,6 +18,7 @@
  * so the capture holder is declared via `vi.hoisted`.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 
 const h = vi.hoisted(() => ({
   captured: {
@@ -33,52 +34,54 @@ const h = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("@synap/database", () => ({
-  db: {
-    query: {
-      entities: {
-        findMany: async (args: any) => {
-          h.captured.where = args?.where;
-          return [];
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      query: {
+        entities: {
+          findMany: async (args: any) => {
+            h.captured.where = args?.where;
+            return [];
+          },
         },
       },
     },
-  },
-  entities: {
-    id: { _col: "id" },
-    workspaceId: { _col: "workspace_id" },
-    userId: { _col: "user_id" },
-    deletedAt: { _col: "deleted_at" },
-    properties: { _col: "properties" },
-    createdAt: { _col: "created_at" },
-  },
-  and: (...args: unknown[]) => ({ _tag: "and", args }),
-  isNull: (col: unknown) => ({ _tag: "isNull", col }),
-  desc: (col: unknown) => ({ _tag: "desc", col }),
-  drizzleSql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({
-    _tag: "sql",
-    strings: [...strings],
-    vals,
-  }),
-  profileSlugScopeConditionFromRows: (
-    _db: unknown,
-    slug: string,
-    _rows: unknown
-  ) => ({
-    _tag: "profileSlugScope",
-    slug,
-  }),
-  // `structuredLookup` now fails closed on a slug this pod has no profile for
-  // (assertKnownProfileSlug → profileSlugRows). These scoping tests all use a
-  // slug that EXISTS, so the stub returns one kind row; the assert passes and
-  // the composed-WHERE invariants below are what's under test.
-  profileSlugRows: async (_db: unknown, _slug: string) => h.slugRows,
-  // FB1020 B5 — THE listing rule; the stub records the lens it was given.
-  listableEntityWhere: (opts: unknown) => ({
-    _tag: "listableEntityWhere",
-    opts,
-  }),
-}));
+    entities: {
+      id: { _col: "id" },
+      workspaceId: { _col: "workspace_id" },
+      userId: { _col: "user_id" },
+      deletedAt: { _col: "deleted_at" },
+      properties: { _col: "properties" },
+      createdAt: { _col: "created_at" },
+    },
+    and: (...args: unknown[]) => ({ _tag: "and", args }),
+    isNull: (col: unknown) => ({ _tag: "isNull", col }),
+    desc: (col: unknown) => ({ _tag: "desc", col }),
+    drizzleSql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({
+      _tag: "sql",
+      strings: [...strings],
+      vals,
+    }),
+    profileSlugScopeConditionFromRows: (
+      _db: unknown,
+      slug: string,
+      _rows: unknown
+    ) => ({
+      _tag: "profileSlugScope",
+      slug,
+    }),
+    // `structuredLookup` now fails closed on a slug this pod has no profile for
+    // (assertKnownProfileSlug → profileSlugRows). These scoping tests all use a
+    // slug that EXISTS, so the stub returns one kind row; the assert passes and
+    // the composed-WHERE invariants below are what's under test.
+    profileSlugRows: async (_db: unknown, _slug: string) => h.slugRows,
+    // FB1020 B5 — THE listing rule; the stub records the lens it was given.
+    listableEntityWhere: (opts: unknown) => ({
+      _tag: "listableEntityWhere",
+      opts,
+    }),
+  })
+);
 
 vi.mock("../../../utils/user-visible-where.js", () => ({
   workspaceLensWhere: (

@@ -1,51 +1,54 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { databaseMock } from "@synap/database/testing";
 import { webhooksRouter } from "./webhooks.js";
 
 // Mock dependencies
-vi.mock("@synap/database", () => ({
-  db: {
-    insert: vi.fn(() => ({
-      values: vi.fn().mockReturnThis(),
-      returning: vi.fn(),
-    })),
-    query: {
-      webhookSubscriptions: {
-        findMany: vi.fn(),
-        findFirst: vi.fn(),
+vi.mock("@synap/database", (importOriginal) =>
+  databaseMock(importOriginal, {
+    db: {
+      insert: vi.fn(() => ({
+        values: vi.fn().mockReturnThis(),
+        returning: vi.fn(),
+      })),
+      query: {
+        webhookSubscriptions: {
+          findMany: vi.fn(),
+          findFirst: vi.fn(),
+        },
+        syncGeneration: {
+          findFirst: vi.fn(() =>
+            Promise.resolve({
+              role: "primary",
+              splitBrainDetected: false,
+              generation: 1,
+              lastPeerGeneration: 0,
+              lastPeerContact: null,
+            })
+          ),
+        },
       },
-      syncGeneration: {
-        findFirst: vi.fn(() =>
-          Promise.resolve({
-            role: "primary",
-            splitBrainDetected: false,
-            generation: 1,
-            lastPeerGeneration: 0,
-            lastPeerContact: null,
-          })
-        ),
-      },
+      update: vi.fn(() => ({
+        set: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        returning: vi.fn(),
+      })),
+      delete: vi.fn(() => ({
+        where: vi.fn().mockReturnThis(),
+        returning: vi.fn(),
+      })),
     },
-    update: vi.fn(() => ({
-      set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      returning: vi.fn(),
-    })),
-    delete: vi.fn(() => ({
-      where: vi.fn().mockReturnThis(),
-      returning: vi.fn(),
-    })),
-  },
-  webhookSubscriptions: {
-    id: "id",
-    userId: "user_id",
-    createdAt: "created_at",
-  },
-  syncGeneration: {
-    id: "id",
-  },
-  eq: vi.fn(),
-  and: vi.fn(),
-}));
+    webhookSubscriptions: {
+      id: "id",
+      userId: "user_id",
+      createdAt: "created_at",
+    },
+    syncGeneration: {
+      id: "id",
+    },
+    eq: vi.fn(),
+    and: vi.fn(),
+  })
+);
 
 describe("Webhooks Router", () => {
   let mockCtx: any;
