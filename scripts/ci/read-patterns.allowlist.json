@@ -1,0 +1,436 @@
+{
+  "taken": "2026-11-27 at main ac1ba6f0, by scripts/ci/read-patterns.mjs; nothing reviewed yet",
+  "owner": "pod-latency wave (pod session e89ee5a8); each entry is debt until its sites are fixed or marked",
+  "patterns": {
+    "events-unbounded": {
+      "packages/api/src/routers/automations.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/routers/system.ts": {
+        "count": 1,
+        "reason": "one event by id: the hypertable key is (id, timestamp), so a read by id alone still plans every chunk"
+      },
+      "packages/api/src/services/decisions/decision-timeout.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/dev-loop/pod-deployed.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/dev-loop/pr-state.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/diagnose/index.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/diagnose/resolve-object-kind.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/focus-sessions/provide-secret-grant.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/focus-sessions/session-changes.ts": {
+        "count": 1,
+        "reason": "correlated 'prior event' subquery bounded only by the outer row (no constant bound)"
+      },
+      "packages/api/src/services/focus-sessions/session-interactions.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/focus-sessions/session-usage.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/lifecycle/status-groups.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/object-graph/graph-service.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/package-updates/receipts.ts": {
+        "count": 3,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/retrieval/temporal-signal.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/runs/index.ts": {
+        "count": 5,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/runs/session-activity.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/status/status-facts.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/status/watcher.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/timeline/read-timeline.ts": {
+        "count": 4,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/services/tracks/track-history.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/api/src/utils/ai-feedback-events.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/database/src/projectors/enrichment-projector.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/database/src/projectors/metadata-projector.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/database/src/repositories/event-repository.ts": {
+        "count": 10,
+        "reason": "the event repository: its readers pass bounds as conditions built at run time, which a static scan cannot see; review each reader"
+      },
+      "packages/database/src/services/interactions/interaction-evidence.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/database/src/services/lifecycle/reaction-log.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/database/src/utils/needs-you-predicate.ts": {
+        "count": 3,
+        "reason": "correlated latest-event subqueries (max(timestamp) per row) on the Needs-you read: hot path, a candidate for the next latency lane"
+      },
+      "packages/database/src/utils/own-fresh-work.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      },
+      "packages/jobs/src/workers/hold-resume.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: add a constant timestamp bound, or mark the read with its reason"
+      }
+    },
+    "key-cast-to-text": {
+      "packages/api/src/access/session-counted-spaces.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/routers/capabilities.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/capabilities/execute-capability.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/channels/space-conversations.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/diagnose/automation-dispatch.ts": {
+        "count": 1,
+        "reason": "the backend#1341 shape on automation_runs: fix with uuidFromTextSql"
+      },
+      "packages/api/src/services/focus-sessions/session-list-conditions.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/focus-sessions/session-path-sections.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/library/keep-alive.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/lifecycle/status-groups.ts": {
+        "count": 2,
+        "reason": "likely false positive: lastMove is a subquery alias, so ${lastMove.subjectId} is a column the scan reads as a value"
+      },
+      "packages/api/src/services/runs/index.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/api/src/services/runs/recent-by-flows.ts": {
+        "count": 1,
+        "reason": "the backend#1341 shape on automation_runs: review"
+      },
+      "packages/api/src/services/signals/read-rule-runs.ts": {
+        "count": 1,
+        "reason": "the backend#1341 shape on automation_runs: review"
+      },
+      "packages/api/src/services/status/status-rollup.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/database/src/conversions/engine.ts": {
+        "count": 5,
+        "reason": "one-shot conversions, run once per pod: low priority"
+      },
+      "packages/database/src/utils/channel-visibility.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/database/src/utils/listable-entity.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/database/src/utils/session-started-by.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: cast the value with uuidFromTextSql, or mark the comparison with its reason"
+      },
+      "packages/jobs/src/workers/automation-run-reaper.ts": {
+        "count": 1,
+        "reason": "the backend#1341 shape on automation_runs: review"
+      },
+      "packages/jobs/src/workers/focus-session-reaper.ts": {
+        "count": 1,
+        "reason": "likely false positive: subjectId(\"hw\") renders a column expression the scan reads as a value"
+      }
+    },
+    "proposal-data-whole": {
+      "packages/api/src/routers/channels/messaging.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/routers/governance-rules.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/routers/hub-protocol/proposals.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/routers/proposals.ts": {
+        "count": 4,
+        "reason": "the proposals list and review reads: the review card renders the payload; review whether a list needs all of it"
+      },
+      "packages/api/src/services/activity/list-activity.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/agent-access-ask.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/app-access-ask.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/capture-agent/submit-capture-graph.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/channels/person-channels.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/channels/space-conversations.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/diagnose/agent-scorecard.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/diagnose/global.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/diagnose/index.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/duplicates/find-duplicate-candidates.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/focus-sessions/close-not-done.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/focus-sessions/complete-session.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/focus-sessions/continuation-packet.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/focus-sessions/session-changes.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/focus-sessions/session-path-sections.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/forms/guest-retention.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/import/suggest-views.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/imports/build.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/object-graph/graph-service.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/outputs/landed-outputs.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/playbooks/generate-examples.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/pod-hygiene/cleanup-pack.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/pod-hygiene/retire-profile.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/automation-health.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/expire-lapsed-proposals.ts": {
+        "count": 4,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/next-rung.ts": {
+        "count": 3,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/pending-rules.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/proposals-service.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/recommend-raise-ceiling.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/recommend-raise-proposal-cap.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/recommend-tighten-posture.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/proposals/recommend-tighten.ts": {
+        "count": 2,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/renderers/renderer-target-checks.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/runs/index.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/runs/session-activity.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/session-document/closing-report.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/signal/index.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/signals/landed-needs.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/signals/needs-you-context.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/status/status-facts.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/status/status-work.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/tracks/pathway-replan.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/services/trusted-issuers/scope-request-proposal.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/utils/pending-capture-dedup.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/api/src/utils/proposal-visibility.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/database/src/repositories/app-repository.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/database/src/repositories/proposal-repository.ts": {
+        "count": 2,
+        "reason": "the proposal repository's list reads: callers may need the whole value; review each caller"
+      },
+      "packages/database/src/utils/expire-pending-creates.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/database/src/utils/insert-pending-proposal.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/database/src/utils/own-fresh-work.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/jobs/src/workers/blocked-slot-recurrence-scanner.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/jobs/src/workers/pod-hygiene-near-dup.ts": {
+        "count": 3,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      },
+      "packages/jobs/src/workers/structure-guideline-scanner.ts": {
+        "count": 1,
+        "reason": "not reviewed yet: project the keys the caller reads, or mark the read with why it needs the whole value"
+      }
+    }
+  }
+}

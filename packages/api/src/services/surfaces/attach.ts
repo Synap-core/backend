@@ -30,7 +30,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { db, and, eq, inArray } from "@synap/database";
+import { db, and, eq, inArray, uuidFromTextSql } from "@synap/database";
 import {
   cellInstances,
   documents,
@@ -946,8 +946,10 @@ export async function replaceSlot(input: {
     if (replacedCells.length > 0) {
       await tx.execute(drizzleSql`
         delete from cell_instances c
-        where c.id::text in (${drizzleSql.join(
-          replacedCells.map((id) => drizzleSql`${id}`),
+        where c.id in (${drizzleSql.join(
+          // The value is cast, not the key, so the delete probes the
+          // primary key (read-patterns: key-cast-to-text).
+          replacedCells.map((id) => uuidFromTextSql(drizzleSql`${id}`)),
           drizzleSql`, `
         )})
           and not exists (select 1 from links l
