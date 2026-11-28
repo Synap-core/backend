@@ -3,14 +3,14 @@
  * caller to pass must exist in that tool's real `inputSchema`.
  *
  * WHY: an agent reported `synap_list_tracks` / `synap_list_agents` "take no
- * limit or offset" while `HOW_TO_NARROW` told it to page with them, and five
+ * limit or offset" while the narrow hint told it to page with them, and five
  * other list tools had no `offset` at all. The hint map and the schemas were
  * two hand-kept lists that drifted. This derives the check from the schema, so
  * a hint that names a parameter the tool lacks (or a schema edit that drops one
  * a hint relies on) turns red.
  */
 import { describe, it, expect } from "vitest";
-import { HOW_TO_NARROW } from "./reply-cap.js";
+import { definedToolNames, toolDefinition } from "./define-tool.js";
 import { tools } from "./tools/index.js";
 
 /** Reply fields a hint names (what to read back), not inputs. */
@@ -25,7 +25,7 @@ export function hintParams(hint: string): string[] {
   return [...found].filter((p) => !REPLY_FIELDS.has(p));
 }
 
-describe("HOW_TO_NARROW names only parameters the tool declares", () => {
+describe("a tool's `narrow` hint names only parameters it declares", () => {
   it("parses the hint grammar (non-vacuous)", () => {
     expect(
       hintParams(
@@ -38,7 +38,12 @@ describe("HOW_TO_NARROW names only parameters the tool declares", () => {
     const list = await tools.list();
     const byName = new Map(list.map((t) => [t.name, t]));
     const problems: string[] = [];
-    for (const [name, hint] of Object.entries(HOW_TO_NARROW)) {
+    const hints = definedToolNames().flatMap((name) => {
+      const hint = toolDefinition(name)?.narrow;
+      return hint ? [[name, hint] as const] : [];
+    });
+    expect(hints.length).toBeGreaterThanOrEqual(20);
+    for (const [name, hint] of hints) {
       const def = byName.get(name);
       if (!def) {
         problems.push(`${name}: no such tool`);

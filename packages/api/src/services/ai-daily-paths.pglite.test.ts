@@ -69,6 +69,7 @@ import { aiDefaultCapabilities } from "@synap-core/types/grants";
 import { attachAgentKeyGrant } from "./agent-identity-service.js";
 import { previewPermissionDecision } from "../utils/permission-check.js";
 import { mcpToolAllowed, restDoorAllowed } from "../access/grant-door-fence.js";
+import { toolDefinition } from "../routers/mcp/define-tool.js";
 import { grantReadClause } from "../access/grant-read.js";
 import {
   assertAgentKeyMayReject,
@@ -201,7 +202,9 @@ describe("the key minted for a new AI carries the preset (non-vacuity)", () => {
 describe("a new AI CAN do its daily work", () => {
   it("reads through the aggregate MCP doors: ask, orient, find", () => {
     for (const tool of ["synap_ask", "synap_orient", "synap_find"])
-      expect(mcpToolAllowed(tool, true, grant), tool).toBe(true);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(
+        true
+      );
   });
 
   // Each pair is the door's own gate call:
@@ -226,7 +229,9 @@ describe("a new AI CAN do its daily work", () => {
   );
 
   it("posts in its session room: a write tool, past the read fence (no grant rung on a room post)", () => {
-    expect(mcpToolAllowed("synap_post_message", false, grant)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_post_message")?.access, grant)
+    ).toBe(true);
   });
 
   it("waits on its own proposal: GET /proposals/:id passes, the same door as MCP", () => {
@@ -234,7 +239,9 @@ describe("a new AI CAN do its daily work", () => {
     // while `synap_get_proposal` read the same row (finding 9a415c59).
     const path = `/proposals/${randomUUID()}`;
     expect(restDoorAllowed("GET", path, grant)).toBe(true);
-    expect(mcpToolAllowed("synap_get_proposal", true, grant)).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_get_proposal")?.access, grant)
+    ).toBe(true);
   });
 
   it("rejects (withdraws) its OWN proposal", async () => {

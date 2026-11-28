@@ -22,7 +22,6 @@ packages/api/src/routers/webhooks.test.ts
 packages/api/src/services/application-connections/invite-consent.test.ts
 packages/api/src/services/capabilities/resolve-workspace-template.test.ts
 packages/api/src/services/capabilities/set-skill-approved.test.ts
-packages/api/src/services/capability-briefs/compose-capability-brief.test.ts
 packages/api/src/services/connectors/land-inbound-message.test.ts
 packages/api/src/services/decisions/__tests__/decision-entity-door.test.ts
 packages/api/src/services/event-sync/sync-status-facts.test.ts

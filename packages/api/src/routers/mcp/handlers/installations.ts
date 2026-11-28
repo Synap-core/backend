@@ -9,11 +9,9 @@
 import { TRPCError } from "@trpc/server";
 import { AccessContext } from "../../../access/index.js";
 import {
-  INSTALLATION_REQUEST_ACTIONS,
   getInstallationDetail,
   listInstallations,
   loadInstallableCapability,
-  type InstallationRequestAction,
 } from "../../../services/installations/installations.js";
 import {
   computerChoices,
@@ -44,7 +42,7 @@ async function manifestFor(
 
 const SLUG = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
-export const installationHandlers: McpHandlerMap = {
+export const installationHandlers = {
   synap_list_installations: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const access = AccessContext.agent({
@@ -53,7 +51,7 @@ export const installationHandlers: McpHandlerMap = {
     });
     // DETAIL: one installation with its approved snapshot and its drift
     // against the pod's current definition (ticket c5e95df3).
-    if (typeof ctx.args.installationId === "string") {
+    if (ctx.args.installationId !== undefined) {
       const id = ctx.args.installationId.trim();
       const badId = fullUuidError(ctx.toolName, "installationId", id);
       if (badId) return badId;
@@ -66,17 +64,15 @@ export const installationHandlers: McpHandlerMap = {
           });
     }
     // `deviceId` is an alias of `computerId`: a device's id answers its
-    // computer.
+    // computer (a blank one reads as not given).
     const named = await computerFromDeviceArgs(access, {
       computer: ctx.args.computerId,
       device: ctx.args.deviceId,
     });
     if (!named.ok) return ok({ error: named.error });
     const computerId = named.computer;
-    const capabilityKey =
-      typeof ctx.args.capabilityKey === "string"
-        ? ctx.args.capabilityKey.trim()
-        : undefined;
+    const capabilityKey = ctx.args.capabilityKey?.trim();
+    // The slug's shape is not in the schema: checked here.
     if (capabilityKey !== undefined && !SLUG.test(capabilityKey)) {
       return ok({
         error:
@@ -91,16 +87,17 @@ export const installationHandlers: McpHandlerMap = {
   },
   synap_request_installation: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
-    const capabilityKey =
-      typeof ctx.args.capabilityKey === "string"
-        ? ctx.args.capabilityKey.trim()
-        : "";
+    // The slug's shape is not in the schema: checked here.
+    const capabilityKey = ctx.args.capabilityKey.trim();
     if (!SLUG.test(capabilityKey))
       return ok({
         error:
           "capabilityKey is a capability's catalog slug, e.g. media-ffmpeg: find one with synap_run_capability market.search.",
       });
-    // `device` is an alias of `computer`.
+    // `device` is an alias of `computer`. One of the two is required, a
+    // cross-field rule the schema does not carry (both are optional there):
+    // a blank or missing pair is refused below with COMPUTER_REQUIRED and
+    // the computers to choose from.
     const named = await computerFromDeviceArgs(
       AccessContext.agent({
         userId: ctx.userId,
@@ -111,15 +108,9 @@ export const installationHandlers: McpHandlerMap = {
     if (!named.ok)
       return ok({ status: "refused", code: "BAD_DEVICE", error: named.error });
     const target = named.computer ?? "";
-    const action = (ctx.args.action ?? "install") as InstallationRequestAction;
-    if (!(INSTALLATION_REQUEST_ACTIONS as readonly unknown[]).includes(action))
-      return ok({
-        error: `action is one of ${INSTALLATION_REQUEST_ACTIONS.join(", ")}.`,
-      });
-    const version =
-      typeof ctx.args.version === "string" && ctx.args.version.trim()
-        ? ctx.args.version.trim()
-        : null;
+    const action = ctx.args.action ?? "install";
+    // A blank version reads as not given.
+    const version = ctx.args.version?.trim() || null;
     const caller = {
       userId: ctx.userId,
       agentUserId: ctx.agentUserId ?? null,
@@ -218,4 +209,4 @@ export const installationHandlers: McpHandlerMap = {
       throw err;
     }
   },
-};
+} satisfies McpHandlerMap;

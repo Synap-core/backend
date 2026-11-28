@@ -29,8 +29,6 @@ import {
   runWithWriteSessionLedger,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
-import { toolAliasHandlers } from "./tool-aliases.js";
-import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   fileSuperseding,
   leftFailedNote,
@@ -46,6 +44,7 @@ import {
   pickAdvisoryWorkspaceId,
   resolveSessionHandle,
   type McpHandlerMap,
+  type McpToolHandler,
   type SessionAttributionReport,
 } from "./handlers/shared.js";
 import { readHandlers } from "./handlers/read.js";
@@ -73,16 +72,12 @@ import {
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
 /**
- * THE dispatch map — every MCP tool name declared in `tools/index.ts`
- * resolves to exactly one handler here. Merged from the per-domain files;
- * a tool declared in `tools/index.ts` but missing here falls through to
- * `executeMCPToolViaHubProtocol`'s `Unknown MCP tool` error, same as the
- * old switch's `default:`. Kept alias: `synap_capture_graph` (deprecated,
- * not declared in `tools/index.ts` `list()`) maps to the same handler as
- * `synap_capture` — see `handlers/capture.ts`. A LISTED old name (a renamed
- * tool, `MCP_TOOL_ALIASES`) is added from `tool-aliases.ts`.
+ * THE dispatch map — every tool `tools/index.ts` defines resolves to exactly
+ * one handler here, merged from the per-domain files: a defined tool with no
+ * handler, or a handler for no defined tool, does not compile. An old name
+ * (`aliases` on a definition) reaches here as its tool's (`tools.execute`).
  */
-const DOMAIN_HANDLERS: McpHandlerMap = {
+export const TOOL_HANDLERS = {
   ...readHandlers,
   ...entityHandlers,
   ...captureHandlers,
@@ -99,16 +94,18 @@ const DOMAIN_HANDLERS: McpHandlerMap = {
   ...fileHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
-};
-/** Plus each old tool name, answering through its canonical tool's handler. */
-const TOOL_HANDLERS: McpHandlerMap = {
-  ...DOMAIN_HANDLERS,
-  ...toolAliasHandlers(DOMAIN_HANDLERS),
-};
+  // `synap_load_skill` and `synap_call_tool` are answered by the door itself
+  // (`tools.execute`, `mcp/index.ts`), never dispatched here.
+} satisfies Required<
+  Omit<McpHandlerMap, "synap_load_skill" | "synap_call_tool">
+>;
 
-/** The handler a tool name dispatches to (undefined: an unknown tool). */
-export function mcpToolHandler(toolName: string) {
-  return TOOL_HANDLERS[toolName];
+/**
+ * The handler a tool name dispatches to (undefined: an unknown tool). Its
+ * `ctx.args` is the door's parse of THAT tool's input (`parseToolArgs`).
+ */
+export function mcpToolHandler(toolName: string): McpToolHandler | undefined {
+  return (TOOL_HANDLERS as unknown as Record<string, McpToolHandler>)[toolName];
 }
 
 export async function executeMCPToolViaHubProtocol(
@@ -184,9 +181,9 @@ export async function executeMCPToolViaHubProtocol(
   // only consulted when NEITHER an explicit `args.workspaceId` NOR a bound
   // service-key pin resolved anything above — priority is explicit-per-call >
   // service-key pin > agent's live focus. MCP *write* tools that need a
-  // concrete home (capture text, create_project/playbook, run_playbook) must
+  // concrete home (capture text, create_project/playbook, a playbook launch) must
   // NOT fall back to membership[0] when this is still null — they reject via
-  // `rejectMissingWriteWorkspace` (run_playbook also falls through to the
+  // `rejectMissingWriteWorkspace` (a launch also falls through to the
   // playbook's own workspaceId, then subject/session, before rejecting).
   // Catalog/read tools like list_playbooks use listAllPage (user floor) — no
   // membership[0]. Never overrides, never 403s: a
@@ -230,7 +227,7 @@ export async function executeMCPToolViaHubProtocol(
       )
     : caller;
 
-  const handler = TOOL_HANDLERS[toolName];
+  const handler = mcpToolHandler(toolName);
   if (!handler) {
     throw new Error(
       `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`
@@ -274,16 +271,12 @@ export async function executeMCPToolViaHubProtocol(
         ? runWithNamedSession(session.sessionId, invokeHandler)
         : invokeHandler();
   // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
-  // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
-  // The ONE door `fileSuperseding` (also Hub REST's) refuses it before the
-  // handler when the name cannot be replaced (the insert door checks it
-  // again, and the request kind, against the row it files); otherwise the
-  // proposal this call files for it ends it.
-  if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
-    return toolError(
-      `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
-    );
-  }
+  // (`supersedes`, declared only by a definition that says `supersedes`:
+  // any other tool's input check refuses it as an unknown key). The ONE door
+  // `fileSuperseding` (also Hub REST's) refuses it before the handler when
+  // the name cannot be replaced (the insert door checks it again, and the
+  // request kind, against the row it files); otherwise the proposal this
+  // call files for it ends it.
   const named = readSupersedes(args.supersedes);
   if (!named.ok) return toolError(named.problem);
   const supersedes = named.id;

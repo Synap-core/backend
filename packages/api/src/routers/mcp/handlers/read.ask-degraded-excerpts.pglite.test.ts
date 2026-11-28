@@ -91,6 +91,7 @@ const schema = await import("@synap/database/schema");
 const { runWithGrant } = await import("@synap/database");
 const { readHandlers } = await import("./read.js");
 const { mcpToolAllowed } = await import("../../../access/grant-door-fence.js");
+const { toolDefinition } = await import("../define-tool.js");
 
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
@@ -187,8 +188,12 @@ async function askAs(grant: typeof SCOPED): Promise<Record<string, any>> {
 
 describe("synap_ask with AI down, through a scoped key", () => {
   it("the same fence admits the titles and the excerpts: the scoped key passes, pinned it does not", () => {
-    expect(mcpToolAllowed("synap_ask", true, SCOPED as never)).toBe(true);
-    expect(mcpToolAllowed("synap_ask", true, PINNED as never)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_ask")?.access, SCOPED as never)
+    ).toBe(true);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_ask")?.access, PINNED as never)
+    ).toBe(false);
   });
 
   it("quotes the first three listed runbooks, bounded, and nothing unlisted", async () => {

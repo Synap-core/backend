@@ -12,10 +12,6 @@
 
 import { z } from "zod";
 import {
-  PROJECT_TRACK_STATUSES,
-  PROJECT_TRACK_VERDICTS,
-} from "@synap/database/schema";
-import {
   advanceTrackStage,
   getTrack,
   listTracks,
@@ -79,10 +75,6 @@ function uuid(v: unknown): string | undefined {
   return s && Uuid.safeParse(s).success ? s : undefined;
 }
 
-function isParams(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
 /** The list row an agent scans to pick a goal (`detail: 'lean'`). */
 function leanTrackRow(view: TrackView) {
   return {
@@ -124,7 +116,7 @@ async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   }
 }
 
-export const trackHandlers: McpHandlerMap = {
+export const trackHandlers = {
   synap_list_tracks: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const projectId = uuid(ctx.args.projectId);
@@ -163,11 +155,6 @@ export const trackHandlers: McpHandlerMap = {
     // looked for. `lean` (default) is the row an agent scans to pick a goal,
     // as synap_list_sessions does; `full` (or `trackId`) reads it whole.
     const detail = ctx.args.detail ?? "lean";
-    if (detail !== "lean" && detail !== "full") {
-      return ok({
-        error: `Unknown detail '${String(detail)}'. Valid values: lean (default), full.`,
-      });
-    }
     const name = str(ctx.args.name)?.toLowerCase();
     return run(async () => {
       const rows = await listTracks({
@@ -219,7 +206,7 @@ export const trackHandlers: McpHandlerMap = {
         projectId,
         ...(playbookId ? { playbookId } : {}),
         ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
-        ...(isParams(ctx.args.params) ? { params: ctx.args.params } : {}),
+        ...(ctx.args.params ? { params: ctx.args.params } : {}),
         ...(str(ctx.args.direction)
           ? { direction: str(ctx.args.direction) }
           : {}),
@@ -271,28 +258,14 @@ export const trackHandlers: McpHandlerMap = {
   synap_set_track_status: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const trackId = uuid(ctx.args.trackId);
-    const status = PROJECT_TRACK_STATUSES.find((s) => s === ctx.args.status);
-    if (!trackId || !status) {
+    // The id's uuid format is not in the schema: checked here.
+    if (!trackId) {
       return ok({
-        error: `trackId (uuid) and status (${PROJECT_TRACK_STATUSES.join(" | ")}) are required — synap_list_tracks lists the project's tracks.`,
+        error:
+          "trackId (uuid) is required — synap_list_tracks lists the project's tracks.",
       });
     }
-    const verdictArg = str(ctx.args.verdict);
-    const verdict = PROJECT_TRACK_VERDICTS.find((v) => v === verdictArg);
-    if (verdictArg && !verdict) {
-      return ok({
-        error: `verdict must be one of ${PROJECT_TRACK_VERDICTS.join(" | ")}.`,
-      });
-    }
-    const expectedArg = str(ctx.args.expectedStatus);
-    const expectedStatus = PROJECT_TRACK_STATUSES.find(
-      (s) => s === expectedArg
-    );
-    if (expectedArg && !expectedStatus) {
-      return ok({
-        error: `expectedStatus must be one of ${PROJECT_TRACK_STATUSES.join(" | ")}.`,
-      });
-    }
+    const { status, verdict, expectedStatus } = ctx.args;
     return run(async () => {
       // The verdict rule (closing needs one, impossible/replaced a reason)
       // and the expectedStatus rule are the service's, refused with words
@@ -400,10 +373,11 @@ export const trackHandlers: McpHandlerMap = {
   synap_set_track_params: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const trackId = uuid(ctx.args.trackId);
-    if (!trackId || !isParams(ctx.args.params)) {
+    // The id's uuid format is not in the schema: checked here.
+    if (!trackId) {
       return ok({
         error:
-          "trackId (uuid) and params (an object keyed by the declared param names) are required — synap_list_tracks returns each track's declaredParams.",
+          "trackId (uuid) is required — synap_list_tracks returns each track's declaredParams.",
       });
     }
     const params = ctx.args.params;
@@ -539,4 +513,4 @@ export const trackHandlers: McpHandlerMap = {
       return domainNote ? { ...result, domainNote } : result;
     });
   },
-};
+} satisfies McpHandlerMap;

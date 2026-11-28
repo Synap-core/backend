@@ -82,8 +82,7 @@
  * re-ask the question it answered. Anything else
  * falls through to the light queue run above, then to the tier. What it
  * does not re-check: the sibling repos (control-plane-api, app-bases) at
- * main may have moved since; Preflight re-reads the one cross-repo red we
- * measured (door-tool-names) on every queue run.
+ * main may have moved since.
  *
  * (A log-only "semantic overlap" measure ran here from 31 Oct to 12 Nov,
  * plan d679e92c C1(a). Its answer, from 292 light entries: a median 1,752 of

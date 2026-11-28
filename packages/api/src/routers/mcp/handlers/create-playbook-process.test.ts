@@ -42,6 +42,7 @@ import { buildHandlers } from "./build.js";
 import { createInputSchema } from "../../playbooks.js";
 import { foldProcessIntoSubjectProfile } from "../../../schemas/playbook-process.js";
 import { tools } from "../tools/index.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 function ctx(args: Record<string, unknown>): McpToolContext {
@@ -153,28 +154,23 @@ describe("synap_create_playbook → the process contract", () => {
     }
   });
 
-  it("onEnd is retired: create and update refuse it, in the catalog's words, and send nothing", async () => {
-    h.creates.length = 0;
-    const created = await buildHandlers.synap_create_playbook!(
-      ctx({
-        name: "Fix a finding",
-        goalTemplate: "Fix it",
-        subjectProfileSlug: "finding",
-        onEnd: { cancelled: "open" },
-      })
-    );
+  it("onEnd is retired: create and update refuse it at the door, in the catalog's words", () => {
+    const created = parseToolArgs("synap_create_playbook", {
+      name: "Fix a finding",
+      goalTemplate: "Fix it",
+      subjectProfileSlug: "finding",
+      onEnd: { cancelled: "open" },
+    });
     expect(JSON.stringify(created)).toContain("onEnd — retired");
-    expect(h.creates).toHaveLength(0);
+    expect(created.ok).toBe(false);
 
-    const updated = await buildHandlers.synap_update_playbook!({
-      ...ctx({
-        playbookId: "00000000-0000-4000-8000-0000000000cc",
-        subjectProfileSlug: "finding",
-        onEnd: {},
-      }),
-      toolName: "synap_update_playbook",
-    } as McpToolContext);
+    const updated = parseToolArgs("synap_update_playbook", {
+      playbookId: "00000000-0000-4000-8000-0000000000cc",
+      subjectProfileSlug: "finding",
+      onEnd: {},
+    });
     expect(JSON.stringify(updated)).toContain("onEnd — retired");
+    expect(updated.ok).toBe(false);
   });
 
   it("the advertised tool schema teaches every process field", async () => {

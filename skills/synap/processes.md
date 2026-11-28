@@ -151,11 +151,11 @@ All three are optional: without them a playbook runs exactly as before.
     Example: render on the Mac, else the devbox:
     `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
     `null` clears a playbook's runner. A choice made when running it comes
-    first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+    first (`synap_start_session { templateId, launch: true, runner }`, the same shapes: a role, engine or
     list is resolved then, and nobody it names → refused), then the playbook's
     runner, then the person's remembered choice.
     A stage's runner can be chosen too: for a whole run,
-    `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+    `synap_start_session { templateId, launch: true, stageRunners: { "<stage key>": <runner> } }`; while
     working, `synap_update_session { currentStage, stageRunner }` for the stage
     you enter (`"self"` = you do it; naming another agent asks the person
     first). A step with another runner gives that agent a turn on the same

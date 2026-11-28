@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { definedToolNames } from "../routers/mcp/define-tool.js";
 
 /**
  * TRIPWIRE — every MCP tool DECLARED in `routers/mcp/tools/index.ts` (the
@@ -28,8 +29,9 @@ import { join } from "node:path";
  * entry falls through to `TOOL_HANDLERS[toolName]` being `undefined`, which
  * throws `Unknown MCP tool: ${toolName}`.
  *
- * This test parses `tools/index.ts` plus every `adapter.ts` + `handlers/*.ts`
- * source file as text (same approach as the pod's `a2ai-one-door.test.ts` and
+ * The declared names come from the registry (`definedToolNames()`, every
+ * `defineTool`), never a parse of the definitions' layout. This test parses
+ * every `adapter.ts` + `handlers/*.ts` source file as text (same approach as the pod's `a2ai-one-door.test.ts` and
  * CP's `mcp-native-tool-dispatch-tripwire.test.ts`) and asserts every name
  * declared in `list()` has either a registered handler-map key somewhere
  * under `handlers/` (or `adapter.ts` itself), or is the one name
@@ -47,25 +49,21 @@ import { join } from "node:path";
  * readHandlers: McpHandlerMap = { synap_ask: async (ctx) => {...}, ... }`.
  */
 
-const TOOLS_INDEX_SRC = join(__dirname, "../routers/mcp/tools/index.ts");
 const MCP_DIR = join(__dirname, "../routers/mcp");
 const HANDLERS_DIR = join(MCP_DIR, "handlers");
 
-/** Names special-cased inline in `execute()` BEFORE delegating to the adapter. */
-const DISPATCHED_INLINE_IN_TOOLS_INDEX = new Set(["synap_load_skill"]);
-
 /**
- * Handler-map keys that intentionally register a name no longer on the
- * curated `list()` — a DEPRECATED alias kept for backward compatibility, not
- * a forgotten rename. `handlers/capture.ts` documents `synap_capture_graph`
- * as the deprecated alias of `synap_capture` (same handler function, two
- * map keys).
+ * Names the door answers itself, never dispatched to a handler:
+ * `synap_load_skill` (inline in `execute()`) and `synap_call_tool` (unwrapped
+ * by the tools/call door, `mcp/index.ts`).
  */
-const INTENTIONALLY_UNDECLARED_ALIASES = new Set(["synap_capture_graph"]);
+const DISPATCHED_INLINE_IN_TOOLS_INDEX = new Set([
+  "synap_load_skill",
+  "synap_call_tool",
+]);
 
-function parseDeclaredNames(src: string): string[] {
-  return [...src.matchAll(/name: "(synap_[a-z_]+)"/g)].map((m) => m[1]);
-}
+/** Every defined tool (aliases dispatch through their tool's handler). */
+const parseDeclaredNames = (): string[] => definedToolNames();
 
 /**
  * Every source file that could carry a `TOOL_HANDLERS` registration:
@@ -104,17 +102,15 @@ function parseDispatchedNames(): Set<string> {
 }
 
 describe("tripwire: every declared MCP tool has a dispatch branch", () => {
-  const toolsIndexSrc = readFileSync(TOOLS_INDEX_SRC, "utf8");
-
   it("can parse declared tool names and dispatch-map keys (else this tripwire proves nothing)", () => {
-    const declared = parseDeclaredNames(toolsIndexSrc);
+    const declared = parseDeclaredNames();
     const dispatched = parseDispatchedNames();
     expect(declared.length).toBeGreaterThan(30);
     expect(dispatched.size).toBeGreaterThan(30);
   });
 
   it("every tool declared in list() has a dispatch branch (a handler-map key under mcp/handlers/, or the inline execute() special-case)", () => {
-    const declared = parseDeclaredNames(toolsIndexSrc);
+    const declared = parseDeclaredNames();
     const dispatched = parseDispatchedNames();
 
     const missing = [...new Set(declared)].filter(
@@ -142,13 +138,10 @@ describe("tripwire: every declared MCP tool has a dispatch branch", () => {
     // exists in `list()` is at best dead code and at worst evidence of a
     // rename that forgot to update one side — not the incident bug, but the
     // same class.
-    const declared = new Set(parseDeclaredNames(toolsIndexSrc));
+    const declared = new Set(parseDeclaredNames());
     const dispatched = parseDispatchedNames();
 
-    const orphaned = [...dispatched].filter(
-      (name) =>
-        !declared.has(name) && !INTENTIONALLY_UNDECLARED_ALIASES.has(name)
-    );
+    const orphaned = [...dispatched].filter((name) => !declared.has(name));
 
     expect(
       orphaned,

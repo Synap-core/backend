@@ -173,7 +173,9 @@ vi.mock("./_shared.js", async (importOriginal) => {
 });
 
 const { registerPlaybooksRoutes } = await import("./playbooks.js");
-const { buildHandlers } = await import("../../mcp/handlers/build.js");
+// MCP runs a playbook with `synap_start_session` `launch: true` (its old
+// name `synap_run_playbook` maps onto it, `define-tool.ts`).
+const { sessionHandlers } = await import("../../mcp/handlers/session.js");
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -291,12 +293,12 @@ describe("POST /playbooks/:id/run — the D3 preflight reaches Hub REST", () => 
     });
   });
 
-  it("MCP synap_run_playbook returns the SAME blocked shape (one door)", async () => {
+  it("MCP synap_start_session launch returns the SAME blocked shape (one door)", async () => {
     h.unenabled = [{ id: "skill-1", name: "exa_search" }];
     const rest = await post(appAs(AGENT), `/playbooks/${PB}/run`, {});
-    const mcp = await buildHandlers.synap_run_playbook!({
-      toolName: "synap_run_playbook",
-      args: { playbookId: PB },
+    const mcp = await sessionHandlers.synap_start_session!({
+      toolName: "synap_start_session",
+      args: { launch: true, templateId: PB },
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,
@@ -346,10 +348,10 @@ describe("POST /playbooks/:id/run — handToAgentId reaches the governed run (RE
     expect(h.gateCalls[0]!.data).not.toHaveProperty("handToAgentId");
   });
 
-  it("MCP synap_run_playbook carries it through the same door", async () => {
-    await buildHandlers.synap_run_playbook!({
-      toolName: "synap_run_playbook",
-      args: { playbookId: PB, handToAgentId: ` ${AGENT} ` },
+  it("MCP synap_start_session launch carries it through the same door", async () => {
+    await sessionHandlers.synap_start_session!({
+      toolName: "synap_start_session",
+      args: { launch: true, templateId: PB, handToAgentId: ` ${AGENT} ` },
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,
@@ -388,10 +390,10 @@ describe("POST /playbooks/:id/run — a runner chosen at Run reaches the governe
     expect(h.gateCalls).toEqual([]);
   });
 
-  it("MCP synap_run_playbook carries it through the same door", async () => {
-    await buildHandlers.synap_run_playbook!({
-      toolName: "synap_run_playbook",
-      args: { playbookId: PB, runner: { agentId: AGENT } },
+  it("MCP synap_start_session launch carries it through the same door", async () => {
+    await sessionHandlers.synap_start_session!({
+      toolName: "synap_start_session",
+      args: { launch: true, templateId: PB, runner: { agentId: AGENT } },
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,

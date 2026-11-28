@@ -22,6 +22,7 @@ vi.mock("../../../services/surfaces/for-object.js", () => ({
 }));
 
 import { readHandlers } from "./read.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 const WS = "44444444-4444-4444-8444-444444444444";
@@ -92,9 +93,20 @@ describe("synap_find_surfaces", () => {
     );
   });
 
-  it("refuses an unknown anchor kind without reading", async () => {
+  it("refuses an unknown anchor kind at the door, before the handler", () => {
+    const out = parseToolArgs("synap_find_surfaces", {
+      kind: "planet",
+      id: PROJECT,
+    });
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : JSON.stringify(out.result.content)).toMatch(
+      /invalid input[\s\S]*kind/
+    );
+  });
+
+  it("refuses a blank id without reading", async () => {
     const res = await readHandlers.synap_find_surfaces!(
-      makeCtx({ args: { kind: "planet", id: PROJECT } })
+      makeCtx({ args: { kind: "project", id: " " } })
     );
     expect(res.isError).toBe(true);
     expect(surfacesForObject).not.toHaveBeenCalled();

@@ -30,7 +30,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { createMCPServer } from "./index.js";
 import { tools } from "./tools/index.js";
-import { ENTRY_TOOLS, TOOL_GROUPS } from "./tool-profiles.js";
+import {
+  entryToolNames,
+  toolGroupMembers,
+  unlistedToolNames,
+} from "./define-tool.js";
 
 type Handler = (
   req: unknown,
@@ -64,12 +68,12 @@ beforeEach(() => {
 });
 
 describe("tools/list honours the key's profile", () => {
-  it("an ENTRY key lists exactly the 9 entry tools", async () => {
+  it("an ENTRY key lists exactly the entry tools", async () => {
     access.loadKeyToolAccess.mockResolvedValue({
       profile: "entry",
       groups: [],
     });
-    expect((await listFor("key-1")).sort()).toEqual([...ENTRY_TOOLS].sort());
+    expect((await listFor("key-1")).sort()).toEqual(entryToolNames().sort());
     expect(access.loadKeyToolAccess).toHaveBeenCalledWith("key-1");
   });
 
@@ -79,14 +83,18 @@ describe("tools/list honours the key's profile", () => {
       groups: ["tracks"],
     });
     const names = await listFor("key-1");
-    expect(names).toHaveLength(ENTRY_TOOLS.length + TOOL_GROUPS.tracks.length);
+    expect(names).toHaveLength(
+      entryToolNames().length + toolGroupMembers().tracks.length
+    );
     expect(names).toContain("synap_advance_track");
   });
 
-  it("a LEGACY key (NULL profile — every key before 0280) lists every tool, unchanged", async () => {
+  it("a LEGACY key (NULL profile — every key before 0280) lists every tool but the old names and hidden doors", async () => {
     access.loadKeyToolAccess.mockResolvedValue({ profile: null, groups: [] });
     const all = (await tools.list({ door: "chat" })).length;
-    expect(await listFor("key-legacy")).toHaveLength(all);
+    const unlisted = unlistedToolNames();
+    expect(unlisted.has("synap_list_widgets")).toBe(true);
+    expect(await listFor("key-legacy")).toHaveLength(all - unlisted.size);
     expect(all).toBeGreaterThan(60);
   });
 
@@ -159,7 +167,7 @@ describe("synap_load_skill(<group>) unlocks on an entry key", () => {
     );
     // One line per unlocked tool, each cut to a sentence of at most 140 chars.
     const lines = out.split("\n").filter((l) => l.startsWith("- synap_"));
-    const unlocked = Object.values(TOOL_GROUPS).flat();
+    const unlocked = Object.values(toolGroupMembers()).flat();
     expect(lines).toHaveLength(unlocked.length);
     for (const l of lines) {
       expect(l.slice(l.indexOf(": ") + 2).length).toBeLessThanOrEqual(140);
@@ -210,18 +218,24 @@ describe("synap_load_skill(<group>) unlocks on an entry key", () => {
     expect(out).toContain("Unlocked tool group: governance");
   });
 
-  it("a missing or empty ref is a clear error, never a crash", async () => {
-    for (const args of [{}, { ref: "" }, { ref: 42 }]) {
-      const res = (await tools.execute(
+  it("a missing, empty or mistyped ref is a clear error, never a crash", async () => {
+    const run = async (args: Record<string, unknown>) =>
+      (await tools.execute(
         "synap_load_skill",
         args,
         "u1",
         ["mcp.read"],
         "u1"
       )) as { isError?: boolean; content: unknown[] };
+    for (const args of [{}, { ref: "" }]) {
+      const res = await run(args);
       expect(res.isError).toBe(true);
       expect(text(res)).toContain("`ref` is required");
     }
+    // A number is refused by the door's input check, which names the input.
+    const typed = await run({ ref: 42 });
+    expect(typed.isError).toBe(true);
+    expect(text(typed)).toMatch(/invalid input[\s\S]*ref/);
   });
 
   it("an unknown tools: group names the real ones and unlocks nothing", async () => {

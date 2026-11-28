@@ -64,7 +64,8 @@ vi.mock("./handlers/read.js", async (importOriginal) => {
   };
 });
 
-import { capReply, REPLY_CAP_CHARS, REPLY_CAP_EXEMPT } from "./reply-cap.js";
+import { capReply, REPLY_CAP_CHARS } from "./reply-cap.js";
+import { definedToolNames, toolDefinition } from "./define-tool.js";
 import { executeMCPToolViaHubProtocol } from "./adapter.js";
 
 const text = (r: CallToolResult) => {
@@ -225,7 +226,9 @@ describe("capReply", () => {
   });
 
   it("opts out ONLY the documented body-returning tools", () => {
-    expect([...REPLY_CAP_EXEMPT]).toEqual(["synap_load_skill"]);
+    expect(
+      definedToolNames().filter((n) => toolDefinition(n)?.uncapped)
+    ).toEqual(["synap_load_skill"]);
     const big = reply("s".repeat(REPLY_CAP_CHARS * 2));
     expect(capReply("synap_load_skill", big)).toBe(big);
   });

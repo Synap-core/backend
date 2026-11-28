@@ -13,8 +13,8 @@
  *
  * HOW THE CALL IS JUDGED: the tools/call door (`mcp/index.ts`) unwraps a
  * dispatcher call ONCE, at its top (`effectiveToolCall`, `call-tool-name.ts`),
- * then runs the call fence (`toolCallRefusal`), the undeclared-args shadow and
- * `tools.execute` on the INNER tool, exactly as a direct call of it. The
+ * then runs the call fence (`toolCallRefusal`) and `tools.execute` (its input
+ * check included) on the INNER tool, exactly as a direct call of it. The
  * dispatcher has no authority of its own, so nothing judges its name.
  *
  * What the dispatcher adds on top of the direct call (this module, pure):
@@ -30,7 +30,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { toolError } from "./tool-errors.js";
-import { TOOL_GROUPS, TOOL_GROUP_NAMES } from "./tool-profiles.js";
+import { toolPlacement } from "./define-tool.js";
 import { loadSkillCall } from "./tool-guidance.js";
 
 /** Renders a pod tool name as the calling door names it (`pod__*` on the connector). */
@@ -106,10 +106,11 @@ export async function resolveDispatch(
         `No tool is named "${tool}". ${n("synap_load_skill")}({ref: "catalog"}) lists the teaching skills; a tool group's names come with its unlock, e.g. ${loadSkillCall(n("synap_load_skill"))}.`
     );
   }
+  // An old name is reachable where IT is placed (`ToolAlias.group`), never
+  // through its tool's placement: a fold does not widen who reaches a door.
   if (listed && !listed.has(tool)) {
-    const group = TOOL_GROUP_NAMES.find((g) =>
-      (TOOL_GROUPS[g] as readonly string[]).includes(tool)
-    );
+    const placed = toolPlacement(tool);
+    const group = placed === "entry" ? undefined : placed;
     // Every advertised tool is entry (always listed) or in one group
     // (`tool-profiles.test.ts`); a tool in neither is not this key's to run.
     if (!group) {

@@ -5,7 +5,8 @@
  * `synap_create_entity` failed only at the founder's Approve (`preference`
  * for `preferences`, five founder preferences, 2026-10-27).
  *
- * Drives the REAL handler; the service is mocked only to see whether it ran.
+ * The refusal is the input's enum, at the door (`parseToolArgs`); a valid
+ * category drives the REAL handler, the service mocked only to see it ran.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,6 +21,7 @@ vi.mock("../../../services/knowledge/remember-fact.js", async (orig) => ({
   rememberFact: rememberFactSpy,
 }));
 
+import { parseToolArgs } from "../define-tool.js";
 import { entityHandlers } from "./entity.js";
 import type { McpToolContext } from "./shared.js";
 
@@ -38,14 +40,22 @@ const textOf = (r: { content?: Array<{ text?: string }> }) =>
 beforeEach(() => rememberFactSpy.mockClear());
 
 describe("synap_remember_fact category", () => {
-  it("refuses an unknown category, names the allowed ones and the closest, saves nothing", async () => {
-    const res = (await call({ category: "preference" })) as {
+  it("refuses an unknown category at the door, names the allowed ones, saves nothing", () => {
+    // The category is the tool's input enum: `parseToolArgs` refuses it
+    // before any handler runs, as on the live call path (`tools.execute`).
+    const res = parseToolArgs("synap_remember_fact", {
+      fact: "Prefers flat lists",
+      category: "preference",
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    const refusal = res.result as {
       isError?: boolean;
       content?: Array<{ text?: string }>;
     };
-    expect(res.isError).toBe(true);
-    expect(textOf(res)).toMatch(/Did you mean 'preferences'\?/);
-    expect(textOf(res)).toMatch(/working_style/);
+    expect(refusal.isError).toBe(true);
+    expect(textOf(refusal)).toMatch(/category/);
+    expect(textOf(refusal)).toMatch(/working_style/);
     expect(rememberFactSpy).not.toHaveBeenCalled();
   });
 

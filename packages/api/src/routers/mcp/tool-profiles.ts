@@ -22,205 +22,29 @@
  * `api_keys.tool_profile`: NULL = legacy (every tool — every key minted before
  * 0280, unchanged), `entry`, or `builder` (every tool, chosen).
  *
- * Pure: no DB, no SDK. The coverage test (`tool-profiles.test.ts`) derives the
- * advertised tool set from `tools.list()` and asserts every tool is either
- * entry or in exactly one group — a new tool cannot silently vanish from an
- * entry key's reach.
+ * No DB. A tool's place (entry or one group) is its `defineTool` `group`, so a
+ * new tool cannot silently vanish from an entry key's reach.
  */
 
 import type { ApiKeyToolProfile } from "@synap/database/schema";
-import type { McpToolGroupName } from "@synap-core/types/agents";
+import {
+  MCP_TOOL_GROUP_NAMES,
+  type McpToolGroupName,
+} from "@synap-core/types/agents";
+import {
+  entryToolNames,
+  toolGroupMembers,
+  unlistedToolNames,
+} from "./define-tool.js";
 
 /**
- * The entry surface — what an agent needs for the V1 loop, nothing more.
- *
- * Plan v5 T1 (2026-10-27) added the GOAL and the PICK-UP: `list_tracks` /
- * `start_track` (work is filed into a goal with `trackId`, and an agent that
- * cannot see a goal tool starts a free session — 43 of 51 open work sessions
- * served no goal) and `get_session` (the continuation packet: how any agent
- * picks up a step from the pod alone).
+ * The groups, in the ONE order (`@synap-core/types/agents`). Which tool is in
+ * which group (or on the entry surface) is its definition's `group`
+ * (`define-tool.ts`: `entryToolNames`, `toolGroupMembers`), never a list here.
+ * Every tool is entry or in exactly one group by construction.
  */
-export const ENTRY_TOOLS = [
-  "synap_orient",
-  "synap_ask",
-  "synap_capture",
-  "synap_list_tracks",
-  "synap_start_track",
-  "synap_start_session",
-  "synap_get_session",
-  "synap_update_session",
-  "synap_wait_for_answer",
-  "synap_post_message",
-  // THE door any AI uses to put one item in front of the person (founder,
-  // 2026-11-04): with or without a session, so an outside AI needs no other.
-  "synap_ask_person",
-  // The answer loop's return half when the person answers in the agent's own
-  // chat (`synap_relay_answer`): an entry agent that asks must be able to relay.
-  "synap_relay_answer",
-  "synap_complete_session",
-  "synap_load_skill",
-  // Runs a tool `load_skill` unlocked in the same turn, on every client: most
-  // never list again mid-conversation (plan "live tool unlock", c28d0683).
-  "synap_call_tool",
-] as const;
-
-/**
- * Deeper tools, grouped by the job they serve. Every advertised tool that is
- * not in {@link ENTRY_TOOLS} belongs to exactly one group (pinned by test).
- */
-export const TOOL_GROUPS = {
-  /** Look things up beyond `ask`. */
-  read: [
-    "synap_get_entities",
-    "synap_get_entity",
-    "synap_get_document",
-    "synap_get_file",
-    "synap_get_thread_context",
-    "synap_get_relations",
-    "synap_get_graph",
-    "synap_resolve_identity",
-    "synap_list_profiles",
-    "synap_find",
-    "synap_get_channel",
-    "synap_diagnose",
-    "synap_template_health",
-    "synap_get_flow",
-    "synap_get_home",
-    "synap_read_board",
-  ],
-  /** Precise writes beyond `capture`. */
-  data: [
-    "synap_create_entity",
-    "synap_update_entity",
-    "synap_update_entities",
-    "synap_delete_entity",
-    "synap_create_document",
-    "synap_update_document",
-    "synap_request_upload",
-    "synap_store_file",
-    "synap_remember_fact",
-    "synap_link_entities",
-    "synap_attach_facet",
-    "synap_detach_facet",
-    "synap_update_facet",
-    "synap_move_entities",
-    "synap_organize_library",
-  ],
-  /** The rest of the session lifecycle. */
-  sessions: [
-    "synap_list_sessions",
-    "synap_needs_you",
-    "synap_get_work_graph",
-    "synap_get_work_release",
-    "synap_get_timeline",
-    "synap_list_agents",
-    "synap_evaluate_session",
-    "synap_revert_session",
-    "synap_rerun_session",
-    "synap_continue_session",
-    "synap_start_orchestrator",
-    "synap_promote_session_to_playbook",
-  ],
-  /** Proposals and trust rules. */
-  governance: [
-    "synap_list_proposals",
-    "synap_get_proposal",
-    "synap_governance",
-    "synap_revise_proposal",
-    "synap_reject_proposal",
-    "synap_request_deploy_approval",
-    "synap_create_rule",
-    "synap_update_rule",
-  ],
-  /** Kinds, roles and who may see them. */
-  schema: [
-    "synap_define_kind",
-    "synap_define_role",
-    "synap_grant_profile_access",
-    "synap_change_kind_scope",
-    "synap_retire_field",
-    "synap_declare_lifecycle",
-    "synap_change_lifecycle_options",
-  ],
-  /** Spaces, projects and focus. */
-  spaces: [
-    "synap_set_workspace_focus",
-    "synap_set_project_focus",
-    "synap_list_workspaces",
-    "synap_create_workspace",
-    "synap_update_workspace",
-    "synap_update_space_brief",
-    "synap_archive_workspace",
-    "synap_retire_workspace",
-    "synap_declare_workspace_source",
-    "synap_list_projects",
-    "synap_get_project",
-    "synap_create_project",
-    "synap_update_project",
-    "synap_project_use_workspace",
-    "synap_request_workspace_access",
-    "synap_file_into_project",
-    "synap_export_project_pack",
-  ],
-  /** Tracks: multi-stage work over time. */
-  tracks: [
-    "synap_start_stage_session",
-    "synap_advance_track",
-    "synap_set_track_status",
-    "synap_reopen_track",
-    "synap_convert_to_goal",
-    "synap_set_track_participant",
-    "synap_set_track_params",
-    "synap_update_track",
-    "synap_add_track_stage",
-    "synap_list_workers",
-    "synap_enable_worker",
-    "synap_pause_worker",
-    "synap_run_worker",
-  ],
-  /** Views, cells, playbooks and skills. */
-  build: [
-    "synap_create_view",
-    "synap_list_views",
-    "synap_find_surfaces",
-    "synap_inspect_surface",
-    "synap_create_surface",
-    "synap_attach_surface",
-    "synap_update_view_content",
-    "synap_place_on_board",
-    "synap_update_view",
-    "synap_set_start_page",
-    "synap_list_cells",
-    // The old name of synap_list_cells (`tool-aliases.ts`), listed with it.
-    "synap_list_widgets",
-    "synap_create_cell",
-    "synap_promote_cell_to_renderer",
-    "synap_propose_app_from_playbook",
-    "synap_list_playbooks",
-    "synap_match_playbooks",
-    "synap_create_playbook",
-    "synap_update_playbook",
-    "synap_run_playbook",
-    "synap_create_skill",
-    "synap_update_skill",
-  ],
-  /** Connected services, verbs and automations. */
-  capabilities: [
-    "synap_list_capabilities",
-    "synap_list_installations",
-    "synap_request_installation",
-    "synap_run_capability",
-    "synap_create_verb",
-    "synap_list_automations",
-    "synap_trigger_automation",
-    "synap_create_automation",
-  ],
-  // Keyed by the ONE group list (`@synap-core/types/agents`): a group added or
-  // dropped here and not there (or there and not here) does not compile.
-} as const satisfies Record<McpToolGroupName, readonly string[]>;
-
-export type ToolGroup = keyof typeof TOOL_GROUPS;
-export const TOOL_GROUP_NAMES = Object.keys(TOOL_GROUPS) as ToolGroup[];
+export type ToolGroup = McpToolGroupName;
+export const TOOL_GROUP_NAMES: ToolGroup[] = [...MCP_TOOL_GROUP_NAMES];
 
 /**
  * What each group is FOR, in a few words — the line a model reads to pick one
@@ -365,6 +189,21 @@ export const SKILL_STEMS_THAT_UNLOCK = Object.keys(SKILL_STEM_GROUPS);
 /** The skill packages whose every chapter unlocks a group (test seam: every key is a real package). */
 export const SKILL_PACKAGES_THAT_UNLOCK = Object.keys(SKILL_PACKAGE_GROUPS);
 
+/**
+ * The group vocabulary and the skill-unlock map, as the manifest publishes
+ * them (`groups`): the control plane reads them there, never this file.
+ */
+export function toolGroupVocabulary() {
+  return {
+    names: TOOL_GROUP_NAMES,
+    purposes: TOOL_GROUP_PURPOSES,
+    refPrefix: TOOL_GROUP_REF_PREFIX,
+    builderRef: BUILDER_REF,
+    skillStems: SKILL_STEM_GROUPS,
+    skillPackages: SKILL_PACKAGE_GROUPS,
+  };
+}
+
 export interface KeyToolAccess {
   profile: ApiKeyToolProfile | null;
   /** Groups unlocked on the key (`api_keys.tool_groups`). */
@@ -372,25 +211,34 @@ export interface KeyToolAccess {
 }
 
 /**
- * The tool names a key lists, or `null` for "every tool" (legacy NULL and
- * `builder`). Unknown group strings in storage are ignored, never widened.
+ * The tool names a key may reach: the entry tools plus every tool of its
+ * unlocked groups (hidden doors and old names included, each where it is
+ * placed: `synap_call_tool` runs them), or
+ * `null` for "every tool" (legacy NULL and `builder`). Unknown group strings
+ * in storage are ignored, never widened.
  */
 export function visibleToolNames(access: KeyToolAccess): Set<string> | null {
   if (access.profile !== "entry") return null;
-  const names = new Set<string>(ENTRY_TOOLS);
+  const names = new Set<string>(entryToolNames(true));
+  const groups = toolGroupMembers(true) as Record<string, string[]>;
   for (const g of access.groups) {
-    const tools = (TOOL_GROUPS as Record<string, readonly string[]>)[g];
-    if (!tools) continue;
-    for (const t of tools) names.add(t);
+    if (!Object.hasOwn(groups, g)) continue;
+    for (const t of groups[g]!) names.add(t);
   }
   return names;
 }
 
-/** Filter an advertised tool list down to what the key lists. */
+/**
+ * Filter an advertised tool list down to what the key lists. An old name and
+ * a hidden door are never listed (they still answer a call).
+ */
 export function filterToolsForAccess<T extends { name: string }>(
   toolDefs: T[],
   access: KeyToolAccess
 ): T[] {
   const visible = visibleToolNames(access);
-  return visible ? toolDefs.filter((t) => visible.has(t.name)) : toolDefs;
+  const unlisted = unlistedToolNames();
+  return toolDefs.filter(
+    (t) => !unlisted.has(t.name) && (!visible || visible.has(t.name))
+  );
 }

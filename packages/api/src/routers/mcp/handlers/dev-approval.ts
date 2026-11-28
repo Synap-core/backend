@@ -19,19 +19,11 @@ import {
   createDevApprovalProposal,
   DEV_DEPLOY_APPROVAL_TYPE,
 } from "../../../services/proposals/dev-approval.js";
-import {
-  ok,
-  requireScope,
-  type McpToolContext,
-  type CallToolResult,
-  type McpHandlerMap,
-} from "./shared.js";
+import { ok, requireScope, type McpHandlerMap } from "./shared.js";
 import { isUuid } from "@synap-core/types/property-render";
 
-export const devApprovalHandlers: McpHandlerMap = {
-  synap_request_deploy_approval: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+export const devApprovalHandlers = {
+  synap_request_deploy_approval: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
 
@@ -94,4 +86,4 @@ export const devApprovalHandlers: McpHandlerMap = {
       throw err;
     }
   },
-};
+} satisfies McpHandlerMap;

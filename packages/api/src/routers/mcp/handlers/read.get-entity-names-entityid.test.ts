@@ -6,12 +6,19 @@
  * before any read, so nothing is stubbed.
  */
 import { describe, it, expect } from "vitest";
+import { parseToolArgs } from "../define-tool.js";
 import { readHandlers } from "./read.js";
 
-function call(args: Record<string, unknown>) {
+/** The call as the door runs it: the input check, then the handler. */
+async function call(args: Record<string, unknown>): Promise<{
+  isError?: boolean;
+  content: Array<{ type: string; text?: string }>;
+}> {
+  const input = parseToolArgs("synap_get_entity", args);
+  if (!input.ok) return input.result;
   return readHandlers.synap_get_entity!({
     toolName: "synap_get_entity",
-    args,
+    args: input.args,
     userId: "u1",
     apiKeyScopes: ["mcp.read"],
   } as never);
@@ -26,7 +33,7 @@ describe("synap_get_entity — a missing entityId is named entityId", () => {
     const res = await call(args);
     expect(res.isError).toBe(true);
     const text = (res.content[0] as { text: string }).text;
-    expect(text).toContain("`entityId`");
+    expect(text).toContain("entityId");
     expect(text).not.toMatch(/"path":\["id"\]/);
   });
 });

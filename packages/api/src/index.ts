@@ -64,7 +64,7 @@ export {
   getAgentIdBySlug,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
-export { readOnlyToolNames as mcpReadOnlyToolNames } from "./routers/mcp/tools/index.js";
+export { readOnlyToolNames as mcpReadOnlyToolNames } from "./routers/mcp/define-tool.js";
 // Pod-as-OAuth-2.1-authorization-server (Path B): /.well-known/*, /register,
 // /authorize, /token. Mounted at the pod root in apps/api/src/index.ts.
 export { oauthApp } from "./routers/oauth/routes.js";

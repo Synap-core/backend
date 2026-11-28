@@ -34,16 +34,15 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { tools } from "./tools/index.js";
+import { entryToolNames } from "./define-tool.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import {
   BUILDER_REF,
-  ENTRY_TOOLS,
   TOOL_GROUP_NAMES,
   TOOL_GROUP_PURPOSES,
   toolGroupRef,
 } from "./tool-profiles.js";
 import { BUILD_SKILLS, loadSkillCall } from "./tool-guidance.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 
 type Result = { isError?: boolean; content: Array<{ text?: string }> };
 const text = (r: Result) => r.content.map((c) => c.text ?? "").join("\n");
@@ -93,7 +92,7 @@ describe("synap_orient carries `yourTools`", () => {
     ]);
     const yt = out.yourTools as Record<string, unknown>;
     expect(yt.profile).toBe("entry");
-    expect(yt.listed).toContain(`${ENTRY_TOOLS.length} essential tools`);
+    expect(yt.listed).toContain(`${entryToolNames().length} essential tools`);
     expect(yt.ask).toMatch(/^synap_ask asks the pod/);
     expect(yt.unlock).toContain('synap_load_skill({ref: "tools:read"})');
     expect(yt.unlock).toContain(BUILDER_REF);
@@ -143,11 +142,8 @@ describe("synap_orient carries `yourTools`", () => {
     const yt = (await orient("key-cp")).yourTools as Record<string, unknown>;
     expect(yt.ask).toMatch(/^pod__ask /);
     expect(yt.unlock).toContain('pod__load_skill({ref: "tools:read"})');
-    // The connector's own name for the dispatcher, once its curated catalog
-    // carries it (the generated door table); the pod name until then.
-    expect(yt.unlock).toContain(
-      `${DOOR_TOOL_NAMES.synap_call_tool?.["cp-connector"] ?? "synap_call_tool"}({tool, arguments})`
-    );
+    // The connector's own name for the dispatcher (derived: no `cpOmit`).
+    expect(yt.unlock).toContain("pod__call_tool({tool, arguments})");
     expect(yt.unlock).not.toMatch(/reconnect|next conversation/i);
   });
 

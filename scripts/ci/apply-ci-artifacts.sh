@@ -7,7 +7,7 @@
 # Artifacts it knows (all produced by .github/workflows/ci.yml on a red):
 #   reference-docs      -> docs/reference/
 #   generated-api-types -> packages/api-types/src/generated.d.ts
-#   mcp-generated       -> the MCP manifest, token-budget baseline and door tool names
+#   mcp-generated       -> the MCP manifest and token-budget baseline
 # Exit 3: no CI run for the PR's head yet. Exit 4: that run is still going.
 # Never `gh pr merge`: the merge bot enqueues a PR once its checks are green.
 set -euo pipefail
@@ -39,7 +39,6 @@ fi
 if grep -qx mcp-generated <<<"$ARTS"; then
   d=$(fetch mcp-generated)
   cp "$d"/mcp-tools.manifest.json "$d"/token-budget.baseline.json "$MCP/tools/" 2>/dev/null || true
-  [ -f "$d/door-tool-names.generated.ts" ] && cp "$d/door-tool-names.generated.ts" "$MCP/"
 fi
 
 if [ -z "$(git status --porcelain)" ]; then echo "#$PR: the artifacts change nothing"; exit 0; fi

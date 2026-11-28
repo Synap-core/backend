@@ -48,11 +48,11 @@ function notInlineReason(
   return null;
 }
 
-export const fileHandlers: McpHandlerMap = {
+export const fileHandlers = {
   synap_get_file: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
-    const entityId =
-      typeof ctx.args.entityId === "string" ? ctx.args.entityId.trim() : "";
+    // The id's uuid format is not in the schema: checked here.
+    const entityId = ctx.args.entityId.trim();
     const badId = fullUuidError(ctx.toolName, "entityId", entityId);
     if (badId) return badId;
 
@@ -115,4 +115,4 @@ export const fileHandlers: McpHandlerMap = {
       ],
     };
   },
-};
+} satisfies McpHandlerMap;

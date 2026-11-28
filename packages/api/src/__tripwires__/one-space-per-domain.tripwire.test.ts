@@ -36,7 +36,7 @@ import {
 import { ORIENT_LEARN_MORE_SKILL } from "../services/discover/discover.js";
 import { createMCPServer } from "../routers/mcp/index.js";
 import { tools } from "../routers/mcp/tools/index.js";
-import { ENTRY_TOOLS } from "../routers/mcp/tool-profiles.js";
+import { entryToolNames } from "../routers/mcp/define-tool.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(HERE, "../../../../skills");
@@ -113,7 +113,7 @@ describe("one space per domain — every AI door carries the rule", () => {
   it("the live MCP instructions of every key profile that can create a space carry the reflex", async () => {
     const advertised = (await tools.list()).map((t) => t.name);
     const profiles: Array<{ name: "entry" | "full"; tools: string[] }> = [
-      { name: "entry", tools: [...ENTRY_TOOLS] },
+      { name: "entry", tools: entryToolNames() },
       { name: "full", tools: advertised },
     ];
     const creating = profiles.filter((p) =>

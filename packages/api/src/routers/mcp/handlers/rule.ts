@@ -43,7 +43,6 @@ import {
   ok,
   readReasoning,
   requireScope,
-  type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
@@ -132,8 +131,8 @@ const updateRuleArgsSchema = z.object({
   draft: z.boolean().optional(),
 });
 
-export const ruleHandlers: McpHandlerMap = {
-  synap_create_rule: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const ruleHandlers = {
+  synap_create_rule: async (ctx) => {
     const {
       toolName,
       args,
@@ -208,7 +207,7 @@ export const ruleHandlers: McpHandlerMap = {
     return ok(result);
   },
 
-  synap_update_rule: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_rule: async (ctx) => {
     const {
       toolName,
       args,
@@ -293,4 +292,4 @@ export const ruleHandlers: McpHandlerMap = {
       throw err;
     }
   },
-};
+} satisfies McpHandlerMap;

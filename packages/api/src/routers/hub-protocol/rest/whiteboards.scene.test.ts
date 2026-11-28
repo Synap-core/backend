@@ -100,6 +100,8 @@ const { registerWhiteboardsRoutes } = await import("./whiteboards.js");
 const { readHandlers } = await import("../../mcp/handlers/read.js");
 const { restDoorAllowed, mcpToolAllowed } =
   await import("../../../access/grant-door-fence.js");
+const { toolDefinition, parseToolArgs } =
+  await import("../../mcp/define-tool.js");
 
 /** The bridge's answer for an open room: a real encoded Y.Doc. */
 function liveRoom(records: Record<string, unknown>) {
@@ -588,7 +590,9 @@ describe("MCP synap_read_board: the same reader", () => {
   });
 
   it("a missing or short id is refused before any read; a bound key reads only its space", async () => {
-    expect((await call({})).isError).toBe(true);
+    // A missing id is refused at the door (the input parse), before the handler.
+    expect(parseToolArgs("synap_read_board", {}).ok).toBe(false);
+    expect((await call({ viewId: " " })).isError).toBe(true);
     expect((await call({ viewId: "1b1b1b1b" })).isError).toBe(true);
     expect(m.accessCalls).toEqual([]);
     const r = await call({ viewId: VIEW }, { keyWorkspaceId: OTHER_WS });
@@ -609,17 +613,25 @@ describe("grant fence: a scoped key reads a board only when its grant reads view
   it("Hub route and MCP tool share one declaration", () => {
     const path = `/whiteboards/${VIEW}/scene`;
     expect(restDoorAllowed("GET", path, grantOf(ALL, null))).toBe(true);
-    expect(mcpToolAllowed("synap_read_board", true, grantOf(ALL, null))).toBe(
-      true
-    );
+    expect(
+      mcpToolAllowed(
+        toolDefinition("synap_read_board")?.access,
+        grantOf(ALL, null)
+      )
+    ).toBe(true);
     // Pinned to a space: the reader is not narrowed by a grant, so refused.
     expect(restDoorAllowed("GET", path, grantOf(ALL, [WS]))).toBe(false);
-    expect(mcpToolAllowed("synap_read_board", true, grantOf(ALL, [WS]))).toBe(
-      false
-    );
+    expect(
+      mcpToolAllowed(
+        toolDefinition("synap_read_board")?.access,
+        grantOf(ALL, [WS])
+      )
+    ).toBe(false);
     // Missing a subject the scene reads: refused.
     const noEntity = grantOf(["view.read", "document.read"], null);
     expect(restDoorAllowed("GET", path, noEntity)).toBe(false);
-    expect(mcpToolAllowed("synap_read_board", true, noEntity)).toBe(false);
+    expect(
+      mcpToolAllowed(toolDefinition("synap_read_board")?.access, noEntity)
+    ).toBe(false);
   });
 });

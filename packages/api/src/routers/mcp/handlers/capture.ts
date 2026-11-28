@@ -67,8 +67,8 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
-  type McpToolHandler,
 } from "./shared.js";
+import type { ToolArgs } from "../define-tool.js";
 // Static, NOT part of the dynamic `submit-capture-graph` import in the graph
 // branch: a pure helper there would be stubbed away by any `vi.mock` of that
 // module, exactly where a test believes it is exercising the door.
@@ -177,8 +177,8 @@ function misnamedFieldHint(e: Record<string, unknown>): string {
   return hints.length > 0 ? ` (${hints.join("; ")})` : "";
 }
 
-const captureHandler: McpToolHandler = async (
-  ctx: McpToolContext
+const captureHandler = async (
+  ctx: McpToolContext<ToolArgs<"synap_capture">>
 ): Promise<CallToolResult> => {
   const {
     toolName,
@@ -193,7 +193,7 @@ const captureHandler: McpToolHandler = async (
   } = ctx;
   requireScope(apiKeyScopes, "mcp.write", toolName);
 
-  const captureRawText = typeof args.text === "string" ? args.text : "";
+  const captureRawText = args.text ?? "";
   const captureNormalizedText = normalizeCaptureText(captureRawText);
   // `table` (ticket a8884743): rows of ONE kind as columns, expanded here into
   // the SAME entities[] + relations[] graph (one proposal); `linkBy` cells
@@ -234,47 +234,25 @@ const captureHandler: McpToolHandler = async (
       }
     : {};
   const captureEntities: Array<Record<string, unknown>> = [
-    ...(Array.isArray(args.entities)
-      ? (args.entities as Array<Record<string, unknown>>)
-      : []),
+    ...(args.entities ?? []),
     ...(captureTable?.entities ?? []),
   ];
   const captureRelations: Array<Record<string, unknown>> = [
-    ...(Array.isArray(args.relations)
-      ? (args.relations as Array<Record<string, unknown>>)
-      : []),
+    ...(args.relations ?? []),
     ...(captureTable?.relations ?? []),
   ];
   // Every plan step array (`CAPTURE_PLAN_KEYS`, the list the REST door reads
-  // too). Each is shape-checked door-locally (an object), then validated in
-  // full — refs, cycles, limits, ownership, evidence — by the shared preflight.
+  // too): each item is an object (the input parse), validated in full — refs,
+  // cycles, limits, ownership, evidence — by the shared preflight.
   const capturePlanRaw = Object.fromEntries(
-    CAPTURE_PLAN_KEYS.map((key) => [
-      key,
-      Array.isArray(args[key]) ? (args[key] as unknown[]) : [],
-    ])
+    CAPTURE_PLAN_KEYS.map((key) => [key, args[key] ?? []])
   ) as Record<(typeof CAPTURE_PLAN_KEYS)[number], unknown[]>;
-  const capturePlanShapeProblems: string[] = [];
-  for (const [key, items] of Object.entries(capturePlanRaw)) {
-    items.forEach((item, i) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        capturePlanShapeProblems.push(`${key}[${i}] must be an object`);
-      }
-    });
-  }
   // A teaching skill needs its `slug` — the ONE authoring rule
   // `synap_create_skill` applies — or nothing is filed.
-  capturePlanShapeProblems.push(
-    ...captureSkillStepProblems(capturePlanRaw.skills)
+  const capturePlanShapeProblems: string[] = captureSkillStepProblems(
+    capturePlanRaw.skills
   );
-  const capturePlan = Object.fromEntries(
-    Object.entries(capturePlanRaw).map(([key, items]) => [
-      key,
-      items.filter(
-        (item) => !!item && typeof item === "object" && !Array.isArray(item)
-      ),
-    ])
-  ) as unknown as NonNullable<
+  const capturePlan = capturePlanRaw as unknown as NonNullable<
     Parameters<
       typeof import("../../../services/capture-agent/submit-capture-graph.js").submitCaptureGraph
     >[0]["plan"]
@@ -291,26 +269,18 @@ const captureHandler: McpToolHandler = async (
   // an unknown projectId gets (B9e); it used to write everything unlinked (the
   // graph lane) or drop the name silently (the text lane). An explicit
   // `projectId` wins over a name.
-  const captureProjectName =
-    typeof args.projectName === "string" && args.projectName.trim()
-      ? args.projectName
-      : args.project &&
-          typeof args.project === "object" &&
-          typeof (args.project as { name?: unknown }).name === "string" &&
-          (args.project as { name: string }).name.trim()
-        ? (args.project as { name: string }).name
-        : null;
-  const captureProjectId =
-    typeof args.projectId === "string" && args.projectId
-      ? args.projectId
-      : captureProjectName
-        ? (
-            await resolveCaptureProjectRef(db, {
-              userId,
-              projectName: captureProjectName,
-            })
-          ).projectId
-        : null;
+  // A blank name ("" is a string to the schema) names no project.
+  const captureProjectName = args.projectName?.trim() ? args.projectName : null;
+  const captureProjectId = args.projectId
+    ? args.projectId
+    : captureProjectName
+      ? (
+          await resolveCaptureProjectRef(db, {
+            userId,
+            projectName: captureProjectName,
+          })
+        ).projectId
+      : null;
 
   /**
    * THE SCOPE THE RECEIPT REPORTS on the project axis.
@@ -768,9 +738,7 @@ const captureHandler: McpToolHandler = async (
         relationCount: checked.relationCount,
         ...tableReply,
         // What the review card will be titled when the caller sent no summary.
-        ...(tableSummary && !(typeof args.summary === "string" && args.summary)
-          ? { summary: tableSummary }
-          : {}),
+        ...(tableSummary && !args.summary ? { summary: tableSummary } : {}),
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
         // Advisory: a title the rubric flags still writes, so it never makes
@@ -824,9 +792,7 @@ const captureHandler: McpToolHandler = async (
           ...singleRoute.args,
           // The typed door files into a project only for a truthy id.
           projectId: captureProjectId ?? undefined,
-          ...(typeof args.summary === "string" && args.summary
-            ? { reasoning: args.summary }
-            : {}),
+          ...(args.summary ? { reasoning: args.summary } : {}),
         },
       });
       const createReceipt = (created.writeReceipt ?? {}) as {
@@ -892,15 +858,14 @@ const captureHandler: McpToolHandler = async (
       await import("../../../services/capture-agent/submit-capture-graph.js");
     const { buildCaptureNarrativeSummary } =
       await import("../../../services/capture-agent/capture-narrative.js");
-    const graphSummary =
-      typeof args.summary === "string" && args.summary
-        ? args.summary
-        : tableSummary
-          ? tableSummary
-          : buildCaptureNarrativeSummary({
-              sourceLabel: "Agent capture",
-              instruction: captureRawText,
-            });
+    const graphSummary = args.summary
+      ? args.summary
+      : tableSummary
+        ? tableSummary
+        : buildCaptureNarrativeSummary({
+            sourceLabel: "Agent capture",
+            instruction: captureRawText,
+          });
 
     // AGENT-MODE routing (piece A): submitCaptureGraph derives the terminal
     // from identity + policy. We pass the acting `agentUserId` so the core
@@ -1155,9 +1120,10 @@ const captureHandler: McpToolHandler = async (
       projectId: null,
       sessionId: null,
     };
-    const text = args.text as string;
+    // Non-empty here: `hasDurableText` refused a blank one above.
+    const text = captureRawText;
     const key =
-      (args.key as string | undefined) ||
+      args.key ||
       `note:${text
         .slice(0, 48)
         .toLowerCase()
@@ -1207,16 +1173,16 @@ const captureHandler: McpToolHandler = async (
   );
   // Step 1 — structure the free text into entity proposals.
   const structured = await captureCaller.structure({
-    text: args.text as string,
+    text: captureRawText,
     context: args.profileSlug
       ? `Hint: profile is ${args.profileSlug}`
       : undefined,
     // Honoured by the degraded fallback: an outage files the caller's kind,
     // not a note.
-    ...(typeof args.profileSlug === "string"
+    ...(args.profileSlug !== undefined
       ? { profileSlug: args.profileSlug }
       : {}),
-    dedupMode: args.dedupMode as "title" | "semantic" | "both" | undefined,
+    dedupMode: args.dedupMode,
   });
   // Step 2 — ACTUALLY WRITE. structure() only previews; without execute()
   // the capture tool returns proposals that are never materialized — the
@@ -1500,8 +1466,7 @@ const captureHandler: McpToolHandler = async (
       ((structured as { relations?: unknown[] }).relations as Parameters<
         typeof captureCaller.execute
       >[0]["relations"]) ?? [],
-    workspaceRouting: args.workspaceRouting as
-      "auto" | "ask" | "locked" | undefined,
+    workspaceRouting: args.workspaceRouting,
     // The ambient session, forwarded explicitly. `execute` reads `input.sessionId`
     // (capture.ts:1753) to run the `session --produced--> entity` link pass for
     // entities that were MERGED into an existing row — the create-side stamp only
@@ -1754,7 +1719,7 @@ const captureHandler: McpToolHandler = async (
  * (`library/organize`, always a proposal for an agent).
  */
 const organizeLibraryHandler = async (
-  ctx: McpToolContext
+  ctx: McpToolContext<ToolArgs<"synap_organize_library">>
 ): Promise<CallToolResult> => {
   const { toolName, args, apiKeyScopes, userId } = ctx;
   if (args.ops === undefined) {
@@ -1782,11 +1747,11 @@ const organizeLibraryHandler = async (
   requireScope(apiKeyScopes, "mcp.write", toolName);
   const { LibraryProposeInputSchema, proposeLibraryOrganize } =
     await import("../../../services/library/organize.js");
+  // The per-op shape (which fields each `op` needs, 1-50 ops) is the
+  // service's own rule; the wire schema advertises only the field names.
   const parsed = LibraryProposeInputSchema.safeParse({
     ops: args.ops,
-    ...(typeof args.reasoning === "string"
-      ? { reasoning: args.reasoning }
-      : {}),
+    ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
   });
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -1811,8 +1776,7 @@ const organizeLibraryHandler = async (
   );
 };
 
-export const captureHandlers: McpHandlerMap = {
+export const captureHandlers = {
   synap_capture: captureHandler,
-  synap_capture_graph: captureHandler,
   synap_organize_library: organizeLibraryHandler,
-};
+} satisfies McpHandlerMap;

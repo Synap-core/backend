@@ -90,6 +90,7 @@ import {
 import { aiDefaultCapabilities } from "@synap-core/types/grants";
 import { decideAgentPolicy } from "@synap/governance-policy";
 import { mcpToolAllowed } from "../access/grant-door-fence.js";
+import { toolDefinition } from "../routers/mcp/define-tool.js";
 import { grantWriteDenial } from "../utils/grant-write-check.js";
 import {
   approvePendingAgentKey,
@@ -588,7 +589,9 @@ describe('a NEW agent from /setup/agent starts with "AI — read & propose"', ()
     );
 
     for (const tool of ["synap_ask", "synap_orient", "synap_list_sessions"])
-      expect(mcpToolAllowed(tool, true, grant), tool).toBe(true);
+      expect(mcpToolAllowed(toolDefinition(tool)?.access, grant), tool).toBe(
+        true
+      );
 
     const write = (subjectType: string, action: string) =>
       grantWriteDenial(

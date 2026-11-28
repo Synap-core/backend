@@ -3,7 +3,7 @@
  * artifact `synap-control-plane-api/scripts/gen-pod-tools.ts` reads to
  * regenerate its curated `pod__*` surface (`src/routes/mcp-pod-tools.ts`).
  *
- * `tools/index.ts` (`export const tools`) is the pod's real SSOT; this script
+ * Each tool's `defineTool` (`tools/index.ts`) is the pod's real SSOT; this script
  * only serializes what it already returns — it changes zero pod runtime
  * behavior. `tools.list()` is called with NO ctx, so the result is the base
  * tool set with no per-session teaching brief spliced in (see the `if (!ctx)
@@ -30,6 +30,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import prettier from "prettier";
 import { tools } from "./index.js";
+import { toolExposure } from "../define-tool.js";
+import { toolGroupVocabulary } from "../tool-profiles.js";
 import { SYNAP_INSTRUCTIONS } from "../index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +41,11 @@ async function main() {
   const toolDefs = await tools.list();
   const manifest = {
     tools: toolDefs,
+    // Where each name is listed and whether the claude.ai connector exposes
+    // it, from its definition: the control plane derives its surface from
+    // this instead of curating it by hand.
+    exposure: toolExposure(),
+    groups: toolGroupVocabulary(),
     instructions: SYNAP_INSTRUCTIONS,
   };
   const raw = JSON.stringify(manifest, null, 2) + "\n";

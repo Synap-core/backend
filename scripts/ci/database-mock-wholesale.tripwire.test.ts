@@ -9,7 +9,7 @@
  * `@synap/database/testing`, which spreads the real module and overrides only
  * what a test fakes.
  *
- * The 107 files that still mock wholesale are listed in
+ * The 106 files that still mock wholesale are listed in
  * database-mock-wholesale.baseline.txt. The list may only SHRINK: a new file
  * fails here, and a listed file that no longer mocks wholesale fails until its
  * line is removed. Not covered: a factory that spreads the real module by

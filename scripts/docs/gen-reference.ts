@@ -90,8 +90,8 @@ async function emit(name: string, content: string) {
 async function mcpTools() {
   const { tools } =
     await import("../../packages/api/src/routers/mcp/tools/index.js");
-  const { ENTRY_TOOLS, TOOL_GROUPS } =
-    await import("../../packages/api/src/routers/mcp/tool-profiles.js");
+  const { entryToolNames, toolExposure, toolGroupMembers } =
+    await import("../../packages/api/src/routers/mcp/define-tool.js");
   const defs = (await tools.list()) as Array<{
     name: string;
     title?: string;
@@ -100,13 +100,9 @@ async function mcpTools() {
     inputSchema: JsonSchema;
   }>;
 
-  const groupOf = new Map<string, string>();
-  for (const name of ENTRY_TOOLS as readonly string[])
-    groupOf.set(name, "entry");
-  for (const [group, names] of Object.entries(
-    TOOL_GROUPS as Record<string, readonly string[]>
-  ))
-    for (const name of names) groupOf.set(name, group);
+  const groupOf = new Map<string, string>(
+    Object.entries(toolExposure()).map(([name, e]) => [name, e.group!])
+  );
 
   const entries = defs.map((t) => {
     const props = t.inputSchema?.properties ?? {};
@@ -132,7 +128,7 @@ async function mcpTools() {
     $comment: GENERATED_BY,
     source: [
       "packages/api/src/routers/mcp/tools/index.ts (tools.list(), no context)",
-      "packages/api/src/routers/mcp/tool-profiles.ts (ENTRY_TOOLS, TOOL_GROUPS)",
+      "packages/api/src/routers/mcp/define-tool.ts (each tool's `group`)",
     ],
     notes: {
       group:
@@ -141,8 +137,8 @@ async function mcpTools() {
         "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called.",
     },
     toolCount: entries.length,
-    entryTools: ENTRY_TOOLS,
-    groups: TOOL_GROUPS,
+    entryTools: entryToolNames(),
+    groups: toolGroupMembers(),
     tools: entries,
   };
   await emit("mcp-tools.json", JSON.stringify(json));

@@ -14,16 +14,16 @@
  * one had the identical lie and nobody had looked at it.
  *
  * ── What this test can and cannot see ──────────────────────────────────────
- * It is a SOURCE scan, because invoking the handler needs a DB, a key and a
- * scope check. It therefore pins that the refusal EXISTS and that the field is
- * NOT in the forwarded set. It cannot prove the runtime response shape — that
- * was verified by hand against the live pod and is recorded above.
+ * The refusal is configuration on the tool's definition (`refusedArgs`), run
+ * by the one input check (`parseToolArgs`, no DB needed); the forwarded set is
+ * still a SOURCE scan, because invoking the handler needs a DB and a key.
  */
 
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
+import { parseToolArgs } from "../define-tool.js";
 
 const SRC = readFileSync(resolve(__dirname, "session.ts"), "utf8");
 
@@ -36,19 +36,20 @@ describe("synap_update_session refuses what it cannot do", () => {
     expect(CODE).toMatch(/updateFocusSession/);
   });
 
-  it("REFUSES `stages` instead of accepting and dropping it", () => {
-    expect(CODE).toMatch(/"stages" in args/);
-    expect(CODE).toMatch(/stages is not supported by synap_update_session/);
-  });
-
-  it("says NOTHING WAS CHANGED, so a caller cannot read it as partial success", () => {
-    // The wording is the point. "not supported" alone reads as a warning
-    // beside a success; an agent retries or moves on believing the row changed.
-    expect(SRC).toMatch(/NOTHING WAS CHANGED/);
-  });
-
-  it("names the door that CAN do it — a refusal without a destination is a dead end", () => {
-    expect(SRC).toMatch(/focusSessions\.update/);
+  it("REFUSES `stages` instead of accepting and dropping it, NOTHING WAS CHANGED, naming the door that can", () => {
+    const out = parseToolArgs("synap_update_session", {
+      sessionId: "s1",
+      stages: [],
+    });
+    expect(out.ok).toBe(false);
+    const text = !out.ok
+      ? (out.result.content[0] as { text: string }).text
+      : "";
+    // "not supported" alone reads as a warning beside a success.
+    expect(text).toMatch(/stages is not supported by synap_update_session/);
+    expect(text).toMatch(/NOTHING WAS CHANGED/);
+    // A refusal without a destination is a dead end.
+    expect(text).toMatch(/focusSessions\.update/);
   });
 
   it("still does NOT forward `stages` — the refusal is the whole contract", () => {

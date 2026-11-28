@@ -883,10 +883,8 @@ describe("ci-changes: a sibling pin bump runs the tests that read the sibling", 
       root: REPO,
       codeFiles: graph.imports.files,
     });
-  // The tests that read ../synap-control-plane-api (directly, or through
-  // gen-door-tool-names.ts), found by hand on 2026-11-12.
+  // Tests that read ../synap-control-plane-api, found by hand on 2026-11-12.
   const CP_READERS = [
-    "packages/api/src/routers/mcp/door-tool-names.freshness.test.ts",
     "packages/api/src/__tripwires__/cp-pod-content-kind-parity.test.ts",
     "packages/api/src/__tripwires__/cp-pod-package-schema-parity.test.ts",
     "packages/api/src/__tripwires__/synap-app-ids-reserved.tripwire.test.ts",
@@ -896,11 +894,10 @@ describe("ci-changes: a sibling pin bump runs the tests that read the sibling", 
     const d = pr(withPins(["sibling-pins.json"]));
     expect(d.scope).toBe("selected");
     expect(tests(d)).toEqual(expect.arrayContaining(CP_READERS));
-    // the freshness test is no tripwire: only the pin reaches it
-    expect(isTripwire(CP_READERS[0])).toBe(false);
-    const other = pr(["packages/governance-policy/src/index.ts"]);
-    expect(other.scope).toBe("selected");
-    expect(tests(other)).not.toContain(CP_READERS[0]);
+    // Every CP reader left is a tripwire (every PR runs it); before the
+    // door-tool-name mirror was deleted, a non-tripwire reader was pinned
+    // here as reached only through the pin.
+    expect(CP_READERS.every(isTripwire)).toBe(true);
   });
 
   it("CI's tier (tierOfCheckout) selects through it", () => {

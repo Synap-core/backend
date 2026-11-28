@@ -5,7 +5,8 @@
  * WHY: for a narrow door (Raycast, the claude.ai connector) the description IS
  * the product — it is the only thing the acting model reads before it decides
  * whether a result was a success. Two live dogfood failures, 2026-09-14/09-20:
- *   • `synap_run_playbook` said only "returns proposed". It also returns
+ *   • `synap_run_playbook` (now `synap_start_session` `launch: true`) said
+ *     only "returns proposed". It also returns
  *     `status:"blocked"` with `enableProposals[]` when the playbook needs a
  *     skill pack that is not enabled. An agent that has never heard of
  *     "blocked" reports a false success, or retries a call that will block
@@ -77,7 +78,7 @@ describe("tripwire: write-door descriptions name their real outcomes", () => {
     ).toEqual([]);
   });
 
-  it("synap_run_playbook names every status `playbooks.run` can return", async () => {
+  it("synap_start_session (the launch door, old name synap_run_playbook) names every status `playbooks.run` can return", async () => {
     const src = readFileSync(PLAYBOOKS_SRC, "utf8");
 
     // Slice the `run` procedure out of the router: from its own declaration to
@@ -112,9 +113,9 @@ describe("tripwire: write-door descriptions name their real outcomes", () => {
     ).toBeGreaterThanOrEqual(2);
 
     const tool = (await tools.list()).find(
-      (t) => t.name === "synap_run_playbook"
+      (t) => t.name === "synap_start_session"
     );
-    expect(tool, "synap_run_playbook is gone from the tool set").toBeTruthy();
+    expect(tool, "synap_start_session is gone from the tool set").toBeTruthy();
     const description = tool!.description ?? "";
 
     const unnamed = statuses.filter((s) => !description.includes(s));
@@ -122,7 +123,7 @@ describe("tripwire: write-door descriptions name their real outcomes", () => {
       unnamed,
       `\`playbooks.run\` can return status ${unnamed
         .map((s) => `"${s}"`)
-        .join(", ")}, and synap_run_playbook's description never names ` +
+        .join(", ")}, and synap_start_session's description never names ` +
         `it. An agent that has not been told an outcome exists reports a ` +
         `false success or retries. Statuses found in source: ` +
         `${statuses.join(", ")}.`

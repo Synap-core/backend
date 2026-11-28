@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
+import { wireTools } from "../routers/mcp/define-tool.js";
 
 /**
  * TRIPWIRE — the Hub forwarder must FORWARD every entity-list filter it declares.
@@ -143,14 +144,6 @@ describe("tripwire: the Hub entities forwarder passes on every filter it accepts
  * handler, or sits in the one list below with its reason. A param added to the
  * forwarder and not wired into the MCP fails here until someone decides.
  */
-const MCP_TOOLS = join(
-  process.cwd(),
-  "src",
-  "routers",
-  "mcp",
-  "tools",
-  "index.ts"
-);
 const MCP_READ = join(
   process.cwd(),
   "src",
@@ -197,10 +190,11 @@ describe("tripwire: MCP get_entities and /users/{id}/entities carry the forwarde
     "lastInteractionBefore",
     "includeNever",
   ];
-  const toolSrc = between(
-    readFileSync(MCP_TOOLS, "utf8"),
-    'name: "synap_get_entities"',
-    'name: "synap_get_document"'
+  // What `tools/list` advertises (derived from the tool's zod input), not
+  // the source text: a key there is a key an agent is offered.
+  const toolProps = Object.keys(
+    wireTools().find((t) => t.name === "synap_get_entities")?.inputSchema
+      .properties ?? {}
   );
   const handlerSrc = stripComments(
     between(
@@ -232,9 +226,11 @@ describe("tripwire: MCP get_entities and /users/{id}/entities carry the forwarde
   });
 
   it("every param is declared by the MCP tool schema", () => {
-    const undeclared = wanted.filter(
-      (k) => !new RegExp(`^\\s*${k}:\\s*\\{`, "m").test(toolSrc)
+    // Non-vacuity: the advertised schema was found and is a real input.
+    expect(toolProps).toEqual(
+      expect.arrayContaining(["profileSlug", "filters", "includeFacets"])
     );
+    const undeclared = wanted.filter((k) => !toolProps.includes(k));
     expect(
       undeclared,
       "declared on the forwarder, absent from the tool"

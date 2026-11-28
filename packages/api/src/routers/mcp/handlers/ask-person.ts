@@ -26,7 +26,6 @@
  * (`needsYouPriority`); `urgency` can only lower it. The priority ranks; this
  * door changes no push behaviour (every ask notifies as before).
  */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import {
@@ -38,7 +37,6 @@ import {
 } from "@synap-core/types/ask";
 import { isUuid } from "@synap-core/types/property-render";
 import { needsYouPriority } from "@synap-core/types/needs-you";
-import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import { ok, requireScope, type McpHandlerMap } from "./shared.js";
 
 /** The slot kind an ask filed through this door carries. */
@@ -224,23 +222,16 @@ async function findDedupedAsk(input: {
   return slot ? { sessionId: row.id, slot } : null;
 }
 
-export const askPersonHandlers: McpHandlerMap = {
-  synap_ask_person: async (ctx): Promise<CallToolResult> => {
+export const askPersonHandlers = {
+  synap_ask_person: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const undeclared = await refuseUndeclaredArgs("synap_ask_person", args);
-    if (undeclared) return undeclared;
 
     // ── The ticket, parsed by THE slot wire schema (the ask by `AskSchema`) ──
     const question = text(args.question);
     if (!question || question.length > ASK_PERSON_QUESTION_MAX) {
       return ok({
         error: `question is required: ONE line of at most ${ASK_PERSON_QUESTION_MAX} characters, the thing you need the person to answer. NOTHING WAS FILED.`,
-      });
-    }
-    if (!args.ask || typeof args.ask !== "object" || Array.isArray(args.ask)) {
-      return ok({
-        error: `ask is required: HOW the person answers — {mode:'confirm'} | {mode:'choose', options:[…]} | {mode:'form', form:{fields:[…]}} | {mode:'act', steps:[…]} | {mode:'provide', provide:{…}}. NOTHING WAS FILED.${ASK_SKILL_HINT}`,
       });
     }
     const askArg = AskSchema.safeParse(args.ask);
@@ -435,4 +426,4 @@ export const askPersonHandlers: McpHandlerMap = {
       next: `Wait for the answer with synap_wait_for_answer({sessionId: "${sessionId}"}); if the person answers you in this chat instead, relay their words with synap_relay_answer({sessionId: "${sessionId}", slotLabel: ${JSON.stringify(question)}, disposition: "answered", quote}).`,
     });
   },
-};
+} satisfies McpHandlerMap;

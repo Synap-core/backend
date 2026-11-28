@@ -1,31 +1,21 @@
 /**
  * What the door did to a call's ARGUMENTS, said on the reply (tickets
  * e18a0451, 1ef84d45, 2d61ff7c). MCP input schemas are advisory, so a call
- * could be changed under the caller with nothing said:
- *   - an argument the tool does not take was dropped: `get_entities` with
- *     `sort`/`order` (the inputs are `sortBy`/`sortDir`) returned the default
- *     order as if sorted; `get_entity` with `id` failed on a field named `id`;
- *   - a `limit` above the tool's page cap was clamped: `list_sessions` with
- *     `limit: 100` returned 50 rows, as if there were no more.
+ * could be changed under the caller with nothing said: a `limit` above the
+ * tool's page cap was clamped (`list_sessions` with `limit: 100` returned 50
+ * rows, as if there were no more). An argument the tool does not take is no
+ * longer dropped and noted: it is refused (`parseToolArgs`, `define-tool.ts`).
  *
  * ONE mechanism for every tool: the `tools/call` door (`mcp/index.ts`) opens a
- * scope around the call; the undeclared-argument check (`undeclared-args.ts`)
- * and the one page clamp (`pageLimit`, `handlers/shared.ts`) note what they
- * did in it; the door adds the notes to the reply's JSON payload, as
- * `ignoredArgs` and `limitClamped`. A note made outside a scope (a Hub REST
+ * scope around the call; the one page clamp (`pageLimit`,
+ * `handlers/shared.ts`) notes what it did in it; the door adds the note to the
+ * reply's JSON payload as `limitClamped`. A note made outside a scope (a Hub REST
  * or tRPC caller of the same helper) is dropped: that door has its own
  * contract.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parseJsonObject } from "./ui-tools.js";
-
-export interface IgnoredArgsNotice {
-  /** The argument names the tool does not declare, as sent. */
-  keys: string[];
-  /** One sentence: what was ignored, what was probably meant, what it takes. */
-  note: string;
-}
 
 export interface LimitClampedNotice {
   /** The `limit` the caller sent. */
@@ -35,7 +25,6 @@ export interface LimitClampedNotice {
 }
 
 export interface CallNotices {
-  ignoredArgs?: IgnoredArgsNotice;
   limitClamped?: LimitClampedNotice;
 }
 
@@ -50,20 +39,6 @@ export async function runWithCallNotices<T>(
   return { result, notices };
 }
 
-export function noteIgnoredArgs(notice: IgnoredArgsNotice): void {
-  const scope = sink.getStore();
-  if (scope) scope.ignoredArgs = notice;
-}
-
-/**
- * The tool REFUSED the undeclared arguments itself (`refuseUndeclaredArgs`):
- * its refusal already names them, so the door adds nothing.
- */
-export function clearIgnoredArgs(): void {
-  const scope = sink.getStore();
-  if (scope) delete scope.ignoredArgs;
-}
-
 /** `pageLimit` used another page size than the caller's own `limit`. */
 export function noteLimitClamped(asked: number, used: number): void {
   const scope = sink.getStore();
@@ -71,7 +46,7 @@ export function noteLimitClamped(asked: number, used: number): void {
 }
 
 function isEmpty(notices: CallNotices): boolean {
-  return !notices.ignoredArgs && !notices.limitClamped;
+  return !notices.limitClamped;
 }
 
 /**
@@ -86,7 +61,6 @@ export function withCallNotices(
 ): CallToolResult {
   if (isEmpty(notices)) return result;
   const added: Record<string, unknown> = {
-    ...(notices.ignoredArgs ? { ignoredArgs: notices.ignoredArgs } : {}),
     ...(notices.limitClamped ? { limitClamped: notices.limitClamped } : {}),
   };
   const content = Array.isArray(result.content) ? [...result.content] : [];

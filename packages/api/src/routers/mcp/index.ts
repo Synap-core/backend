@@ -30,8 +30,8 @@ import { loadKeyToolAccess } from "./tool-access.js";
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import { resolveDispatch, withInputSchemaOnError } from "./call-tool.js";
 import { doorToolName } from "./tool-guidance.js";
+import { canonicalToolName } from "./define-tool.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
-import { shadowUndeclaredArgs } from "./undeclared-args.js";
 import { runWithCallNotices, withCallNotices } from "./call-notices.js";
 import { withToolCallLog } from "./tool-call-log.js";
 import {
@@ -320,9 +320,14 @@ export function createMCPServer(
       agentUserId,
       door: "chat",
     });
-    const visible = toolAccessKeyId
-      ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
-      : all;
+    // No key (stdio / dev) lists every tool; an old name or a hidden door is
+    // never listed, whatever the key.
+    const visible = filterToolsForAccess(
+      all,
+      toolAccessKeyId
+        ? await loadKeyToolAccess(toolAccessKeyId)
+        : { profile: null, groups: [] }
+    );
     return {
       tools: await withToolUiMeta(visible, uiRenderer, uiCtx),
     };
@@ -347,8 +352,8 @@ export function createMCPServer(
           );
         }
         // `synap_call_tool` (call-tool.ts) is unwrapped HERE, once, before
-        // anything judges the call: the fence, the shadow and `execute` below see
-        // only the INNER tool, exactly as its direct call. The dispatcher has no
+        // anything judges the call: the fence and `execute` below see only the
+        // INNER tool, exactly as its direct call. The dispatcher has no
         // authority of its own, so its name is never what is judged.
         const toolDefs = await tools.list();
         let name = request.params.name;
@@ -374,10 +379,17 @@ export function createMCPServer(
           line.via = CALL_TOOL_NAME;
         }
 
-        // The key's refusals (attribution, W1 grant fence), before anything runs.
+        // The key's refusals (attribution, W1 grant fence), before anything runs,
+        // on the tool an old name answers as (resolved here, once: every check
+        // reads the definition). The caller's name stays for `execute`, which
+        // maps an old argument shape onto the tool's before it runs it.
         // A JSON-RPC error, as the HTTP door's 403 body used to carry.
         if (callPrincipal) {
-          const refusal = toolCallRefusal(name, toolDefs, callPrincipal);
+          const refusal = toolCallRefusal(
+            canonicalToolName(name),
+            toolDefs,
+            callPrincipal
+          );
           if (refusal) throw new McpError(MCP_CALL_REFUSED_CODE, refusal);
         }
         const userId =
@@ -412,15 +424,9 @@ export function createMCPServer(
         };
 
         // What the door does to the caller's arguments is SAID on the reply
-        // (`call-notices.ts`): an argument the tool does not take (`ignoredArgs`)
-        // and a `limit` the page cap clamped (`limitClamped`). One scope around
-        // the shadow check and the tool run, for every tool.
+        // (`call-notices.ts`): a `limit` the page cap clamped (`limitClamped`).
+        // An argument the tool does not take is refused by `tools.execute`.
         const { result, notices } = await runWithCallNotices(async () => {
-          // W-C1 SHADOW: undeclared argument keys are logged and noted, never
-          // refused yet (W-C3 refuses after seven days of these numbers). The
-          // caller's own arguments — the door-injected lens is never "unknown".
-          await shadowUndeclaredArgs(name, args);
-
           // Session attribution is resolved SERVER-SIDE in the adapter (derived
           // from the caller's open sessions), so nothing session-shaped is spread
           // into `scopedArgs`. Every write tool declares an OPTIONAL `sessionId`

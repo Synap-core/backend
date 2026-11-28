@@ -20,8 +20,12 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import {
+  definedToolNames,
+  toolDefinition,
+  toolUntimed,
+} from "../routers/mcp/define-tool.js";
+import {
   classifyHubRestRequest,
-  classifyMcpToolCall,
   guardPolicy,
   HUB_REQUEST_GUARD_ENV,
   HUB_REST_EXEMPT_ROUTES,
@@ -154,28 +158,23 @@ describe("tripwire: the Hub request guard never times out a long route", () => {
       });
     }
     expect(waiting.length).toBeGreaterThan(0);
-    expect(
-      waiting.filter((t) => classifyMcpToolCall(t, new Set()) !== "long_poll")
-    ).toEqual([]);
+    expect(waiting.filter((t) => toolUntimed(t) !== "long_poll")).toEqual([]);
   });
 
   it("MCP: every tool that declares openWorldHint is never timed", () => {
-    const src = readFileSync(join(MCP_DIR, "tools/index.ts"), "utf8");
-    const openWorld = [
-      ...src.matchAll(
-        /name:\s*"(synap_\w+)",\s*annotations:\s*\{[^}]*openWorldHint:\s*true/g
-      ),
-    ].map((m) => m[1]);
-    expect(openWorld.length).toBeGreaterThan(0);
-    // The handler reads them from the tools' own metadata
-    // (`openWorldToolNames`); the classification honours that set.
-    expect(
-      openWorld.filter(
-        (t) => guardPolicy(classifyMcpToolCall(t, new Set(openWorld))).timed
-      )
-    ).toEqual([]);
+    // Read off the tools' own definitions (`define-tool.ts`), what the
+    // handler reads (`toolUntimed`).
+    const openWorld = definedToolNames().filter(
+      (t) => toolDefinition(t)?.annotations?.openWorldHint === true
+    );
+    expect(openWorld).toContain("synap_run_capability");
+    expect(openWorld.filter((t) => guardPolicy(toolUntimed(t)).timed)).toEqual(
+      []
+    );
     const handler = readFileSync(join(MCP_DIR, "http-handler.ts"), "utf8");
-    expect(handler).toMatch(/openWorldToolNames\(\)/);
+    // Read with the call's arguments: a start_session launch is untimed, a
+    // plain start is not (`untimed` on its definition).
+    expect(handler).toMatch(/toolUntimed\(toolName, args\)/);
   });
 
   it("MCP: the guard runs in the POST door only, never on the GET SSE stream", () => {

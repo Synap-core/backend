@@ -2,13 +2,13 @@
  * The sibling roll registry (scripts/ci/roll.mjs, plan b5820982 §2 step 1):
  * which siblings can roll, what regenerates their mirrors, and that a pin never
  * moves without them. Pins: the registry agrees with the real
- * sibling-pins.json and the real mirror file; a pinned sibling without a row
- * (or a row without a pin) is named; `apply` refuses a checkout that is not at
- * the target, runs regenerate then check, and writes the pin only after both;
- * a failing step leaves the pins file alone; `plan` writes nothing.
- * NOT COVERED: the real GitHub API call and the real regenerate commands
- * (they need the private sibling checkout; the CP-pinned freshness tripwire
- * and preflight cover the generated table).
+ * sibling-pins.json; a pinned sibling without a row (or a row without a pin,
+ * or a row with no mirror and no reason) is named; the control plane is a
+ * pinned sibling with no mirror, declared with its reason; `apply` refuses a
+ * checkout that is not at the target, runs regenerate then check, and writes
+ * the pin only after both; a failing step leaves the pins file alone; `plan`
+ * writes nothing. The mirror cases use a synthetic row (MIRRORED).
+ * NOT COVERED: the real GitHub API call.
  * Named `*.tripwire.test.ts` so `pnpm tripwires` (CI) runs it.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -41,6 +41,25 @@ const pinsText = (ref: string) =>
     null,
     2
   )}\n`;
+
+/** A sibling with one mirror: generate, format, then check. */
+const MIRRORED = [
+  {
+    dir: DIR,
+    repo: "Synap-core/control-plane-api",
+    mirrors: [
+      {
+        id: "m",
+        outputs: ["m.generated.ts"],
+        regenerate: [
+          { cwd: "packages/api", argv: ["gen-m"] },
+          { cwd: ".", argv: ["prettier", "m.generated.ts"] },
+        ],
+        check: [{ cwd: "packages/api", argv: ["gen-m", "--check"] }],
+      },
+    ],
+  },
+];
 
 type Call = { argv: string[]; cwd: string };
 function fakeIo(
@@ -115,15 +134,17 @@ describe("the registry agrees with the repo", () => {
     ).toEqual([]);
   });
 
-  it("registers door-tool-names with the generator, prettier, then --check", () => {
-    const m = SIBLINGS[0].mirrors[0];
+  it("pins the control plane with no mirror, and says why", () => {
+    const cp = SIBLINGS.find((r: { dir: string }) => r.dir === DIR);
+    expect(cp.mirrors).toEqual([]);
+    expect(cp.noMirror).toMatch(/tests read it at the pin/);
+    const bare = { ...cp, noMirror: undefined };
+    expect(registryProblems([bare], PINS).join()).toContain(
+      "no mirror and says no reason"
+    );
     expect(
-      m.regenerate.map((s: { argv: string[] }) => s.argv.join(" "))
-    ).toEqual([
-      "npx tsx src/routers/mcp/gen-door-tool-names.ts",
-      "npx prettier --write packages/api/src/routers/mcp/door-tool-names.generated.ts",
-    ]);
-    expect(m.check[0].argv.at(-1)).toBe("--check");
+      registryProblems([{ ...MIRRORED[0], noMirror: "x" }], PINS).join()
+    ).toContain("mirrors AND noMirror");
   });
 
   it("names a pinned sibling with no registry row", () => {
@@ -145,7 +166,7 @@ describe("the registry agrees with the repo", () => {
 
   it("names a mirror whose output file is missing", () => {
     expect(
-      registryProblems(SIBLINGS, PINS, { exists: () => false }).join()
+      registryProblems(MIRRORED, PINS, { exists: () => false }).join()
     ).toContain("does not exist");
   });
 
@@ -196,30 +217,37 @@ describe("withPin", () => {
 describe("apply", () => {
   it("regenerates, checks, then writes the pin, in that order", async () => {
     const { io, calls, writes } = fakeIo();
-    const done = await apply(io, {});
+    const done = await apply(io, {}, MIRRORED);
     expect(done).toEqual([{ dir: DIR, from: OLD, to: NEW }]);
     expect(calls.map((c) => c.argv.join(" "))).toEqual([
-      "npx tsx src/routers/mcp/gen-door-tool-names.ts",
-      "npx prettier --write packages/api/src/routers/mcp/door-tool-names.generated.ts",
-      "npx tsx src/routers/mcp/gen-door-tool-names.ts --check",
+      "gen-m",
+      "prettier m.generated.ts",
+      "gen-m --check",
     ]);
     expect(calls[0].cwd).toBe("/r/packages/api");
+    expect(writes).toEqual([["sibling-pins.json", pinsText(NEW)]]);
+  });
+
+  it("a row with no mirror moves the pin and runs nothing, wherever the checkout is", async () => {
+    const { io, calls, writes } = fakeIo({ head: undefined });
+    expect(await apply(io, {})).toEqual([{ dir: DIR, from: OLD, to: NEW }]);
+    expect(calls).toEqual([]);
     expect(writes).toEqual([["sibling-pins.json", pinsText(NEW)]]);
   });
 
   it("refuses when the sibling checkout is not at the target, writing nothing", async () => {
     for (const head of ["c".repeat(40), undefined]) {
       const { io, calls, writes } = fakeIo({ head });
-      await expect(apply(io, {})).rejects.toThrow(/not at/);
+      await expect(apply(io, {}, MIRRORED)).rejects.toThrow(/not at/);
       expect(calls).toEqual([]);
       expect(writes).toEqual([]);
     }
   });
 
   it("a failing regenerate or check leaves the pins file alone", async () => {
-    for (const failOn of ["prettier", "--check", "gen-door-tool-names"]) {
+    for (const failOn of ["prettier", "--check", "gen-m"]) {
       const { io, writes } = fakeIo({ failOn });
-      await expect(apply(io, {})).rejects.toThrow(/exited 1/);
+      await expect(apply(io, {}, MIRRORED)).rejects.toThrow(/exited 1/);
       expect(writes).toEqual([]);
     }
   });
@@ -235,7 +263,7 @@ describe("apply", () => {
 describe("plan", () => {
   it("writes nothing and says the mirrors are stale when the check fails", async () => {
     const { io, writes } = fakeIo({ checkFails: true });
-    const [p] = await plan(io, {});
+    const [p] = await plan(io, {}, MIRRORED);
     expect(writes).toEqual([]);
     expect(p).toMatchObject({
       pin: OLD,
@@ -247,12 +275,16 @@ describe("plan", () => {
   });
   it("says unchanged when the check passes at the target", async () => {
     const { io } = fakeIo();
-    const [p] = await plan(io, {});
+    const [p] = await plan(io, {}, MIRRORED);
     expect(p.mirrorsChanged).toBe(false);
+  });
+  it("says a row with no mirror has none, and why", async () => {
+    const { io } = fakeIo();
+    expect(render(await plan(io, {}))).toContain("mirrors none: Read, never");
   });
   it("does not guess when the checkout is elsewhere, and runs no command", async () => {
     const { io, calls } = fakeIo({ head: "c".repeat(40) });
-    const [p] = await plan(io, {});
+    const [p] = await plan(io, {}, MIRRORED);
     expect(p.mirrorsChanged).toBeNull();
     expect(calls).toEqual([]);
     expect(render([p])).toContain("unknown");

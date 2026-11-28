@@ -189,7 +189,7 @@ jobs:
       # `pnpm audit` (security-audit) needs pnpm, not an install.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      # control-plane-api (door-tool-names) and app-bases (api-types
+      # control-plane-api (cp-pod-tools-drift) and app-bases (api-types
       # freshness) are private: the Reader App's read token, as monorepo-setup.
       - name: Mint control-plane-api read token (GitHub App)
         id: app-token
@@ -414,8 +414,8 @@ jobs:
         run: pnpm build
 
       # F11 (26 Nov 2026): a PR that adds or edits an MCP tool went red on the
-      # manifest, the token budget and the door tool names, and only a built
-      # workspace (the devbox) could regenerate them: 4 PRs, hours each. Like
+      # manifest and the token budget, and only a built workspace (the devbox)
+      # could regenerate them: 4 PRs, hours each. Like
       # the API types and the reference docs, hand the regenerated files back
       # as ONE artifact for the tree this run tested (a PR merged with main).
       # CI never commits to a branch. Apply: scripts/ci/apply-ci-artifacts.sh.
@@ -431,14 +431,12 @@ jobs:
         run: |
           pnpm exec tsx src/routers/mcp/tools/gen-manifest.ts
           pnpm exec vitest run src/routers/mcp/tools/token-budget.test.ts
-          pnpm exec tsx src/routers/mcp/gen-door-tool-names.ts
-          pnpm exec prettier --write src/routers/mcp/door-tool-names.generated.ts
       - name: Collect the regenerated MCP files
         id: mcp-drift
         if: always() && github.event_name == 'pull_request' && steps.mcp-regen.outcome == 'success'
         run: |
           mkdir -p "$RUNNER_TEMP/mcp-generated"
-          for f in packages/api/src/routers/mcp/tools/mcp-tools.manifest.json packages/api/src/routers/mcp/tools/token-budget.baseline.json packages/api/src/routers/mcp/door-tool-names.generated.ts; do
+          for f in packages/api/src/routers/mcp/tools/mcp-tools.manifest.json packages/api/src/routers/mcp/tools/token-budget.baseline.json; do
             if ! git diff --quiet -- "$f"; then cp "$f" "$RUNNER_TEMP/mcp-generated/$(basename "$f")"; fi
           done
           if [ -n "$(ls -A "$RUNNER_TEMP/mcp-generated")" ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi

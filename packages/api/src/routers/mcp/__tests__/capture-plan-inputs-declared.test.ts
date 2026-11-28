@@ -1,10 +1,8 @@
 /**
  * `synap_capture` DECLARES every plan input its handler forwards.
  *
- * MCP input schemas are advisory, and the undeclared-args check
- * (`undeclared-args.ts`) answers a key the tool does not declare with
- * `ignoredArgs: "synap_capture does not take …: ignored"` today and refuses
- * it once W-C3 turns the check into a refusal. The handler forwards every
+ * The door's input check (`parseToolArgs`, define-tool.ts) refuses a key
+ * the tool does not declare. The handler forwards every
  * `CAPTURE_PLAN_KEYS` array, but `edits` (the re-plan ops, from-intent §2d)
  * was forwarded and never declared: an agent that followed the skill was told
  * its re-plan was ignored, and would be refused.
@@ -25,7 +23,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { tools } from "../tools/index.js";
-import { shadowUndeclaredArgs } from "../undeclared-args.js";
+import { declaredArgNames, undeclaredArgs } from "../define-tool.js";
 import { CAPTURE_PLAN_KEYS } from "../../../services/capture-agent/capture-plan.js";
 import { buildCaptureGraphOperations } from "../../../services/capture-agent/submit-capture-graph.js";
 
@@ -47,11 +45,12 @@ describe("synap_capture declares every plan input it forwards", () => {
     expect(CAPTURE_PLAN_KEYS.length).toBeGreaterThan(10);
     expect(CAPTURE_PLAN_KEYS).toContain("edits");
     const args = Object.fromEntries(CAPTURE_PLAN_KEYS.map((k) => [k, []]));
-    expect(await shadowUndeclaredArgs("synap_capture", args)).toEqual([]);
+    const declared = declaredArgNames("synap_capture")!;
+    expect(undeclaredArgs(args, declared)).toEqual([]);
     // Self-check: the same call still sees a key synap_capture does not take.
-    expect(
-      await shadowUndeclaredArgs("synap_capture", { ...args, bogusPlan: [] })
-    ).toEqual(["bogusPlan"]);
+    expect(undeclaredArgs({ ...args, bogusPlan: [] }, declared)).toEqual([
+      "bogusPlan",
+    ]);
   });
 
   it("declares `edits` as the re-plan ops array, pointing at from-intent §2d", async () => {

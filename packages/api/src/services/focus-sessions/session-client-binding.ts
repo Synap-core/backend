@@ -118,21 +118,6 @@ export async function newSessionClientKey(
 }
 
 /**
- * MCP tools whose `sessionId` names the session the tool ACTS ON (a lead
- * updates, grades, closes or reruns a lane), not the caller's own session:
- * naming one there never attaches the conversation to it.
- */
-export const SESSION_ACTED_ON_TOOLS: ReadonlySet<string> = new Set([
-  "synap_update_session",
-  "synap_evaluate_session",
-  "synap_complete_session",
-  "synap_revert_session",
-  "synap_continue_session",
-  "synap_rerun_session",
-  "synap_promote_session_to_playbook",
-]);
-
-/**
  * Attach THIS conversation to the session it named, when it has none of its
  * own. One conditional UPDATE, so the rule and the write cannot drift apart.
  * The session's `metadata.clientKey` becomes this conversation's key when ALL

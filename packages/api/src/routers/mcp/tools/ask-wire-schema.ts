@@ -12,74 +12,58 @@
  * no `required` beyond `mode` and no `additionalProperties:false`): see
  * ask-wire-schema.test.ts.
  */
+import { z } from "zod";
+import { wireInputSchema } from "../tool-input.js";
 
 export const ASK_SKILL_REF = "system/synap/asks";
 
 /** Appended to a server refusal of an ask so the agent knows where the shapes are. */
 export const ASK_SKILL_HINT = ` Shapes and examples: synap_load_skill("${ASK_SKILL_REF}").`;
 
-const OBJ = { type: "object" } as const;
+const OBJ = z.record(z.string(), z.unknown());
 
 export const ASK_WIRE_DESCRIPTION =
   `HOW the person answers (shapes: synap_load_skill("${ASK_SKILL_REF}")). mode: ` +
   "confirm {prompt, yes?, no?} | choose {options 1-8, at most one recommended} | " +
   "form {form:{fields}} | act {steps, url?} | provide {provide:{kind: connection|file|secret}}.";
 
-export function buildAskWireSchema(
-  description: string = ASK_WIRE_DESCRIPTION
-): Record<string, unknown> {
-  return {
-    type: "object",
-    description,
-    properties: {
-      mode: {
-        type: "string",
-        enum: ["confirm", "choose", "form", "act", "provide"],
-      },
-      prompt: { type: "string", description: "confirm: the question" },
-      yes: {
-        ...OBJ,
-        description: "confirm: {label?, description?, recommended?}",
-      },
-      no: {
-        ...OBJ,
-        description: "confirm: {label?, description?, recommended?}",
-      },
-      options: {
-        type: "array",
-        items: OBJ,
-        description:
-          "choose: [{label, value?, description?, recommended?, caution?, followUp?, media?}]",
-      },
-      allowOther: { type: "boolean" },
-      form: {
-        ...OBJ,
-        description: "form: {fields:[{key,label,type}], title?, note?}",
-      },
-      url: { type: "string", description: "act: link" },
-      steps: {
-        type: "array",
-        items: { type: "string" },
-        description: "act: up to 7",
-      },
-      provide: {
-        ...OBJ,
-        description:
-          "provide: {kind:'connection',service} | {kind:'file',accept?} | {kind:'secret',name}",
-      },
-      risk: { type: "string", enum: ["high", "medium", "low"] },
-      stakes: { type: "string", enum: ["routine", "commitment"] },
-      urgency: { type: "string", enum: ["today", "whenever"] },
-      answerBy: { type: "string", description: "ISO-8601 with offset" },
-      consequence: { type: "string", description: "what the answer will DO" },
-      reversible: { type: "boolean" },
-      dedupeKey: { type: "string" },
-      lookedAt: {
-        type: "array",
-        items: OBJ,
-        description: "[{kind, id}], up to 8",
-      },
-    },
-    required: ["mode"],
-  };
+export const ASK_INPUT = z
+  .looseObject({
+    mode: z.enum(["confirm", "choose", "form", "act", "provide"]),
+    prompt: z.string().optional().describe("confirm: the question"),
+    yes: OBJ.optional().describe(
+      "confirm: {label?, description?, recommended?}"
+    ),
+    no: OBJ.optional().describe(
+      "confirm: {label?, description?, recommended?}"
+    ),
+    options: z
+      .array(OBJ)
+      .optional()
+      .describe(
+        "choose: [{label, value?, description?, recommended?, caution?, followUp?, media?}]"
+      ),
+    allowOther: z.boolean().optional(),
+    form: OBJ.optional().describe(
+      "form: {fields:[{key,label,type}], title?, note?}"
+    ),
+    url: z.string().optional().describe("act: link"),
+    steps: z.array(z.string()).optional().describe("act: up to 7"),
+    provide: OBJ.optional().describe(
+      "provide: {kind:'connection',service} | {kind:'file',accept?} | {kind:'secret',name}"
+    ),
+    risk: z.enum(["high", "medium", "low"]).optional(),
+    stakes: z.enum(["routine", "commitment"]).optional(),
+    urgency: z.enum(["today", "whenever"]).optional(),
+    answerBy: z.string().optional().describe("ISO-8601 with offset"),
+    consequence: z.string().optional().describe("what the answer will DO"),
+    reversible: z.boolean().optional(),
+    dedupeKey: z.string().optional(),
+    lookedAt: z.array(OBJ).optional().describe("[{kind, id}], up to 8"),
+  })
+  .describe(ASK_WIRE_DESCRIPTION);
+
+/** The ask as the wire carries it (JSON Schema). */
+export function buildAskWireSchema(): Record<string, unknown> {
+  return wireInputSchema(ASK_INPUT);
 }

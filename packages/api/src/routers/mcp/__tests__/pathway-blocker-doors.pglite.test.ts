@@ -122,6 +122,7 @@ import {
   projects,
   projectTracks,
 } from "@synap/database";
+import type { McpToolHandler } from "../handlers/shared.js";
 
 const { sessionHandlers } = await import("../handlers/session.js");
 const { trackHandlers } = await import("../handlers/track.js");
@@ -168,7 +169,7 @@ async function call(
 ): Promise<Record<string, unknown>> {
   const handlers =
     tool === "synap_update_session" ? sessionHandlers : trackHandlers;
-  const res = await handlers[tool]!({
+  const res = await (handlers as Record<string, McpToolHandler>)[tool]!({
     toolName: tool,
     args,
     userId: USER,

@@ -9,16 +9,20 @@
  * rewrites every taught tool token to the name the SERVING door exposes, and marks
  * the ones the door lacks with a closing note — the source text is never changed.
  *
- * ONE name table: token → pod tool resolves through `MCP_TOOL_TEACHING_KEYS`
- * (`tool-verb-aliases.ts`, the existing bridge, read in reverse) and pod tool →
- * door name through `DOOR_TOOL_NAMES` (generated from the two door manifests).
+ * ONE name table, the tool definitions (`routers/mcp/define-tool.ts`): token →
+ * pod tool through each tool's teaching keys (read in reverse), pod tool →
+ * door name through `toolNameOnDoor`.
  * The tripwire `__tripwires__/skill-tool-tokens-resolve.test.ts` proves every
  * token taught by a skill file resolves here or is classified below.
  */
 
-import type { SkillDoor } from "../../routers/mcp/door-tool-names.build.js";
-import { DOOR_TOOL_NAMES } from "../../routers/mcp/door-tool-names.generated.js";
-import { MCP_TOOL_TEACHING_KEYS } from "../../routers/mcp/tool-verb-aliases.js";
+import {
+  canonicalToolName,
+  isPodToolName,
+  toolNameOnDoor,
+  toolTeachingKeys,
+  type SkillDoor,
+} from "../../routers/mcp/define-tool.js";
 
 export type { SkillDoor };
 
@@ -110,10 +114,10 @@ const DOOR_LABEL: Record<SkillDoor, string> = {
 
 /** The pod MCP tool a taught token names, or `null` when it names none. */
 export function resolveTaughtToolToken(token: string): string | null {
-  if (DOOR_TOOL_NAMES[token]) return token;
-  if (DOOR_TOOL_NAMES[`synap_${token}`]) return `synap_${token}`;
-  const teachers = Object.entries(MCP_TOOL_TEACHING_KEYS)
-    .filter(([tool, keys]) => DOOR_TOOL_NAMES[tool] && keys.includes(token))
+  if (isPodToolName(token)) return token;
+  if (isPodToolName(`synap_${token}`)) return `synap_${token}`;
+  const teachers = Object.entries(toolTeachingKeys())
+    .filter(([, keys]) => keys.includes(token))
     .map(([tool]) => tool);
   // An ambiguous alias (two tools teach it) resolves to neither: guessing would
   // hand the agent the wrong tool with full confidence.
@@ -154,9 +158,12 @@ function rewriteTokens(
       missing.set(token, isOnly);
       return `${token}${MISSING_MARK}`;
     }
-    const podTool = resolveTaughtToolToken(token);
-    if (!podTool) return token;
-    const name = DOOR_TOOL_NAMES[podTool]![door];
+    const taught = resolveTaughtToolToken(token);
+    if (!taught) return token;
+    // An old name (an alias) is unlisted on the pod's own door: taught there
+    // as the tool it stands for. The connector keeps its frozen name.
+    const podTool = door === "pod-mcp" ? canonicalToolName(taught) : taught;
+    const name = toolNameOnDoor(podTool, door);
     if (name) return name;
     missing.set(podTool, `not on ${DOOR_LABEL[door]}`);
     return `${podTool}${MISSING_MARK}`;

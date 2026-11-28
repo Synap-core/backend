@@ -1,5 +1,5 @@
 /**
- * `supersedes` REACHES the Hub REST door on every route of SUPERSEDES_DOORS
+ * `supersedes` REACHES the Hub REST door on every route of supersedesDoors()
  * (plan 8032a127 D3), through the REAL hub app (`hubProtocolRestApp`, every
  * route file and middleware registered, mounted under both of its prefixes).
  * Only the authentication is a stand-in.
@@ -10,7 +10,7 @@
  * would drop the field and file the request as a NEW one beside the failure:
  * the orphan this door exists to stop.
  *
- * The set is DERIVED from SUPERSEDES_DOORS, the table the MCP tool list is
+ * The set is DERIVED from supersedesDoors(), the definitions the MCP tool list is
  * read from too, so a tool added there joins this scan by existing. What this
  * does NOT cover: what the door does with a real failed proposal (that is
  * `supersedes.pglite.test.ts`), and routes outside the table.
@@ -34,7 +34,7 @@ vi.mock("./auth.js", async (importOriginal) => ({
 
 import { Hono } from "hono";
 import { hubProtocolRestApp } from "../../hub-protocol-rest.js";
-import { SUPERSEDES_DOORS } from "../../../services/proposals/supersedes-door.js";
+import { supersedesDoors } from "../../mcp/define-tool.js";
 import { SUPERSEDES_REFUSED } from "./supersedes.js";
 
 const ID = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
@@ -46,10 +46,10 @@ const concrete = (route: string) => route.replace(/:[A-Za-z0-9_]+/g, ID);
 
 describe("supersedes reaches every Hub REST filing door", () => {
   it("the table names the four filing doors (non-vacuity)", () => {
-    expect(SUPERSEDES_DOORS.length).toBeGreaterThanOrEqual(4);
+    expect(supersedesDoors().length).toBeGreaterThanOrEqual(4);
   });
 
-  for (const door of SUPERSEDES_DOORS) {
+  for (const door of supersedesDoors()) {
     for (const prefix of PREFIXES) {
       it(`${door.method} ${prefix}${door.route} refuses a name that is no proposal`, async () => {
         const res = await server.request(`${prefix}${concrete(door.route)}`, {

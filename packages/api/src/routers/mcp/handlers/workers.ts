@@ -67,7 +67,7 @@ function render<T>(
   }
 }
 
-export const workerHandlers: McpHandlerMap = {
+export const workerHandlers = {
   synap_list_workers: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const trackId = uuidArg(ctx.args.trackId);
@@ -91,10 +91,7 @@ export const workerHandlers: McpHandlerMap = {
     // The session the worker is enabled FOR (its runs are that session's
     // children). Not `sessionId`: that argument is the caller's attribution.
     const scopeSessionId = uuidArg(ctx.args.scopeSessionId);
-    const activatorKey =
-      typeof ctx.args.activatorKey === "string"
-        ? ctx.args.activatorKey.trim()
-        : "";
+    const activatorKey = ctx.args.activatorKey.trim();
     if (!playbookId || !activatorKey || (!trackId && !scopeSessionId)) {
       return ok({
         error:
@@ -102,9 +99,6 @@ export const workerHandlers: McpHandlerMap = {
       });
     }
     const mode = ctx.args.mode;
-    if (mode !== undefined && mode !== "run" && mode !== "propose") {
-      return ok({ error: "mode is 'propose' (the default) or 'run'." });
-    }
     return render(
       await enableWorkerDoor(identity(ctx), {
         playbookId,
@@ -120,10 +114,10 @@ export const workerHandlers: McpHandlerMap = {
   synap_pause_worker: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const ruleId = uuidArg(ctx.args.ruleId);
-    if (!ruleId || typeof ctx.args.paused !== "boolean") {
+    if (!ruleId) {
       return ok({
         error:
-          "ruleId (the worker's, from synap_list_workers) and paused (true to pause, false to resume) are required.",
+          "ruleId (the worker's, from synap_list_workers) is required: a uuid.",
       });
     }
     return render(
@@ -153,4 +147,4 @@ export const workerHandlers: McpHandlerMap = {
       ctx.userId
     );
   },
-};
+} satisfies McpHandlerMap;

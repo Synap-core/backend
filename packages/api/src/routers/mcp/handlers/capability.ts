@@ -37,8 +37,6 @@ import {
   ok,
   requireScope,
   readReasoning,
-  type McpToolContext,
-  type CallToolResult,
   type McpHandlerMap,
   pageLimit,
   pageOffset,
@@ -47,15 +45,16 @@ import {
 } from "./shared.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 
-export const capabilityHandlers: McpHandlerMap = {
+export const capabilityHandlers = {
   // Governed FIELD retirement — the same door as capability verb
   // `property_def.propose_retire` / tRPC `propertyDefs.proposeRetire`: always
   // a pending proposal, or a refusal while the field holds values.
-  synap_retire_field: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_retire_field: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const propertyDefId = args.propertyDefId;
-    if (typeof propertyDefId !== "string" || !propertyDefId) {
+    const { propertyDefId } = args;
+    // The input takes "": an empty id is refused here.
+    if (!propertyDefId) {
       return ok({ error: "propertyDefId is required" });
     }
     return ok(
@@ -71,17 +70,13 @@ export const capabilityHandlers: McpHandlerMap = {
   // (`services/lifecycle/declare-kind-lifecycle.ts`): always a pending
   // proposal, or a refusal with every reason. Like synap_retire_field and
   // synap_change_kind_scope it has no Hub REST twin yet.
-  synap_declare_lifecycle: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_declare_lifecycle: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const profileId = args.profileId;
-    if (typeof profileId !== "string" || !profileId) {
+    const { profileId } = args;
+    // The input takes "": an empty id is refused here.
+    if (!profileId) {
       return ok({ error: "profileId is required" });
-    }
-    if (!Array.isArray(args.options)) {
-      return ok({ error: "options is required (each { key, category })" });
     }
     return ok(
       await proposeKindLifecycle({
@@ -89,13 +84,9 @@ export const capabilityHandlers: McpHandlerMap = {
         agentUserId: agentUserId ?? null,
         input: {
           profileId,
-          ...(typeof args.property === "string"
-            ? { property: args.property }
-            : {}),
+          property: args.property,
           options: args.options,
-          ...(typeof args.initialStatus === "string"
-            ? { initialStatus: args.initialStatus }
-            : {}),
+          initialStatus: args.initialStatus,
         },
         reason: readReasoning(args),
       })
@@ -105,20 +96,13 @@ export const capabilityHandlers: McpHandlerMap = {
   // (`services/lifecycle/change-lifecycle-options.ts`, fd146324): the person's
   // lifecycle door (tRPC `propertyDefs.changeLifecycleOptions`) filed as an
   // always-pending proposal, or a refusal in that door's own words.
-  synap_change_lifecycle_options: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_change_lifecycle_options: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const profileId = args.profileId;
-    if (typeof profileId !== "string" || !profileId) {
+    const { profileId } = args;
+    // The input takes "": an empty id is refused here.
+    if (!profileId) {
       return ok({ error: "profileId is required" });
-    }
-    if (!Array.isArray(args.options)) {
-      return ok({
-        error:
-          "options is required: the complete new list, each { key, category, label? }",
-      });
     }
     const lifecycle = await new ProfileResolutionService(
       db
@@ -131,14 +115,7 @@ export const capabilityHandlers: McpHandlerMap = {
         ],
       });
     }
-    const remap =
-      args.remap && typeof args.remap === "object" && !Array.isArray(args.remap)
-        ? Object.fromEntries(
-            Object.entries(args.remap as Record<string, unknown>).filter(
-              (e): e is [string, string] => typeof e[1] === "string"
-            )
-          )
-        : undefined;
+    const { remap } = args;
     return ok(
       await proposeLifecycleOptionsChange({
         userId,
@@ -148,12 +125,9 @@ export const capabilityHandlers: McpHandlerMap = {
           // A kept key starts from its stored option: a field the caller
           // leaves out (a category, a wait, a date binding) keeps its value
           // instead of being dropped by a relabel.
-          options: (args.options as unknown[]).map((o) => {
-            const key = (o as { key?: unknown } | null)?.key;
-            const stored = lifecycle.options.find((s) => s.key === key);
-            return stored && o && typeof o === "object"
-              ? { ...stored, ...(o as Record<string, unknown>) }
-              : o;
+          options: args.options.map((o) => {
+            const stored = lifecycle.options.find((s) => s.key === o.key);
+            return stored ? { ...stored, ...o } : o;
           }),
           ...(remap ? { remap } : {}),
         },
@@ -161,7 +135,7 @@ export const capabilityHandlers: McpHandlerMap = {
       })
     );
   },
-  synap_define_role: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_define_role: async (ctx) => {
     const {
       toolName,
       args,
@@ -181,22 +155,20 @@ export const capabilityHandlers: McpHandlerMap = {
         userId,
         // Confined workspace (service-key clamp) — not the raw model-supplied id.
         workspaceId: requestedWorkspaceId as string,
-        slug: args.slug as string,
-        displayName: args.displayName as string,
+        slug: args.slug,
+        displayName: args.displayName,
         profileKind: "role",
-        ...(Array.isArray(args.applicableKinds)
-          ? { applicableKinds: args.applicableKinds as string[] }
+        ...(args.applicableKinds
+          ? { applicableKinds: args.applicableKinds }
           : {}),
-        ...(typeof args.roleCategory === "string"
+        ...(args.roleCategory !== undefined
           ? { roleCategory: args.roleCategory }
           : {}),
-        ...(typeof args.icon === "string" ? { icon: args.icon } : {}),
-        ...(typeof args.description === "string"
+        ...(args.icon !== undefined ? { icon: args.icon } : {}),
+        ...(args.description !== undefined
           ? { description: args.description }
           : {}),
-        ...(args.properties
-          ? { defaultValues: args.properties as Record<string, unknown> }
-          : {}),
+        ...(args.properties ? { defaultValues: args.properties } : {}),
         // The AGENT's own words win over the machine string — the hard-coded
         // fallback stays only for a caller that supplied none.
         reasoning:
@@ -207,7 +179,7 @@ export const capabilityHandlers: McpHandlerMap = {
     );
     return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
-  synap_define_kind: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_define_kind: async (ctx) => {
     const {
       toolName,
       args,
@@ -222,10 +194,8 @@ export const capabilityHandlers: McpHandlerMap = {
     // `create_profile` does (listProfiles → find slug) before the define door
     // sees an id.
     let parentProfileId: string | undefined;
-    const parentSlug =
-      typeof args.parentProfileSlug === "string"
-        ? args.parentProfileSlug.trim()
-        : "";
+    // The input takes blanks: a blank slug names no parent.
+    const parentSlug = args.parentProfileSlug?.trim() ?? "";
     if (parentSlug) {
       const listed = (await caller.profiles.listProfiles({
         userId,
@@ -249,19 +219,15 @@ export const capabilityHandlers: McpHandlerMap = {
         userId,
         // Confined workspace (service-key clamp) — not the raw model-supplied id.
         workspaceId: requestedWorkspaceId as string,
-        slug: args.slug as string,
-        displayName: args.displayName as string,
+        slug: args.slug,
+        displayName: args.displayName,
         profileKind: "kind",
-        ...(typeof args.icon === "string" ? { icon: args.icon } : {}),
-        ...(typeof args.description === "string"
+        ...(args.icon !== undefined ? { icon: args.icon } : {}),
+        ...(args.description !== undefined
           ? { description: args.description }
           : {}),
-        ...(args.defaultValues
-          ? { defaultValues: args.defaultValues as Record<string, unknown> }
-          : {}),
-        ...(args.entityScope === "pod" || args.entityScope === "workspace"
-          ? { entityScope: args.entityScope }
-          : {}),
+        ...(args.defaultValues ? { defaultValues: args.defaultValues } : {}),
+        ...(args.entityScope ? { entityScope: args.entityScope } : {}),
         ...(parentProfileId ? { parentProfileId } : {}),
         ...(args.properties !== undefined ? { fields: args.properties } : {}),
         reasoning:
@@ -273,10 +239,10 @@ export const capabilityHandlers: McpHandlerMap = {
     );
     return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
-  synap_governance: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_governance: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const wsId = args.workspaceId as string;
+    const wsId = args.workspaceId;
     // Read floor: getEffectiveGovernance reads ANY workspace's policy by
     // id, so gate on the caller reading that space (the access door) (a bound service key
     // is already clamped upstream; this closes the read for ordinary keys too).
@@ -346,9 +312,7 @@ export const capabilityHandlers: McpHandlerMap = {
       ...(agentBudget ? { agentBudget } : {}),
     });
   },
-  synap_list_capabilities: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_capabilities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // OPTIONAL — absent means the POD lens, which is what "what can this pod
@@ -358,10 +322,8 @@ export const capabilityHandlers: McpHandlerMap = {
     // so nothing downstream assumes it is present.
     // `null`, not `undefined`: the registry's lens parameter spells "pod
     // altitude" as null, and every consumer below takes `string | null`.
-    const wsId =
-      typeof args.workspaceId === "string" && args.workspaceId.trim()
-        ? args.workspaceId
-        : null;
+    // The input takes blanks: a blank id is the pod lens.
+    const wsId = args.workspaceId?.trim() ? args.workspaceId : null;
     // READ FLOOR — a lens still has to be a space you read (the access door).
     // `listCapabilities`' own contract says a non-null workspaceId is "a LENS,
     // not an authorization" (`capability-registry.ts:78`), and its tools
@@ -373,17 +335,11 @@ export const capabilityHandlers: McpHandlerMap = {
     if (wsId && !(await canRead(userPrincipal(userId), { workspace: wsId }))) {
       return ok({ error: `Forbidden: no access to workspace ${wsId}` });
     }
-    const query =
-      typeof args.query === "string" && args.query.trim().length > 0
-        ? args.query
-        : undefined;
-    const kind = typeof args.kind === "string" ? args.kind : undefined;
-    const limit = typeof args.limit === "number" ? args.limit : undefined;
+    // The inputs take blanks: a blank query or container is not given.
+    const query = args.query?.trim() ? args.query : undefined;
+    const { kind, limit } = args;
     const offset = pageOffset(args.offset);
-    const containerId =
-      typeof args.containerId === "string" && args.containerId.trim()
-        ? args.containerId.trim()
-        : undefined;
+    const containerId = args.containerId?.trim() || undefined;
 
     // ── INTENT LOOKUP (the reverse index) ─────────────────────────────────
     // "Which installed capability can send a message?" answered WITHOUT the
@@ -392,8 +348,8 @@ export const capabilityHandlers: McpHandlerMap = {
     if (args.intent !== undefined) {
       const { intentError, isKnownIntent } =
         await import("../../../services/capabilities/intent-registry.js");
-      const intent = typeof args.intent === "string" ? args.intent : null;
-      if (intent === null || !(await isKnownIntent(intent))) {
+      const { intent } = args;
+      if (!(await isKnownIntent(intent))) {
         return ok({ error: intentError(args.intent) });
       }
       const { capabilitiesByIntent } =
@@ -684,9 +640,7 @@ export const capabilityHandlers: McpHandlerMap = {
         : {}),
     });
   },
-  synap_run_capability: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_run_capability: async (ctx) => {
     const {
       toolName,
       args,
@@ -705,16 +659,15 @@ export const capabilityHandlers: McpHandlerMap = {
       // Idempotency: a retried capability run resolves to the prior run's
       // proposal/result rather than firing twice. (Direct external-send verbs
       // still carry the residual double-send gap — see the decision below.)
-      idempotencyKey: args.idempotencyKey as string | undefined,
-      verbId: args.verbId as string | undefined,
-      skillId: args.skillId as string | undefined,
-      parameters: args.parameters as Record<string, unknown> | undefined,
+      idempotencyKey: args.idempotencyKey,
+      verbId: args.verbId,
+      skillId: args.skillId,
+      parameters: args.parameters,
       // Which of the capability's connections runs. The tool advertised no such
       // field until the schema was derived from the shared contract, so an
       // agent whose capability had two connected accounts had no way to say
       // which one to send from.
-      connectionSelector: args.connectionSelector as
-        { connectionId?: string; contextObjectId?: string } | undefined,
+      connectionSelector: args.connectionSelector,
       workspaceId: wsId,
       userId,
       // Thread the acting agent (set on agent-key remap) so an agent WRITE verb
@@ -758,7 +711,7 @@ export const capabilityHandlers: McpHandlerMap = {
     }
     return ok(outcome);
   },
-  synap_create_verb: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_create_verb: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -864,9 +817,7 @@ export const capabilityHandlers: McpHandlerMap = {
       wiring,
     });
   },
-  synap_list_automations: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_list_automations: async (ctx) => {
     const {
       toolName,
       args,
@@ -884,8 +835,7 @@ export const capabilityHandlers: McpHandlerMap = {
     const result = await caller.automations.listAutomations({
       userId,
       workspaceId: requestedWorkspaceId ?? null,
-      status: args.status as
-        "draft" | "active" | "paused" | "error" | undefined,
+      status: args.status,
       // One row past the page tells whether another page exists.
       limit: autoLimit + 1,
       offset: autoOffset,
@@ -910,9 +860,7 @@ export const capabilityHandlers: McpHandlerMap = {
       note: AUTOMATIONS_DIGEST_NOTE,
     });
   },
-  synap_trigger_automation: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_trigger_automation: async (ctx) => {
     const {
       toolName,
       args,
@@ -923,7 +871,8 @@ export const capabilityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (typeof args.id !== "string" || args.id.trim() === "") {
+    // The input takes blanks: a blank id is refused here.
+    if (args.id.trim() === "") {
       return ok({ error: "id (automation UUID) is required" });
     }
     // Mirror the EXISTING trigger path exactly (hubAutomationsRouter.trigger
@@ -949,15 +898,13 @@ export const capabilityHandlers: McpHandlerMap = {
       userId,
       workspaceId: requestedWorkspaceId ?? null,
       id: args.id,
-      payload: args.payload as Record<string, unknown> | undefined,
+      payload: args.payload,
       agentUserId: agentUserId ?? undefined,
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
-  synap_create_automation: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_automation: async (ctx) => {
     const {
       toolName,
       args,
@@ -968,22 +915,11 @@ export const capabilityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (typeof args.name !== "string" || args.name.trim() === "") {
+    // The input takes blanks: a blank name is refused here.
+    if (args.name.trim() === "") {
       return ok({ error: "name is required" });
     }
-    if (typeof args.triggerType !== "string") {
-      return ok({
-        error: "triggerType is required (event | cron | webhook | manual)",
-      });
-    }
-    const flow = args.flowDefinition as
-      { nodes?: unknown; edges?: unknown } | undefined;
-    if (!flow || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
-      return ok({
-        error:
-          "flowDefinition is required and must be { nodes: [...], edges: [...] }",
-      });
-    }
+    const flow = args.flowDefinition;
     // ── Capability-step validation (BEFORE the governance gate) ────────────
     // A `capability` node names a VERB; nothing used to check that the verb
     // exists, so an agent could create an automation whose step calls a verb
@@ -1109,10 +1045,9 @@ export const capabilityHandlers: McpHandlerMap = {
     // resultRouting (optional) threads into metadata.resultRouting — the SET
     // path for the per-entity/per-type run routing. We build the FULL metadata
     // bag here (a create, not an update), so no wholesale-replace hazard.
-    const resultRouting = args.resultRouting as
-      "per_type" | "per_entity" | "trigger" | undefined;
+    const { resultRouting } = args;
     const metadata: Record<string, unknown> = {
-      ...((args.metadata as Record<string, unknown> | undefined) ?? {}),
+      ...args.metadata,
       ...(resultRouting ? { resultRouting } : {}),
     };
     // GOVERNED create (hubAutomationsRouter.createAutomation → automationsRouter
@@ -1129,17 +1064,11 @@ export const capabilityHandlers: McpHandlerMap = {
       // so the MCP caller passes agentUserId and needs no explicit source.
       workspaceId: requestedWorkspaceId ?? null,
       name: args.name,
-      description: args.description as string | undefined,
-      triggerType: args.triggerType as "event" | "cron" | "webhook" | "manual",
-      triggerConfig:
-        (args.triggerConfig as Record<string, unknown> | undefined) ?? {},
-      flowDefinition: flow as {
-        nodes: Record<string, unknown>[];
-        edges: Record<string, unknown>[];
-      },
-      status:
-        (args.status as "draft" | "active" | "paused" | "error" | undefined) ??
-        "active",
+      description: args.description,
+      triggerType: args.triggerType,
+      triggerConfig: args.triggerConfig ?? {},
+      flowDefinition: flow,
+      status: args.status ?? "active",
       metadata,
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
@@ -1151,10 +1080,11 @@ export const capabilityHandlers: McpHandlerMap = {
    * `services/capabilities/find-intent.ts` for every founder decision it
    * encodes; this adapter only reads args and hands the result back whole.
    */
-  synap_find: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_find: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const intent = typeof args.intent === "string" ? args.intent.trim() : "";
+    // The input takes blanks: a blank intent is refused here.
+    const intent = args.intent.trim();
     if (!intent) {
       return ok({
         error:
@@ -1164,10 +1094,8 @@ export const capabilityHandlers: McpHandlerMap = {
     // Same lens rule as synap_list_capabilities: absent = POD altitude, which
     // is what "what can this pod do?" almost always means. A LENS, never an
     // authorization — `listCapabilities` reads null as pod altitude.
-    const wsId =
-      typeof args.workspaceId === "string" && args.workspaceId.trim()
-        ? args.workspaceId
-        : null;
+    // The input takes blanks: a blank id is the pod lens.
+    const wsId = args.workspaceId?.trim() ? args.workspaceId : null;
     // READ FLOOR + the search itself: the ONE entry every find door uses
     // (`findForCaller`), so this door and tRPC `knowledge.find` cannot
     // disagree about whose lens is readable.
@@ -1178,10 +1106,10 @@ export const capabilityHandlers: McpHandlerMap = {
       workspaceId: wsId,
       userId,
       ...(agentUserId ? { agentUserId } : {}),
-      // Unknown names are dropped by the service, and a list that ends up
-      // empty falls back to all of them — never "searched nothing, no match".
-      ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
-      ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      // An empty list falls back to all of them (the service) — never
+      // "searched nothing, no match".
+      ...(args.catalogs ? { catalogs: args.catalogs } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
       ...(args.explain === true ? { explain: true } : {}),
     });
     if (!found.ok) {
@@ -1191,4 +1119,4 @@ export const capabilityHandlers: McpHandlerMap = {
     }
     return ok(found.result);
   },
-};
+} satisfies McpHandlerMap;

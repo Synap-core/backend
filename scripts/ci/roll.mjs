@@ -5,7 +5,8 @@
  * sibling-pins.json fixes the commit CI lays each sibling repo out at. A pin
  * moves in ONE pull request that also holds every MIRROR of that sibling
  * regenerated against the new commit (a mirror is a file in this repo built
- * from the sibling's source: today door-tool-names.generated.ts). This file is
+ * from the sibling's source; today none: a row with no mirror says why in
+ * `noMirror`, and a bump only moves the commit its tests read). This file is
  * the one place that says which siblings can roll and how each mirror is
  * regenerated and checked, so a person, the preflight and (later steps) a
  * workflow all read the same rows. Commands stay out of sibling-pins.json:
@@ -40,46 +41,16 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 /**
  * One row per rollable sibling. `mirrors[].regenerate` and `.check` are lists
  * of steps `{cwd, argv}` (cwd relative to this repo's root), run in order with
- * the sibling at ../<dir>. The first row's commands are the ones
- * sibling-pins.json's note named before this registry: gen-door-tool-names.ts,
- * prettier on its output, then the same generator with --check.
+ * the sibling at ../<dir>. A pinned sibling nothing is generated from has no
+ * mirror and says why (`noMirror`): its pin still fixes what its tests read.
  */
 export const SIBLINGS = [
   {
     dir: "synap-control-plane-api",
     repo: "Synap-core/control-plane-api",
-    mirrors: [
-      {
-        id: "door-tool-names",
-        outputs: ["packages/api/src/routers/mcp/door-tool-names.generated.ts"],
-        regenerate: [
-          {
-            cwd: "packages/api",
-            argv: ["npx", "tsx", "src/routers/mcp/gen-door-tool-names.ts"],
-          },
-          {
-            cwd: ".",
-            argv: [
-              "npx",
-              "prettier",
-              "--write",
-              "packages/api/src/routers/mcp/door-tool-names.generated.ts",
-            ],
-          },
-        ],
-        check: [
-          {
-            cwd: "packages/api",
-            argv: [
-              "npx",
-              "tsx",
-              "src/routers/mcp/gen-door-tool-names.ts",
-              "--check",
-            ],
-          },
-        ],
-      },
-    ],
+    mirrors: [],
+    noMirror:
+      "Read, never mirrored: backend tests read it at the pin (its pod-tool catalog, package schema, content kinds, reserved app ids); the door tool names derive from each tool's definition (cpOmit), so nothing here is generated from it.",
   },
 ];
 
@@ -88,8 +59,9 @@ export const SIBLINGS = [
 /**
  * Every way the registry and the pins can disagree, as strings (empty = fine):
  * a pinned sibling with no row (a pin could be bumped with its mirrors stale),
- * a row with no pin (nothing to roll), a row that regenerates nothing or has
- * no check, a mirror output that does not exist, a duplicate row.
+ * a row with no pin (nothing to roll), a row with no mirror and no reason, a
+ * mirror that regenerates nothing or has no check, a mirror output that does
+ * not exist, a duplicate row.
  */
 export function registryProblems(
   registry,
@@ -105,8 +77,12 @@ export function registryProblems(
       problems.push(
         `registry row ${row.dir} has no pin in ${pinsFile}: add the pin or drop the row`
       );
-    if (!row.mirrors?.length)
-      problems.push(`registry row ${row.dir} lists no mirror`);
+    if (!row.mirrors?.length && !row.noMirror)
+      problems.push(
+        `registry row ${row.dir} lists no mirror and says no reason (noMirror)`
+      );
+    if (row.mirrors?.length && row.noMirror)
+      problems.push(`registry row ${row.dir} lists mirrors AND noMirror`);
     for (const m of row.mirrors ?? []) {
       const at = `${row.dir} mirror ${m.id}`;
       if (!m.regenerate?.length || !m.regenerate.every((s) => s.argv?.length))
@@ -174,14 +150,16 @@ export function planOne({
     head,
     // true / false once the checkout is at the target; null when unknowable
     mirrorsChanged,
+    noMirror: row.noMirror ?? null,
   };
 }
 
 export function render(plans) {
   return plans
     .map((p) => {
-      const mirrors =
-        p.mirrorsChanged === null
+      const mirrors = p.noMirror
+        ? `none: ${p.noMirror}`
+        : p.mirrorsChanged === null
           ? p.checkout === "absent"
             ? `unknown: ../${p.dir} is not checked out (check it out at ${p.target.slice(0, 10)} to learn)`
             : `unknown: ../${p.dir} is at ${p.head?.slice(0, 10)}, not ${p.target.slice(0, 10)}`
@@ -280,7 +258,8 @@ export async function apply(io, { sibling, ref } = {}, registry = SIBLINGS) {
   for (const row of selectSiblings(registry, sibling)) {
     const target = await resolveTarget(io, row, ref);
     const head = io.head(row.dir);
-    if (head !== target)
+    // A row with no mirror regenerates nothing: no checkout to be wrong.
+    if (row.mirrors.length && head !== target)
       throw new Error(
         `../${row.dir} is ${head ? `at ${head}` : "not checked out"}, not at ${target}: check it out at the target first (a mirror regenerated from another commit would be wrong)`
       );

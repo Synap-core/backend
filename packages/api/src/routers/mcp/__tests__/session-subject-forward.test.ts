@@ -118,11 +118,20 @@ describe("the HANDLER forwards it — all three meanings", () => {
     expect(lastCall()).not.toHaveProperty("subjectEntityId");
   });
 
-  it("a non-string, non-null value is DROPPED, never handed to the column", async () => {
-    // A blanket `as string | null | undefined` cast would let this through to
-    // a uuid column. The narrowing is what stops it.
-    await run({ subjectEntityId: 42 });
-    expect(lastCall()).not.toHaveProperty("subjectEntityId");
+  it("a non-string, non-null value is REFUSED at the door, never handed to the column", async () => {
+    // The input (`string | null`) is what stops it, before the handler.
+    const { parseToolArgs } = await import("../define-tool.js");
+    const refused = parseToolArgs("synap_update_session", {
+      sessionId: SESSION_ID,
+      subjectEntityId: 42,
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.result.isError).toBe(true);
+      expect((refused.result.content[0] as { text: string }).text).toMatch(
+        /subjectEntityId/
+      );
+    }
   });
 
   it("the forward does not disturb the fields beside it", async () => {

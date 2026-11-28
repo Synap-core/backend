@@ -7,7 +7,8 @@
  * Each case rules a wrong door rule out:
  *  - a name that is not this person's failed proposal → refused before the
  *    handler runs (rules out "file first, check later");
- *  - a tool outside SUPERSEDES_TOOLS → refused loudly (rules out "ignored");
+ *  - a tool whose definition takes no `supersedes` → refused loudly by the
+ *    door's input check (rules out "ignored");
  *  - a write that applies at once (files nothing for review) → the reply
  *    says the failed one was left failed (rules out a silent "done");
  *  - a write that files the same request for review → the failed one ends
@@ -110,6 +111,7 @@ const AGENT = "agent-orchestrator";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { executeMCPToolViaHubProtocol } from "../adapter.js";
+import { parseToolArgs } from "../define-tool.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -198,12 +200,16 @@ describe("supersedes at the MCP door", () => {
 
   it("a tool that does not take it refuses it loudly", async () => {
     const failed = await failedSend();
-    const out = await call("synap_post_message", {
+    // The door's input check (`tools.execute` → `parseToolArgs`), before
+    // the adapter: `supersedes` is not among this tool's inputs.
+    const out = parseToolArgs("synap_post_message", {
       supersedes: failed,
       content: "x",
     });
-    expect(out.isError).toBe(true);
-    expect(textOf(out)).toMatch(/does not take `supersedes`/);
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : textOf(out.result)).toMatch(
+      /does not take `supersedes`/
+    );
     expect((await statusOf(failed)).status).toBe("approval_failed");
   });
 

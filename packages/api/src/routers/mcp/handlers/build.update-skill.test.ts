@@ -74,6 +74,7 @@ vi.mock("../../../middleware/audit-log.js", () => ({
 }));
 
 import { buildHandlers } from "./build.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
@@ -206,11 +207,24 @@ describe("synap_update_skill", () => {
     expect(h.permCalls).toHaveLength(0);
   });
 
-  it("refuses a timeout outside 1..300 in words", async () => {
-    const r = await call({ id: SKILL_ID, timeoutSeconds: 900 }, AGENT);
-
-    expect(r.isError).toBe(true);
-    expect(r.text).toContain("1 to 300");
+  it("refuses a timeout outside 1..300 in words, at the door (the handler never runs)", async () => {
+    // The input check is the tool's input (`timeoutSeconds` 1..300), applied
+    // by `parseToolArgs` before any handler, as on the live call path.
+    for (const timeoutSeconds of [900, 0, 1.5]) {
+      const r = parseToolArgs("synap_update_skill", {
+        id: SKILL_ID,
+        timeoutSeconds,
+      });
+      expect(r.ok, String(timeoutSeconds)).toBe(false);
+      const text = r.ok ? "" : (r.result.content[0] as { text: string }).text;
+      expect(text).toContain("NOTHING WAS CHANGED");
+      expect(text).toContain("timeoutSeconds");
+    }
+    // In bounds, it is taken.
+    expect(
+      parseToolArgs("synap_update_skill", { id: SKILL_ID, timeoutSeconds: 300 })
+        .ok
+    ).toBe(true);
     expect(h.permCalls).toHaveLength(0);
   });
 });
@@ -344,11 +358,24 @@ describe("synap_update_skill — agentTypes", () => {
   });
 
   it("refuses a scope that is not a list of names, before the gate", async () => {
-    for (const bad of ["code", [""], [1], {}]) {
-      const r = await call({ id: SKILL_ID, agentTypes: bad }, AGENT);
-      expect(r.isError).toBe(true);
-      expect(r.text).toContain("agentTypes");
+    // Not a list of strings: refused at the door (the input's type).
+    for (const bad of ["code", [1], {}]) {
+      const parsed = parseToolArgs("synap_update_skill", {
+        id: SKILL_ID,
+        agentTypes: bad,
+      });
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) {
+        expect(parsed.result.isError).toBe(true);
+        expect((parsed.result.content[0] as { text: string }).text).toContain(
+          "agentTypes"
+        );
+      }
     }
+    // A blank name (a string to the input): refused by the handler.
+    const r = await call({ id: SKILL_ID, agentTypes: [""] }, AGENT);
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("agentTypes");
     expect(h.permCalls).toHaveLength(0);
   });
 });

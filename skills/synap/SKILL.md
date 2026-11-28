@@ -475,7 +475,7 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 | The user needs…                                  | Do this                                                                                                                                                            |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | a **goal** in an existing project                | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `endState`, 2–5 `criteria`; lasting: `direction`, optional `kpi`; `parentGoalId`, `pillars`) |
-| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId`                                              |
+| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (a session template: `templateId`, `launch: true` to run it) with `trackId`                                  |
 | a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a goal method                                                                 |
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                                            |
 | a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                                                                     |
@@ -2970,12 +2970,19 @@ describing it:
   to focus it, `side` to keep the conversation in view.
 - You created a view or generated a cell → open the result, don't hand back a
   paragraph about it.
-- You proposed a graph of changes (a PR) → lay them out with
-  `place_on_whiteboard` so the review is spatial.
+- You proposed a graph of changes (a PR), or made a deck or a set of cards →
+  lay them out on a whiteboard with `synap_place_on_board` (Hub
+  `POST /api/hub/whiteboards/{viewId}/placements`): `resources` of
+  `{kind: entity|view|cellInstance|cellDefinition|html|url|automation|artboard-deck}`,
+  optional `options` `{x, y, frameId, layout}`. New shapes appear at once,
+  marked pending until the person keeps or rejects them; changing or removing
+  shapes (`update`, `remove`) is a proposal. Read the board first with
+  `synap_read_board`.
 
 **Rules:** show when it genuinely helps the user see or act — not every turn, one
 surface at a time. Lead with the direct answer, THEN open. `focus_surface` only
 navigates; it mutates nothing, so it needs no proposal — it runs like a read.
+`synap_place_on_board` WRITES the board (governed, see above).
 
 ---
 
@@ -3180,11 +3187,11 @@ All three are optional: without them a playbook runs exactly as before.
     Example: render on the Mac, else the devbox:
     `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
     `null` clears a playbook's runner. A choice made when running it comes
-    first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+    first (`synap_start_session { templateId, launch: true, runner }`, the same shapes: a role, engine or
     list is resolved then, and nobody it names → refused), then the playbook's
     runner, then the person's remembered choice.
     A stage's runner can be chosen too: for a whole run,
-    `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+    `synap_start_session { templateId, launch: true, stageRunners: { "<stage key>": <runner> } }`; while
     working, `synap_update_session { currentStage, stageRunner }` for the stage
     you enter (`"self"` = you do it; naming another agent asks the person
     first). A step with another runner gives that agent a turn on the same

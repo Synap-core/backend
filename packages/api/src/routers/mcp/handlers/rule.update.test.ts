@@ -45,9 +45,11 @@ vi.mock("../../hub-protocol/utils.js", () => ({
 import { ruleHandlers } from "./rule.js";
 import type { McpToolContext } from "./shared.js";
 import { tools } from "../tools/index.js";
-import { TOOL_GROUPS } from "../tool-profiles.js";
-import { MCP_TOOL_TEACHING_KEYS } from "../tool-verb-aliases.js";
-import { DOOR_TOOL_NAMES } from "../door-tool-names.generated.js";
+import {
+  toolGroupMembers,
+  toolNameOnDoor,
+  toolTeachingKeys,
+} from "../define-tool.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -208,17 +210,20 @@ describe("registered wherever synap_create_rule is", () => {
   });
 
   it("sits in the same profile group as synap_create_rule", () => {
-    expect(TOOL_GROUPS.governance).toContain("synap_create_rule");
-    expect(TOOL_GROUPS.governance).toContain("synap_update_rule");
+    expect(toolGroupMembers().governance).toContain("synap_create_rule");
+    expect(toolGroupMembers().governance).toContain("synap_update_rule");
   });
 
   it("has teaching keys under the rule.update door", () => {
-    expect(MCP_TOOL_TEACHING_KEYS.synap_update_rule).toContain("rule.update");
+    expect(toolTeachingKeys().synap_update_rule).toContain("rule.update");
   });
 
-  it("is in the generated door tool-name table", () => {
-    expect(DOOR_TOOL_NAMES.synap_update_rule?.["pod-mcp"]).toBe(
+  it("is named on both doors", () => {
+    expect(toolNameOnDoor("synap_update_rule", "pod-mcp")).toBe(
       "synap_update_rule"
+    );
+    expect(toolNameOnDoor("synap_update_rule", "cp-connector")).toBe(
+      "pod__update_rule"
     );
   });
 });

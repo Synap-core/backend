@@ -668,7 +668,7 @@ export async function instantiateSessionRow(
 
   // PARAMS — validated HERE and nowhere else. This function is the single
   // funnel behind every run door (playbooks.run, the Hub run door, MCP
-  // synap_run_playbook, the cron path and the approved-proposal path;
+  // synap_start_session launch, the cron path and the approved-proposal path;
   // `playbooks.instantiate` was retired in W5c); N doors each validating is
   // how drift starts.
   //

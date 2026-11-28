@@ -14,16 +14,18 @@
 
 import {
   BUILDER_REF,
-  ENTRY_TOOLS,
   TOOL_GROUP_NAMES,
   TOOL_GROUP_PURPOSES,
   toolGroupRef,
   type KeyToolAccess,
   type ToolGroup,
 } from "./tool-profiles.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
+import {
+  entryToolNames,
+  toolNameOnDoor,
+  type SkillDoor,
+} from "./define-tool.js";
 import { CALL_TOOL_NAME } from "./call-tool-name.js";
-import type { SkillDoor } from "../../services/capability-briefs/door-tool-render.js";
 
 /** The group the worked example unlocks. */
 export const EXAMPLE_GROUP: ToolGroup = "read";
@@ -56,7 +58,7 @@ export function callToolNote(callToolName: string, quote = ""): string {
 
 /** A pod tool's name on `door` (`pod__*` on the connector), else its pod name. */
 export function doorToolName(podName: string, door: SkillDoor): string {
-  return DOOR_TOOL_NAMES[podName]?.[door] ?? podName;
+  return toolNameOnDoor(podName, door) ?? podName;
 }
 
 /**
@@ -106,7 +108,7 @@ export function yourToolsBlock(
   return {
     profile: "entry",
     listed:
-      `This key lists ${ENTRY_TOOLS.length} essential tools` +
+      `This key lists ${entryToolNames().length} essential tools` +
       (unlocked.length ? ` plus the groups ${unlocked.join(", ")}` : "") +
       (locked.length
         ? "; more come in groups you unlock."

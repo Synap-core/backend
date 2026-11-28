@@ -25,6 +25,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { parseToolArgs } from "../routers/mcp/define-tool.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
@@ -157,12 +158,25 @@ describe("the human door defaults to work, the agent doors to every kind but aut
   });
 
   it("MCP synap_list_sessions: no kind named = `all` without the automation sessions", () => {
+    // The door's parse leaves an absent kind absent (no schema default that
+    // would win over the handler's)…
+    const parsed = parseToolArgs("synap_list_sessions", {});
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && "kind" in parsed.args).toBe(false);
+    expect(parseToolArgs("synap_list_sessions", { kind: "all" }).ok).toBe(true);
+    // …and the handler reads absent as `all` without the automation
+    // sessions, in its own body.
     const src = readFileSync(
       join(API_SRC, "routers/mcp/handlers/session.ts"),
       "utf8"
     );
-    expect(src).toContain('const kindArg = kindNamed ?? "all";');
-    expect(src).toMatch(
+    const start = src.indexOf("synap_list_sessions: async");
+    expect(start).toBeGreaterThan(-1);
+    const next = src.slice(start + 1).search(/\n {2}synap_\w+: async/);
+    const body = src.slice(start, next === -1 ? undefined : start + 1 + next);
+    expect(body).toMatch(/\bconst kindNamed = args\.kind;/);
+    expect(body).toContain('const kindArg = kindNamed ?? "all";');
+    expect(body).toMatch(
       /withoutAutomationSessions:\s*kindNamed === undefined &&\s*!idArg\(args\.automationId\) &&\s*!subjectEntityId,/
     );
   });

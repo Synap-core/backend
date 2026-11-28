@@ -243,7 +243,7 @@ describe("POST /profiles — define a kind or a role through the shared door", (
     );
     await capabilityHandlers.synap_define_role!({
       toolName: "synap_define_role",
-      args: { slug: "mentor", displayName: "Mentor" },
+      args: { slug: "mentor", displayName: "Mentor" } as never,
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,
@@ -282,7 +282,7 @@ describe("MCP synap_define_kind parentProfileSlug", () => {
         slug: "journal",
         displayName: "Journal",
         parentProfileSlug: "note",
-      },
+      } as never,
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,
@@ -316,7 +316,7 @@ describe("MCP synap_define_kind parentProfileSlug", () => {
         slug: "journal",
         displayName: "Journal",
         parentProfileSlug: "does-not-exist",
-      },
+      } as never,
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,

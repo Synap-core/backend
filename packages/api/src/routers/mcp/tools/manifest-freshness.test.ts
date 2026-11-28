@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tools } from "./index.js";
+import { toolExposure } from "../define-tool.js";
+import { toolGroupVocabulary } from "../tool-profiles.js";
 
 /**
  * TRIPWIRE — the published MCP manifest is FRESH.
@@ -117,5 +119,19 @@ describe("tripwire: the MCP manifest is generated from tools/index.ts, not maint
       drifted,
       `These tools changed in source without a manifest regen, so the CP is publishing their OLD contract.\n${REGEN_HINT}`
     ).toEqual([]);
+  });
+
+  it("each name's exposure (group, hidden, alias, connector) matches source", () => {
+    expect(
+      (manifest as { exposure?: unknown }).exposure,
+      `The manifest's exposure is stale: the CP derives its surface from it.\n${REGEN_HINT}`
+    ).toEqual(toolExposure());
+  });
+
+  it("the group vocabulary and skill-unlock map match source", () => {
+    expect(
+      (manifest as { groups?: unknown }).groups,
+      `The manifest's groups are stale: the CP reads them there.\n${REGEN_HINT}`
+    ).toEqual(JSON.parse(JSON.stringify(toolGroupVocabulary())));
   });
 });

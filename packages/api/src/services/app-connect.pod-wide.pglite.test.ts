@@ -67,10 +67,7 @@ import {
 import { requestsWithin } from "./agent-connect.js";
 import { describeAppSignIn } from "../routers/oauth/app-client.js";
 import { keyGrantReadClause } from "../access/grant-read.js";
-import {
-  grantBoundsDoor,
-  MCP_READ_TOOL_DOORS,
-} from "../access/grant-door-fence.js";
+import { grantBoundsDoor, LIST_PROFILES } from "../access/grant-door-fence.js";
 import { grantedWorkspaceIdsOf } from "./intake/capture-schema-linking.js";
 
 const SALES = randomUUID();
@@ -253,7 +250,8 @@ describe("reads: the kind everywhere, nothing else beyond its spaces", () => {
   });
 
   it("does not open an aggregate door that needs every kind (READS entity)", () => {
-    const everyKind = MCP_READ_TOOL_DOORS.synap_list_profiles;
+    // synap_list_profiles' declared access.
+    const everyKind = LIST_PROFILES;
     expect(grantBoundsDoor(everyKind, keyGrant)).toBe(false);
     // Positive control: an unpinned read of EVERY kind does open it, so the
     // false above is the pod-wide scope's one kind, not a closed door.

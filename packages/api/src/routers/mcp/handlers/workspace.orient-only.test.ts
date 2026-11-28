@@ -30,6 +30,7 @@ vi.mock("../../../services/discover/discover.js", () => ({
 }));
 
 import { workspaceHandlers } from "./workspace.js";
+import { parseToolArgs } from "../define-tool.js";
 import type { McpToolContext } from "./shared.js";
 
 const orient = async (args: Record<string, unknown>, agentUserId?: string) => {
@@ -68,9 +69,14 @@ describe("synap_orient only:'handedToYou'", () => {
     expect(h.handedCalls).toEqual([]);
   });
 
-  it("refuses an unknown part instead of answering the whole briefing", async () => {
-    const reply = await orient({ only: "everything" }, "agent-1");
-    expect(String(reply.error)).toMatch(/Unknown only 'everything'/);
+  it("refuses an unknown part at the door instead of answering the whole briefing", () => {
+    // `only` is an enum in the tool's input: `parseToolArgs` refuses it before
+    // any handler runs, as on the live call path.
+    const r = parseToolArgs("synap_orient", { only: "everything" });
+    expect(r.ok).toBe(false);
+    const text = r.ok ? "" : (r.result.content[0] as { text: string }).text;
+    expect(text).toContain("NOTHING WAS CHANGED");
+    expect(text).toContain("only");
     expect(h.discoverCalls).toBe(0);
   });
 

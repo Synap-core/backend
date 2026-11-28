@@ -11,16 +11,23 @@
  *
  * The scanned set is DERIVED (every .ts under src/), never hand-listed.
  *
+ * The MCP tools are zod since `defineTool` (their JSON Schema is derived):
+ * `synap_create_playbook` / `synap_update_playbook` take the definition's own
+ * fields from `playbookDefinitionSchema.shape`, and the last test proves it by
+ * behaviour (the definition's bound is enforced at the MCP door).
+ *
  * NOT covered (measured by reading): a door that accepts a playbook as an OPEN
  * record (`z.record(...)` — e.g. `workspaces.applyDefinition`) strips nothing,
- * so it is not a re-declaration and is not flagged; a door written in JSON
- * Schema (MCP tool manifests) is not zod and is not scanned.
+ * so it is not a re-declaration and is not flagged. The scan sees
+ * `goalTemplate` only: another definition field re-declared beside a derived
+ * `goalTemplate` is not flagged here.
  */
 
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseToolArgs } from "../routers/mcp/define-tool.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -76,6 +83,38 @@ describe("playbook definition — one schema", () => {
         "(schemas/playbook-definition.ts) instead of re-declaring a playbook " +
         "z.object — a re-declared object strips every field it forgets."
     ).toEqual([]);
+  });
+
+  it("the MCP playbook tools parse the definition's own fields (its bounds hold at the door)", () => {
+    // A re-declared `z.string()` takes any length; the definition's
+    // `goalTemplate` stops at 5000 and its `name` at 500.
+    for (const [tool, base] of [
+      ["synap_create_playbook", {}],
+      ["synap_update_playbook", { playbookId: "pb-1" }],
+    ] as const) {
+      const long = parseToolArgs(tool, {
+        ...base,
+        name: "Weekly review",
+        goalTemplate: "x".repeat(5001),
+      });
+      expect(long.ok, tool).toBe(false);
+      expect(JSON.stringify(long), tool).toContain("goalTemplate");
+      const longName = parseToolArgs(tool, {
+        ...base,
+        name: "x".repeat(501),
+        goalTemplate: "Review the week",
+      });
+      expect(longName.ok, tool).toBe(false);
+      // Non-vacuity: the same call within bounds is taken.
+      expect(
+        parseToolArgs(tool, {
+          ...base,
+          name: "Weekly review",
+          goalTemplate: "Review the week",
+        }).ok,
+        tool
+      ).toBe(true);
+    }
   });
 
   it("the canonical definition is not duplicated inside the allowed files", () => {

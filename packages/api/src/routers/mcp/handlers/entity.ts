@@ -8,7 +8,6 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import type { SurfaceAnchor, SurfaceSpec } from "@synap-core/types/surfaces";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
@@ -28,10 +27,8 @@ import {
   extractIdentitySignals,
   signalsFromExplicit,
   UnknownIdentitySignalKeyError,
-  suggestClosest,
   type IdentitySignal,
 } from "@synap/database";
-import { type UserObservationCategory } from "../../../services/knowledge/remember-fact.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import { buildIdentityResolveResponse } from "../../../utils/identity-resolve-response.js";
@@ -40,9 +37,9 @@ import {
   requireScope,
   readReasoning,
   type McpToolContext,
-  type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
+import type { ToolArgs } from "../define-tool.js";
 import { toolError, fullUuidError } from "../tool-errors.js";
 import { TRPCError } from "@trpc/server";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
@@ -194,45 +191,34 @@ export async function createEntityData(
     // membership. It is deliberately NOT passed as the input's explicit
     // `workspaceId` (that is a rung-1 placement pin and would workspace-pin
     // pod-scope kinds — the four-door bug).
-    const profileSlug =
-      (args.profileSlug as string | undefined) ||
-      (args.type as string | undefined);
+    const profileSlug: string = args.profileSlug;
     const result = await lensCaller.entities.createEntity({
       userId,
       profileSlug,
-      title: args.title as string,
-      description: args.description as string | undefined,
+      title: args.title,
+      description: args.description,
       // Long-form body → a versioned linked document (via EntityBodyService,
       // inside the entities `create` door this calls).
       // The hub input has always accepted `content`; the MCP schema could not
       // SEND it, so an agent had to make a second create_document call and
       // wire it up by hand. Forwarded here = long-text → document in ONE call.
-      ...(typeof args.content === "string" && args.content
-        ? { content: args.content }
-        : {}),
-      properties: args.properties as Record<string, unknown> | undefined,
+      ...(args.content ? { content: args.content } : {}),
+      properties: args.properties,
       // A project-pinned MCP URL (?projectId=) auto-injects args.projectId, so
       // entities the agent creates are filed into its project focus.
-      ...(args.projectId ? { projectId: args.projectId as string } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       // Kind + Facets: attach role-profiles in the same create call (governed
       // via entities.attachFacet on the created entity).
-      ...(Array.isArray(args.facets)
-        ? {
-            facets: args.facets as Array<{
-              slug: string;
-              properties?: Record<string, unknown>;
-            }>,
-          }
-        : {}),
+      ...(args.facets ? { facets: args.facets } : {}),
       // agent-key remap: the write is OWNED by the operator (userId) but
       // AUTHORED by the agent — pass agentUserId so governance proposes.
       ...(agentUserId ? { agentUserId } : {}),
-      ...(typeof args.expectedLabel === "string"
+      ...(args.expectedLabel !== undefined
         ? { expectedLabel: args.expectedLabel }
         : {}),
       // A retried create (its answer lost to a timeout) returns the first
-      // one instead of landing twice (ticket 13a82f38).
-      ...(typeof args.idempotencyKey === "string" && args.idempotencyKey.trim()
+      // one instead of landing twice (ticket 13a82f38). A blank key is no key.
+      ...(args.idempotencyKey?.trim()
         ? { idempotencyKey: args.idempotencyKey }
         : {}),
       aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
@@ -287,24 +273,21 @@ export async function createEntityData(
     const placement = describePlacement({
       profileSlug,
       requestedWorkspaceId:
-        typeof args.workspaceId === "string" && args.workspaceId.trim()
-          ? args.workspaceId
-          : lensWorkspaceId,
+        // A blank workspaceId reads as "not given": the lens.
+        args.workspaceId?.trim() ? args.workspaceId : lensWorkspaceId,
       lensWorkspaceId,
       entityWorkspaceId,
       entityHomeWorkspaceId,
     });
     const { writeReceipt, resolution } = await buildCreateEntityReceipt({
       result: created,
-      profileSlug: profileSlug ?? "",
+      profileSlug,
       effectiveWorkspaceId: governanceWorkspaceId,
       userId,
       scopes: apiKeyScopes,
-      title: args.title as string,
-      titleSource: titleSourceFromProperties(
-        args.properties as Record<string, unknown> | undefined
-      ),
-      ...(args.projectId ? { projectId: args.projectId as string } : {}),
+      title: args.title,
+      titleSource: titleSourceFromProperties(args.properties),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       source: "agent",
       ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
     });
@@ -321,20 +304,17 @@ export async function createEntityData(
   }
 }
 
-export const entityHandlers: McpHandlerMap = {
-  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+export const entityHandlers = {
+  synap_create_entity: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     // The pod refuses a title over the hard cap at `entities.create`; saying it
     // here names the length, where the nested refusal could not.
-    if (
-      typeof ctx.args.title === "string" &&
-      ctx.args.title.length > TITLE_HARD_MAX
-    ) {
+    if (ctx.args.title.length > TITLE_HARD_MAX) {
       return toolError(titleTooLongReason(ctx.args.title.length));
     }
     return ok(await createEntityData(ctx));
   },
-  synap_update_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_entity: async (ctx) => {
     const {
       toolName,
       args,
@@ -345,7 +325,7 @@ export const entityHandlers: McpHandlerMap = {
       caller,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const entityId = args.entityId as string;
+    const entityId = args.entityId;
     // BODY (long-form `content`) does NOT live on the entity row — it lives on
     // the LINKED DOCUMENT (`entities.documentId`; `documents.entityId` was
     // removed). `synap_capture`/`synap_create_entity` already accept `content`
@@ -354,8 +334,8 @@ export const entityHandlers: McpHandlerMap = {
     // Routing it here rather than adding a 23rd tool keeps ONE door for
     // "change this entity" and matches where an agent already holds an
     // entityId (it captured the entity; it never saw a documentId).
-    const content = args.content as string | undefined;
-    if (typeof args.title === "string" && args.title.length > TITLE_HARD_MAX) {
+    const content = args.content;
+    if (args.title !== undefined && args.title.length > TITLE_HARD_MAX) {
       return toolError(titleTooLongReason(args.title.length));
     }
     const hasEntityFields =
@@ -421,35 +401,28 @@ export const entityHandlers: McpHandlerMap = {
     const result = await lensCaller.entities.updateEntity({
       entityId,
       userId,
-      title: args.title as string | undefined,
-      preview: args.description as string | undefined,
+      title: args.title,
+      preview: args.description,
       // properties merges into the JSONB column; metadata is a legacy alias
-      metadata: (args.properties ?? args.metadata) as
-        Record<string, unknown> | undefined,
+      metadata: args.properties ?? args.metadata,
       // Convert to another kind (c-kind-convert): same id, links, document and
       // history; always a proposal.
-      ...(typeof args.profileSlug === "string" && args.profileSlug
-        ? { profileSlug: args.profileSlug }
-        : {}),
+      ...(args.profileSlug ? { profileSlug: args.profileSlug } : {}),
       // Re-attach an existing document as the body (B9g) — the same governed
       // `entities.update`: an agent replacing a body always proposes.
-      ...(typeof args.documentId === "string" && args.documentId
-        ? { documentId: args.documentId }
-        : {}),
+      ...(args.documentId ? { documentId: args.documentId } : {}),
       ...(args.replaceBody === true ? { replaceBody: true } : {}),
       // File a pod-wide record for a space, or clear it (finding a70f910f):
       // checked and governed by `entities.update`.
-      ...(typeof args.homeWorkspaceId === "string" ||
-      args.homeWorkspaceId === null
-        ? { homeWorkspaceId: args.homeWorkspaceId as string | null }
+      ...(args.homeWorkspaceId !== undefined
+        ? { homeWorkspaceId: args.homeWorkspaceId }
         : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as
       // `{ status: "conflict" }` (a result to re-plan on, not an error).
-      ...(typeof args.expectedStatus === "string" ||
-      args.expectedStatus === null
-        ? { expectedStatus: args.expectedStatus as string | null }
+      ...(args.expectedStatus !== undefined
+        ? { expectedStatus: args.expectedStatus }
         : {}),
       // A pause's hold and the move's time (W4), validated by the door.
       ...moveHoldToolArgs(args),
@@ -458,13 +431,11 @@ export const entityHandlers: McpHandlerMap = {
     // how the writer learns it should be rewritten. Kind unknown here (an
     // update names no profile), so the kind-specific rules do not apply.
     const titleLint =
-      typeof args.title === "string"
+      args.title !== undefined
         ? lintTitle(args.title, {
             source:
-              titleSourceFromProperties(
-                (args.properties ?? args.metadata) as
-                  Record<string, unknown> | undefined
-              ) ?? null,
+              titleSourceFromProperties(args.properties ?? args.metadata) ??
+              null,
           })
         : [];
     // Two governed writes, two independent outcomes — the entity fields may
@@ -489,12 +460,13 @@ export const entityHandlers: McpHandlerMap = {
    * restore-delete). The hard delete (`adminDelete`, tRPC `documents.delete`)
    * is never reachable from here.
    */
-  synap_delete_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_delete_entity: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const entityId = args.entityId;
-    if (typeof entityId !== "string" || entityId === "") {
+    // The input takes "": refused here with a plain sentence.
+    if (entityId === "") {
       return toolError("entityId is required.");
     }
     const badId = fullUuidError(toolName, "entityId", entityId);
@@ -539,9 +511,7 @@ export const entityHandlers: McpHandlerMap = {
    * that need review ride ONE pack. The hub re-validates with the strict zod
    * schema, so an unknown patch field is a 400, never dropped.
    */
-  synap_update_entities: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_entities: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -549,24 +519,21 @@ export const entityHandlers: McpHandlerMap = {
     const result = await lensCaller.entities.updateEntities({
       userId,
       ...(agentUserId ? { agentUserId } : {}),
+      // The input's loose item shape onto the hub's (it re-validates strictly).
       items: args.items as Array<{
         id: string;
         patch: Record<string, unknown>;
         expected?: { title?: string | null };
       }>,
-      ...(typeof args.validate === "boolean"
-        ? { validate: args.validate }
-        : {}),
-      ...(typeof args.idempotencyKey === "string"
+      ...(args.validate !== undefined ? { validate: args.validate } : {}),
+      ...(args.idempotencyKey !== undefined
         ? { idempotencyKey: args.idempotencyKey }
         : {}),
       ...(reasoning ? { reasoning } : {}),
     });
     return ok(result);
   },
-  synap_create_document: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_create_document: async (ctx) => {
     const {
       toolName,
       args,
@@ -579,18 +546,9 @@ export const entityHandlers: McpHandlerMap = {
       lensWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    // `markdown` (the door's default) or `html`: a page pod admin runs at
-    // /open/<id>. MCP schemas are advisory, so the value is checked here.
-    if (
-      args.type !== undefined &&
-      args.type !== "markdown" &&
-      args.type !== "html"
-    ) {
-      throw new Error(
-        `\`type\` must be "markdown" or "html", not ${JSON.stringify(args.type)}.`
-      );
-    }
-    const attachEntityId = args.entityId as string | undefined;
+    // `type`: `markdown` (the door's default) or `html`, a page pod admin runs
+    // at /open/<id> (the input's enum refuses any other).
+    const attachEntityId = args.entityId;
     // An entity's body is read as markdown on Relay and the desktop; a page
     // runs only at /open/<id>. Refused before anything is written. An HTML
     // artifact FOR an entity is attached instead (`attachTo`, below).
@@ -616,7 +574,7 @@ export const entityHandlers: McpHandlerMap = {
       const offKey = await surfaceKeyRefusal({
         keyWorkspaceId: ctx.keyWorkspaceId,
         userId,
-        anchor: args.attachTo as SurfaceAnchor,
+        anchor: args.attachTo,
         bodyWorkspaceId: requestedWorkspaceId,
       });
       if (offKey) throw new Error(offKey.error);
@@ -629,19 +587,15 @@ export const entityHandlers: McpHandlerMap = {
           door: toolName,
         },
         {
-          anchor: args.attachTo as SurfaceAnchor,
+          anchor: args.attachTo,
           body: args.type === "html" ? "html" : "document",
-          title: typeof args.title === "string" ? args.title : "",
+          title: args.title,
           spec: {
-            ...(typeof args.content === "string"
-              ? { content: args.content }
-              : {}),
-            ...(typeof args.url === "string" ? { url: args.url } : {}),
+            ...(args.content !== undefined ? { content: args.content } : {}),
+            ...(args.url !== undefined ? { url: args.url } : {}),
             // An html page's declared reads: the surface door checks them
             // with the HTML page door's checks (they were dropped here).
-            ...(args.reads !== undefined
-              ? { reads: args.reads as SurfaceSpec["reads"] }
-              : {}),
+            ...(args.reads !== undefined ? { reads: args.reads } : {}),
             ...(requestedWorkspaceId
               ? { workspaceId: requestedWorkspaceId }
               : {}),
@@ -670,32 +624,30 @@ export const entityHandlers: McpHandlerMap = {
     const result = await caller.documents.createDocument({
       userId,
       // Idempotency: a retry with the same key/content returns the prior doc.
-      idempotencyKey: args.idempotencyKey as string | undefined,
+      idempotencyKey: args.idempotencyKey,
       // Confined workspace (service-key clamp) — not the raw model-supplied id;
       // a body takes its entity's space instead (`bodyPlacementFor`).
       workspaceId: placement ? placement.workspaceId : requestedWorkspaceId,
-      title: args.title as string,
-      content: (args.content as string) || "",
+      title: args.title,
+      content: args.content ?? "",
       // The same door diagnoses an html page and puts what will not run in
       // the receipt's `warnings`.
-      ...(args.type ? { type: args.type as "markdown" | "html" } : {}),
+      ...(args.type ? { type: args.type } : {}),
       // External reference: a URL to a file/page the agent has (but no bytes
       // to upload). Creates a reference document (storageKey NULL) — the
       // agent-appropriate "here's a file" path when there's no local binary.
-      ...(args.url ? { url: args.url as string } : {}),
+      ...(args.url ? { url: args.url } : {}),
       // The agent's own words win over the machine string.
       reasoning: readReasoning(args) ?? "Created via MCP",
       ...(agentUserId ? { agentUserId } : {}),
-      ...(typeof args.expectedLabel === "string"
+      ...(args.expectedLabel !== undefined
         ? { expectedLabel: args.expectedLabel }
         : {}),
       // The living document's scope / bound refresher (0387): read and
       // floored by the hub door; a malformed one is refused there.
-      ...(args.scope !== undefined
-        ? { scope: args.scope as Record<string, unknown> | null }
-        : {}),
+      ...(args.scope !== undefined ? { scope: args.scope } : {}),
       ...(args.refreshAutomationId !== undefined
-        ? { refreshAutomationId: args.refreshAutomationId as string | null }
+        ? { refreshAutomationId: args.refreshAutomationId }
         : {}),
       // An html page's declared reads: checked and stored by the hub door.
       ...(args.reads !== undefined ? { reads: args.reads } : {}),
@@ -732,17 +684,16 @@ export const entityHandlers: McpHandlerMap = {
    * base, ambiguous `replace_text`, a person's section, embed removal) come
    * back as errors whose message says what to do next.
    */
-  synap_update_document: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_update_document: async (ctx) => {
     const { toolName, args, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const result = await caller.documents.patchDocument({
-      documentId: args.documentId as string,
+      documentId: args.documentId,
       ...(agentUserId ? { agentUserId } : {}),
-      ...(typeof args.baseRevision === "number"
+      ...(args.baseRevision !== undefined
         ? { baseRevision: args.baseRevision }
         : {}),
+      // The input's loose op shape onto the hub door's op union.
       ops: args.ops as never,
       ...(args.allow_removing_embeds === true
         ? { allowRemovingEmbeds: true }
@@ -756,9 +707,7 @@ export const entityHandlers: McpHandlerMap = {
    * bound to this user + agent + session. Same presigned lane as the REST/Hub
    * `/uploads` doors; `synap_store_file({uploadToken})` finalizes.
    */
-  synap_request_upload: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_request_upload: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -768,16 +717,16 @@ export const entityHandlers: McpHandlerMap = {
       // The CONFINED workspace (service-key clamp), never a raw model id;
       // the service write-checks it.
       workspaceId: ctx.requestedWorkspaceId,
-      filename: typeof args.filename === "string" ? args.filename.trim() : "",
-      mimeType: typeof args.mimeType === "string" ? args.mimeType.trim() : "",
-      size: Number(args.size),
+      filename: args.filename.trim(),
+      mimeType: args.mimeType.trim(),
+      size: args.size,
       ...(sessionId ? { sessionId } : {}),
     });
     if (!ticket.ok) throw new Error(ticket.error);
     const { ok: _ok, ...rest } = ticket;
     return ok(rest);
   },
-  synap_store_file: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_store_file: async (ctx) => {
     const {
       toolName,
       args,
@@ -795,11 +744,12 @@ export const entityHandlers: McpHandlerMap = {
     // the same governance as the inline path below (attach gate / governed
     // create, `proposed` is normal, session artifact on a real write). Before
     // the rate limit: the service applies the same bucket itself.
-    if (typeof args.uploadToken === "string" && args.uploadToken.trim()) {
+    // A blank token is no token (the input accepts "").
+    if (args.uploadToken?.trim()) {
       if (
-        typeof args.content === "string" ||
-        typeof args.contentBase64 === "string" ||
-        typeof args.sourceUrl === "string"
+        args.content !== undefined ||
+        args.contentBase64 !== undefined ||
+        args.sourceUrl !== undefined
       ) {
         throw new Error(
           "Provide either `uploadToken` or `content`/`contentBase64`/`sourceUrl`, not both."
@@ -812,17 +762,14 @@ export const entityHandlers: McpHandlerMap = {
         keyType,
         keyWorkspaceId,
         uploadToken: args.uploadToken.trim(),
-        ...(typeof args.title === "string" && args.title.trim()
-          ? { title: args.title.trim() }
-          : {}),
-        ...(typeof args.attachToEntityId === "string" &&
-        args.attachToEntityId.trim()
+        ...(args.title?.trim() ? { title: args.title.trim() } : {}),
+        ...(args.attachToEntityId?.trim()
           ? { attachToEntityId: args.attachToEntityId.trim() }
           : {}),
         // An explicit/derived handle on THIS call wins; otherwise the service
         // uses the session the upload was requested in.
         ...(sessionId ? { sessionId } : {}),
-        ...(typeof args.expectedLabel === "string"
+        ...(args.expectedLabel !== undefined
           ? { expectedLabel: args.expectedLabel }
           : {}),
       });
@@ -841,20 +788,15 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
 
-    let filename =
-      typeof args.filename === "string" ? args.filename.trim() : "";
-    let mimeType =
-      typeof args.mimeType === "string" ? args.mimeType.trim() : "";
+    let filename = args.filename?.trim() ?? "";
+    let mimeType = args.mimeType?.trim() ?? "";
 
     // Exactly ONE of content (UTF-8 text) | contentBase64 (binary) |
     // sourceUrl (the pod fetches it: an agent with no disk keeps a generated
     // image as a file, report 630ff4f7).
-    const hasText = typeof args.content === "string";
-    const hasBase64 = typeof args.contentBase64 === "string";
-    const sourceUrl =
-      typeof args.sourceUrl === "string" && args.sourceUrl.trim()
-        ? args.sourceUrl.trim()
-        : undefined;
+    const hasText = args.content !== undefined;
+    const hasBase64 = args.contentBase64 !== undefined;
+    const sourceUrl = args.sourceUrl?.trim() || undefined;
     if (Number(hasText) + Number(hasBase64) + Number(!!sourceUrl) !== 1) {
       throw new Error(
         "Provide exactly one of `content` (UTF-8 text), `contentBase64` (binary) or `sourceUrl` (an https URL the pod downloads)."
@@ -879,9 +821,11 @@ export const entityHandlers: McpHandlerMap = {
     } else {
       if (!filename) throw new Error("filename is required.");
       if (!mimeType) throw new Error("mimeType is required.");
-      buffer = hasText
-        ? Buffer.from(args.content as string, "utf-8")
-        : Buffer.from(args.contentBase64 as string, "base64");
+      buffer =
+        args.content !== undefined
+          ? Buffer.from(args.content, "utf-8")
+          : // Exactly one of the three was given (checked above).
+            Buffer.from(args.contentBase64!, "base64");
     }
 
     // SAME guards as the POST /files door: non-empty, allowed mime, size cap.
@@ -905,18 +849,12 @@ export const entityHandlers: McpHandlerMap = {
     }
     const storeWorkspaceId = requestedWorkspaceId;
 
-    const title =
-      typeof args.title === "string" && args.title.trim()
-        ? args.title.trim()
-        : undefined;
-    const attachToEntityId =
-      typeof args.attachToEntityId === "string" && args.attachToEntityId.trim()
-        ? args.attachToEntityId.trim()
-        : undefined;
+    // Blank reads as not given (the input accepts "").
+    const title = args.title?.trim() || undefined;
+    const attachToEntityId = args.attachToEntityId?.trim() || undefined;
     // The declared slot this file fulfils: recorded on the artifact AND given
     // to the gate, so the approval stamps THIS slot, not the first of its kind.
-    const expectedLabel =
-      typeof args.expectedLabel === "string" ? args.expectedLabel : undefined;
+    const expectedLabel = args.expectedLabel;
 
     // ── Attach mode: stored blob → provenance on an existing entity ────────
     // SAME internal door as POST /entities/:id/source-file. A stored blob,
@@ -1017,7 +955,7 @@ export const entityHandlers: McpHandlerMap = {
       status: "created",
     });
   },
-  synap_remember_fact: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_remember_fact: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1026,56 +964,28 @@ export const entityHandlers: McpHandlerMap = {
     // `userStated: true` → auto-approved (the policy rung reads
     // `uo_validated`). `lensCaller` carries the workspace lens + agent
     // identity + session handle, exactly like create_entity.
-    const { rememberFact, USER_OBSERVATION_CATEGORIES } =
+    const { rememberFact } =
       await import("../../../services/knowledge/remember-fact.js");
-    // An off-enum category is REFUSED with the allowed ones and the closest
-    // (decision fa6c8833). It used to fall back silently to the default, so
-    // the agent never learned it sent a wrong value, and the same wrong value
-    // filed through `synap_create_entity` failed only at the person's
-    // Approve (five founder preferences, 'preference' for 'preferences').
-    // No category at all still takes the service's default.
-    if (
-      args.category !== undefined &&
-      args.category !== null &&
-      !(
-        typeof args.category === "string" &&
-        (USER_OBSERVATION_CATEGORIES as readonly string[]).includes(
-          args.category
-        )
-      )
-    ) {
-      const closest =
-        typeof args.category === "string"
-          ? suggestClosest(args.category, USER_OBSERVATION_CATEGORIES)
-          : undefined;
-      return toolError(
-        `category '${String(args.category)}' is not one of ${USER_OBSERVATION_CATEGORIES.join(", ")}.` +
-          (closest ? ` Did you mean '${closest}'?` : "") +
-          " Nothing was saved: send the fact again with one of them, or leave category out."
-      );
-    }
-    const factCategory = (args.category ?? undefined) as
-      UserObservationCategory | undefined;
+    // `category`: the input's enum refuses an off-enum value with the allowed
+    // ones (decision fa6c8833: never a silent fall back to the default).
     const result = await rememberFact({
       // Idempotency: a repeated fact within the door's window returns the
       // prior factId instead of a second governed write + recall row.
-      idempotencyKey: args.idempotencyKey as string | undefined,
+      idempotencyKey: args.idempotencyKey,
       caller: lensCaller,
       // NEVER `args.userId`: the hub `createEntity` trusts `input.userId`, so a
       // model-supplied one would mint an entity + proposal owned by another
       // user. The API key already identifies the caller.
       userId,
-      fact: args.fact as string,
-      ...(typeof args.confidence === "number"
-        ? { confidence: args.confidence }
-        : {}),
-      ...(factCategory ? { category: factCategory } : {}),
+      fact: args.fact,
+      ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
+      ...(args.category ? { category: args.category } : {}),
       ...(args.userStated === true ? { userStated: true } : {}),
       ...(agentUserId ? { agentUserId } : {}),
     });
     return ok(result);
   },
-  synap_link_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_link_entities: async (ctx) => {
     const {
       toolName,
       args,
@@ -1096,20 +1006,21 @@ export const entityHandlers: McpHandlerMap = {
     const result = await caller.relations.createRelation({
       userId,
       ...(requestedWorkspaceId ? { workspaceId: requestedWorkspaceId } : {}),
-      sourceEntityId: args.sourceEntityId as string,
-      targetEntityId: args.targetEntityId as string,
+      sourceEntityId: args.sourceEntityId,
+      targetEntityId: args.targetEntityId,
       // `relates_to` — NOT `related`. The default must name a relation def that
       // actually exists: `relations.createRelation` requires a `relation_defs`
       // row for the slug, and `related` is not one of the 22 pod-wide defaults
       // (`database/src/utils/default-relation-defs.ts`) — so every type-omitting
       // link call used to 400, silently blocking agent-authored graph edges.
-      type: (args.type as string) || "relates_to",
+      // (`||`: a blank type reads as not given.)
+      type: args.type || "relates_to",
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
-  synap_attach_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_attach_facet: async (ctx) => {
     const {
       toolName,
       args,
@@ -1126,16 +1037,14 @@ export const entityHandlers: McpHandlerMap = {
     // not the governance one).
     const result = await lensCaller.entities.attachFacet({
       userId,
-      entityId: args.entityId as string,
-      profileSlug: args.facetSlug as string,
-      ...(args.properties
-        ? { properties: args.properties as Record<string, unknown> }
-        : {}),
+      entityId: args.entityId,
+      profileSlug: args.facetSlug,
+      ...(args.properties ? { properties: args.properties } : {}),
       // Confined facet lens (service-key clamp) — a bound key can only scope
       // the facet to its own workspace.
       ...(requestedWorkspaceId ? { workspaceId: requestedWorkspaceId } : {}),
       ...(args.contextEntityId
-        ? { contextEntityId: args.contextEntityId as string }
+        ? { contextEntityId: args.contextEntityId }
         : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
@@ -1149,7 +1058,7 @@ export const entityHandlers: McpHandlerMap = {
     }
     return ok(result);
   },
-  synap_detach_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_detach_facet: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1169,7 +1078,7 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  synap_update_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_update_facet: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
       ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -1180,12 +1089,8 @@ export const entityHandlers: McpHandlerMap = {
     // facetSlug), then written ONLY through the one facet door
     // (`entities.updateFacet`: partial merge, governed, may return `proposed`).
     const properties = args.properties;
-    if (
-      !properties ||
-      typeof properties !== "object" ||
-      Array.isArray(properties) ||
-      Object.keys(properties).length === 0
-    ) {
+    // The input takes `{}`; an empty change is refused here.
+    if (Object.keys(properties).length === 0) {
       return toolError(
         "Provide `properties`: the role fields to change (merged into the role's current fields)."
       );
@@ -1197,22 +1102,19 @@ export const entityHandlers: McpHandlerMap = {
     const result = await lensCaller.entities.updateFacet({
       userId,
       facetId,
-      properties: properties as Record<string, unknown>,
+      properties,
       // When `properties` carries the role's lifecycle status, the door moves
       // it through the status door with this compare-and-set (the door's own
       // contract; omitted = not sent).
-      ...(typeof args.expectedStatus === "string" ||
-      args.expectedStatus === null
-        ? { expectedStatus: args.expectedStatus as string | null }
+      ...(args.expectedStatus !== undefined
+        ? { expectedStatus: args.expectedStatus }
         : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok({ facetId, ...result });
   },
-  synap_resolve_identity: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_resolve_identity: async (ctx) => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // Read-only identity pre-check via the ONE matcher. Same call the REST
@@ -1222,9 +1124,7 @@ export const entityHandlers: McpHandlerMap = {
     // any mined from the draft property bag (richest lookup).
     let explicit: IdentitySignal[];
     try {
-      explicit = signalsFromExplicit(
-        args.signals as Record<string, unknown> | undefined
-      );
+      explicit = signalsFromExplicit(args.signals);
     } catch (err) {
       // A key this door does not know is refused, never silently dropped.
       if (err instanceof UnknownIdentitySignalKeyError) {
@@ -1234,16 +1134,13 @@ export const entityHandlers: McpHandlerMap = {
     }
     const signals: IdentitySignal[] = [
       ...explicit,
-      ...extractIdentitySignals(
-        args.properties as Record<string, unknown> | undefined,
-        { kind: args.kindSlug as string | undefined }
-      ),
+      ...extractIdentitySignals(args.properties, { kind: args.kindSlug }),
     ];
 
     const resolution = await resolveIdentity(db, {
       userId,
-      kindSlug: args.kindSlug as string | undefined,
-      name: args.title as string | undefined,
+      kindSlug: args.kindSlug,
+      name: args.title,
       signals,
       // Identity is global (a subject exists once pod-wide) → scope the weak
       // path to the caller's READ floor (owner-gated NULL + facet-lens), never
@@ -1266,7 +1163,7 @@ export const entityHandlers: McpHandlerMap = {
     // learn "you already have this in your pending queue" before minting one.
     return ok(await buildIdentityResolveResponse(resolution, userId, signals));
   },
-};
+} satisfies McpHandlerMap;
 
 /**
  * The facet a role write targets: `args.facetId` (the handle attach returns),
@@ -1277,14 +1174,15 @@ export const entityHandlers: McpHandlerMap = {
  * worn in several workspace lenses), is a refusal naming what to pass.
  */
 async function resolveLiveFacetId(
-  ctx: McpToolContext,
+  ctx: McpToolContext<
+    ToolArgs<"synap_detach_facet"> | ToolArgs<"synap_update_facet">
+  >,
   verb: "detach" | "update"
 ): Promise<{ facetId: string } | { refusal: Record<string, unknown> }> {
   const { args, userId, apiKeyScopes, agentUserId } = ctx;
-  const explicit = args.facetId as string | undefined;
+  const explicit = args.facetId;
   if (explicit) return { facetId: explicit };
-  const entityId = args.entityId as string | undefined;
-  const facetSlug = args.facetSlug as string | undefined;
+  const { entityId, facetSlug } = args;
   if (!entityId || !facetSlug) {
     return {
       refusal: {
@@ -1295,7 +1193,7 @@ async function resolveLiveFacetId(
   const entityCallerCtx = await createHubProtocolCallerContext(
     userId,
     apiKeyScopes,
-    (args.workspaceId as string) || undefined,
+    args.workspaceId || undefined,
     undefined,
     undefined,
     agentUserId
@@ -1304,7 +1202,7 @@ async function resolveLiveFacetId(
   const entityResult = await entityCaller.get({
     id: entityId,
     includeProfile: true,
-    ...(args.workspaceId ? { workspaceId: args.workspaceId as string } : {}),
+    ...(args.workspaceId ? { workspaceId: args.workspaceId } : {}),
   });
   const facets =
     (

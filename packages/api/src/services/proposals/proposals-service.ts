@@ -253,7 +253,55 @@ export async function countPendingProposals(
 export type ProposalRevisionPatch = {
   kind: "inner" | "envelope";
   fields: Record<string, unknown>;
+  /**
+   * Text replacements in a long text field (a cell's source), so a revise
+   * need not resend the whole text (ticket e1d590e1). Resolved into `fields`
+   * before any check: {@link applyTextEdits}.
+   */
+  textEdits?: ReadonlyArray<{ field: string; find: string; replace: string }>;
 };
+
+/**
+ * Turn a patch's `textEdits` into whole field values, read from the patch's
+ * own `fields` when it sets the field, else from the stored level the patch
+ * writes to. Each `find` must occur EXACTLY once, else nothing is revised and
+ * the error names it (an ambiguous edit is a guess). Every later check sees a
+ * plain `fields` patch.
+ */
+export function applyTextEdits(
+  envelope: Record<string, unknown>,
+  patch: ProposalRevisionPatch
+): ProposalRevisionPatch {
+  if (!patch.textEdits?.length) return patch;
+  const bad = (message: string) =>
+    new TRPCError({ code: "BAD_REQUEST", message });
+  const stored = patchedLevel(envelope, patch);
+  const fields = { ...patch.fields };
+  for (const { field, find, replace } of patch.textEdits) {
+    const current = Object.hasOwn(fields, field)
+      ? fields[field]
+      : stored[field];
+    if (typeof current !== "string") {
+      throw bad(
+        `textEdits: \`${field}\` is not a text field of this proposal.`
+      );
+    }
+    const at = find === "" ? -1 : current.indexOf(find);
+    if (at === -1) {
+      throw bad(
+        `textEdits: \`${field}\` does not contain ${JSON.stringify(find.slice(0, 80))}. Nothing was revised.`
+      );
+    }
+    if (current.indexOf(find, at + 1) !== -1) {
+      throw bad(
+        `textEdits: ${JSON.stringify(find.slice(0, 80))} occurs more than once in \`${field}\`; include more of the text around it. Nothing was revised.`
+      );
+    }
+    fields[field] =
+      current.slice(0, at) + replace + current.slice(at + find.length);
+  }
+  return { kind: patch.kind, fields };
+}
 
 /**
  * Envelope keys that are SYSTEM-authored and therefore never patchable by a
@@ -642,11 +690,14 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   revision: ProposalRevision;
 } {
   const { envelope, summary, reasoning, actorId } = params;
-  const taken = params.patch
-    ? takeParameterEdits(params.patch.fields)
+  const edited = params.patch
+    ? applyTextEdits(envelope, params.patch)
+    : undefined;
+  const taken = edited
+    ? takeParameterEdits(edited.fields)
     : { rest: undefined, edits: null };
-  const patch: ProposalRevisionPatch | undefined = params.patch
-    ? { ...params.patch, fields: taken.rest ?? params.patch.fields }
+  const patch: ProposalRevisionPatch | undefined = edited
+    ? { ...edited, fields: taken.rest ?? edited.fields }
     : undefined;
 
   // ── System-authored provenance is not reviewer-editable ─────────────────

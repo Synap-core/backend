@@ -1,7 +1,7 @@
 /**
  * TRIPWIRE — an ENTRY key's MCP `instructions` (V1 D4) name only tools that
  * key lists. The tool set is DERIVED from the live `tools.list()` and
- * `ENTRY_TOOLS`; the text is read back off a real `createMCPServer`, the object
+ * `entryToolNames()`; the text is read back off a real `createMCPServer`, the object
  * the `initialize` response is built from.
  *
  * What it cannot see: a tool named WITHOUT backticks, or by a synonym ("define
@@ -24,12 +24,11 @@ import {
   SYNAP_INSTRUCTIONS,
 } from "./index.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
-import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 import { formatGrounding } from "./http-handler.js";
 import { tools } from "./tools/index.js";
+import { definedToolNames, entryToolNames } from "./define-tool.js";
 import {
   BUILDER_REF,
-  ENTRY_TOOLS,
   TOOL_GROUP_NAMES,
   toolGroupRef,
 } from "./tool-profiles.js";
@@ -78,12 +77,12 @@ describe("entry-key MCP instructions", () => {
     // Non-vacuity: the scan sees the loop's tools.
     expect(named.length).toBeGreaterThanOrEqual(8);
     expect(named).toContain("synap_wait_for_answer");
-    const entry = new Set<string>(ENTRY_TOOLS);
+    const entry = new Set<string>(entryToolNames());
     expect(named.filter((n) => !entry.has(n))).toEqual([]);
   });
 
   it("the same scan DOES catch the full reflexes naming non-entry tools (the guard can fire)", async () => {
-    const entry = new Set<string>(ENTRY_TOOLS);
+    const entry = new Set<string>(entryToolNames());
     const outside = (await toolsNamedIn(SYNAP_INSTRUCTIONS)).filter(
       (n) => !entry.has(n)
     );
@@ -173,11 +172,9 @@ describe("entry-key MCP instructions", () => {
         /your door may prefix them \(([^)]*)\)\./
       )?.[1];
       expect(example).toBeDefined();
-      const podNames = new Set(
-        Object.values(DOOR_TOOL_NAMES).map((r) => r["pod-mcp"])
-      );
+      const podNames = new Set(definedToolNames());
       const named = [...example!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
-      expect(named).toContain(DOOR_TOOL_NAMES.synap_ask!["pod-mcp"]);
+      expect(named).toContain("synap_ask");
       expect(named.filter((n) => !podNames.has(n))).toEqual([]);
     }
   );

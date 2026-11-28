@@ -27,6 +27,7 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../services/profiles/renderer-slots.js";
+import { wireTools } from "../routers/mcp/define-tool.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = (rel: string) => readFileSync(resolve(here, "..", rel), "utf8");
@@ -84,16 +85,24 @@ describe("renderer slot/scope enum parity", () => {
   });
 
   it("the MCP tool schema derives both enums instead of listing members (previously HONEST UNDER-CONVERGENCE — see git blame)", () => {
+    // The derivation, in the zod input (`defineTool`, whitespace-tolerant:
+    // prettier breaks `z\n.enum(`)…
     const source = src("routers/mcp/tools/index.ts");
-    expect(source).toContain("enum: [...RENDERER_SLOTS]");
-    expect(source).toContain("enum: [...RENDERER_SCOPES]");
-    expect(source).not.toContain('enum: ["list", "detail", "dashboard"]');
-    expect(source).not.toContain('enum: ["workspace", "pod"]');
+    expect(source).toMatch(/\bslot:\s*z\s*\.enum\(\s*RENDERER_SLOTS\s*\)/);
+    expect(source).toMatch(/\bscope:\s*z\s*\.enum\(\s*RENDERER_SCOPES\s*\)/);
+    // …and what it serves: the advertised values ARE the constants.
+    const props = wireTools().find(
+      (t) => t.name === "synap_promote_cell_to_renderer"
+    )?.inputSchema.properties as
+      Record<string, { enum?: unknown[] }> | undefined;
+    expect(props?.slot?.enum).toEqual([...RENDERER_SLOTS]);
+    expect(props?.scope?.enum).toEqual([...RENDERER_SCOPES]);
   });
 
-  it("the MCP build handler widens its slot/scope cast off the 3-member literal", () => {
+  it("the MCP build handler takes slot/scope as the input types them: no member literal, no cast", () => {
     const source = src("routers/mcp/handlers/build.ts");
     expect(source).not.toContain('"list" | "detail" | "dashboard"');
-    expect(source).toContain("as RendererSlot");
+    expect(source).not.toMatch(/as Renderer(Slot|Scope)\b/);
+    expect(source).toMatch(/const slot = args\.slot;/);
   });
 });

@@ -2,7 +2,7 @@
  * The ONE list / create / run door for playbooks, shared by every agent surface.
  *
  * MCP `synap_list_playbooks` / `synap_create_playbook` / `synap_update_playbook`
- * / `synap_run_playbook` and Hub REST `GET /playbooks`, `POST /playbooks`,
+ * / `synap_start_session` `launch: true` and Hub REST `GET /playbooks`, `POST /playbooks`,
  * `POST /playbooks/:id/run` all call these (Hub `PATCH /playbooks/:id` reaches
  * the same `playbooks.update` through the hub router). The logic that used to live inline in the MCP handler — name
  * resolution on the user floor, the run write-home ladder, the create defaults —
@@ -319,7 +319,7 @@ export async function runPlaybookDoor(
     return {
       kind: "invalid",
       error:
-        "playbookId or playbookName (or name) is required — discover via synap_list_playbooks",
+        "templateId (playbookId on the old name synap_run_playbook) or playbookName is required — discover via synap_list_playbooks",
     };
   }
 

@@ -1,15 +1,18 @@
 /**
- * F11 (26 Nov 2026): a PR that changes an MCP tool goes red on the manifest,
- * the token budget and the door tool names. CI regenerates the three files and
+ * F11 (26 Nov 2026): a PR that changes an MCP tool goes red on the manifest
+ * and the token budget. CI regenerates the two files and
  * uploads them as the `mcp-generated` artifact; `scripts/ci/apply-ci-artifacts.sh`
  * applies it. What breaks for real:
  *   - the upload step names an artifact the apply script does not download;
  *   - a file is regenerated but not collected, so the artifact misses it;
- *   - the apply script copies a file name the artifact does not hold.
+ *   - the apply script copies a file name the artifact does not hold;
+ *   - the regenerate step runs a script that no longer exists (the door tool
+ *     names are derived from the tool definitions since the defineTool
+ *     registry, so their generator was deleted).
  * Read from ci.yml's text (no YAML parser at the root). Not covered: the upload
  * and the download on a real red run.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -21,12 +24,8 @@ const APPLY = readFileSync(
   "utf8"
 );
 
-/** The three files the artifact must carry: the committed generated MCP files. */
-const FILES = [
-  "mcp-tools.manifest.json",
-  "token-budget.baseline.json",
-  "door-tool-names.generated.ts",
-];
+/** The files the artifact must carry: the committed generated MCP files. */
+const FILES = ["mcp-tools.manifest.json", "token-budget.baseline.json"];
 
 function step(name: string) {
   const i = CI.indexOf(`      - name: ${name}\n`);
@@ -46,21 +45,31 @@ describe("ci.yml: the MCP generated files are handed back (F11)", () => {
     expect(upload).not.toBe("");
   });
 
-  it("regenerates all three files", () => {
+  it("regenerates both files", () => {
     expect(regen).toContain("gen-manifest.ts");
     expect(regen).toContain("token-budget.test.ts");
-    expect(regen).toContain("gen-door-tool-names.ts");
     expect(regen).toMatch(/UPDATE_TOKEN_BUDGET:\s*"1"/);
   });
 
-  it("collects each of the three files by its committed path", () => {
+  it("every script the regenerate step runs exists (packages/api)", () => {
+    const scripts = [...regen.matchAll(/\bsrc\/[\w./-]+\.ts\b/g)].map(
+      (m) => m[0]
+    );
+    // Non-vacuity: the generator and the budget test at least.
+    expect(scripts.length).toBeGreaterThanOrEqual(2);
+    for (const s of scripts)
+      expect(existsSync(join(REPO, "packages/api", s)), s).toBe(true);
+  });
+
+  it("collects each of the files by its committed path", () => {
     for (const f of FILES) expect(collect, f).toContain(f);
     // The committed paths exist in the repo, so a rename cannot orphan a name.
     for (const f of FILES) {
-      const dir = f === "door-tool-names.generated.ts" ? "" : "tools/";
       expect(
-        readFileSync(join(REPO, "packages/api/src/routers/mcp", dir, f), "utf8")
-          .length,
+        readFileSync(
+          join(REPO, "packages/api/src/routers/mcp/tools", f),
+          "utf8"
+        ).length,
         f
       ).toBeGreaterThan(0);
     }

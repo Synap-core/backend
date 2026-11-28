@@ -8,9 +8,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { toolUntimed } from "../routers/mcp/define-tool.js";
 import {
   classifyHubRestRequest,
-  classifyMcpToolCall,
   hubRequestGuardMiddleware,
   inFlightCount,
   REQUEST_TIMEOUT,
@@ -213,17 +213,18 @@ describe("what is exempt", () => {
     expect(classifyHubRestRequest("GET", "/api/hub/entities/e1")).toBeNull();
   });
 
-  it("MCP: the long-poll tool, the model tool and every open-world tool", () => {
-    const openWorld = new Set(["synap_run_capability"]);
-    expect(classifyMcpToolCall("synap_wait_for_answer", openWorld)).toBe(
-      "long_poll"
-    );
-    expect(classifyMcpToolCall("synap_ask", openWorld)).toBe("model");
-    expect(classifyMcpToolCall("synap_run_capability", openWorld)).toBe(
+  it("MCP: the long-poll tool, the model tool and every open-world tool (from the definitions)", () => {
+    expect(toolUntimed("synap_wait_for_answer")).toBe("long_poll");
+    expect(toolUntimed("synap_ask")).toBe("model");
+    expect(toolUntimed("synap_run_capability")).toBe("model");
+    expect(toolUntimed("synap_get_entity")).toBeNull();
+    // A start is timed; its launch (and the old name, always a launch) is not.
+    expect(toolUntimed("synap_start_session", { goal: "g" })).toBeNull();
+    expect(toolUntimed("synap_start_session", { launch: true })).toBe("model");
+    expect(toolUntimed("synap_run_playbook", { playbookId: "p" })).toBe(
       "model"
     );
-    expect(classifyMcpToolCall("synap_get_entity", openWorld)).toBeNull();
-    expect(classifyMcpToolCall(undefined, openWorld)).toBeNull();
+    expect(toolUntimed("synap_no_such_tool")).toBeNull();
   });
 
   it("runGuarded: a request whose work rejects frees its slot and rethrows", async () => {

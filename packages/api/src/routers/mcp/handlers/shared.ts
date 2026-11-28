@@ -13,6 +13,7 @@
  */
 
 export type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolArgs, ToolName } from "../define-tool.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { noteLimitClamped } from "../call-notices.js";
 import { hubProtocolRouter } from "../../hub-protocol/index.js";
@@ -481,30 +482,6 @@ export async function buildGraphEnvelope(
  * performance boundary, never an authorization one.
  */
 const readOnlyLogger = createLogger({ module: "mcp-read-only-tools" });
-let readOnlyToolNamesPromise: Promise<ReadonlySet<string>> | null = null;
-
-/**
- * The names of every tool whose definition declares `readOnlyHint: true`,
- * read once from the live tool definitions (`tools.list()`, no session ctx —
- * the same list `gen-manifest` serializes) and cached. A failed read is NOT
- * cached, so the next call retries.
- */
-export function readOnlyToolNames(): Promise<ReadonlySet<string>> {
-  readOnlyToolNamesPromise ??= import("../tools/index.js")
-    .then(async ({ tools }) => {
-      const defs = await tools.list();
-      return new Set(
-        defs
-          .filter((t) => t.annotations?.readOnlyHint === true)
-          .map((t) => t.name)
-      ) as ReadonlySet<string>;
-    })
-    .catch((err: unknown) => {
-      readOnlyToolNamesPromise = null;
-      throw err;
-    });
-  return readOnlyToolNamesPromise;
-}
 
 /**
  * True when the tool only reads — no write to group under a session. An
@@ -514,7 +491,8 @@ export function readOnlyToolNames(): Promise<ReadonlySet<string>> {
  */
 export async function isReadOnlyTool(toolName: string): Promise<boolean> {
   try {
-    return (await readOnlyToolNames()).has(toolName);
+    const { readOnlyToolNames } = await import("../define-tool.js");
+    return readOnlyToolNames().has(toolName);
   } catch (err) {
     readOnlyLogger.error(
       { err, toolName },
@@ -522,6 +500,15 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
     );
     return false;
   }
+}
+
+/**
+ * True when the tool's `sessionId` names the session it ACTS ON
+ * (`actsOnSession` on its definition), not the caller's own.
+ */
+async function actsOnSession(toolName: string): Promise<boolean> {
+  const { toolDefinition } = await import("../define-tool.js");
+  return toolDefinition(toolName)?.actsOnSession === true;
 }
 
 // The session-status vocabulary now lives in a leaf module
@@ -536,10 +523,7 @@ import {
   type WorkSessionResolution,
 } from "../../../services/focus-sessions/resolve-work-session.js";
 import { resolveRoomSession } from "../../../services/messaging/room-session.js";
-import {
-  attachConversationToNamedSession,
-  SESSION_ACTED_ON_TOOLS,
-} from "../../../services/focus-sessions/session-client-binding.js";
+import { attachConversationToNamedSession } from "../../../services/focus-sessions/session-client-binding.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -730,7 +714,7 @@ export async function resolveSessionHandle(
   // Named as the caller's OWN session (attach on naming): a `sessionId` the
   // write is filed under, or a coordination post's `fromSessionId`. Never a
   // session the tool acts on, nor a room the caller posts into.
-  let namedAsOwn = !!explicit && !SESSION_ACTED_ON_TOOLS.has(toolName);
+  let namedAsOwn = !!explicit && !(await actsOnSession(toolName));
   // A COORDINATION POST (`intent` / `toSessionId`) is written FROM the
   // caller's session INTO another session's room: the room names the TARGET,
   // so it must never become this call's session — that filed "A wrote to B"
@@ -1152,9 +1136,14 @@ export async function rejectMissingWriteWorkspace(
  * over as bare locals inside the giant switch. One object, one shape, so
  * every domain handler file destructures only the fields it actually uses.
  */
-export interface McpToolContext {
+export interface McpToolContext<A = any> {
   toolName: string;
-  args: Record<string, unknown>;
+  /**
+   * The tool's input as the door PARSED it (`parseToolArgs`): typed in a
+   * handler map (`McpHandlerMap`), untyped for a shared helper or a test that
+   * calls a handler directly.
+   */
+  args: A;
   userId: string;
   apiKeyScopes: string[];
   agentUserId?: string;
@@ -1179,5 +1168,13 @@ export interface McpToolContext {
 
 export type McpToolHandler = (ctx: McpToolContext) => Promise<CallToolResult>;
 
-/** A domain handler file's exported slice of the full tool → handler map. */
-export type McpHandlerMap = Partial<Record<string, McpToolHandler>>;
+/**
+ * A domain handler file's slice of the tool → handler map: keyed by a DEFINED
+ * tool name (any other key does not compile), each handler's `ctx.args` typed
+ * as its tool's parsed input (`ToolArgs`, define-tool.ts).
+ */
+export type McpHandlerMap = {
+  [N in ToolName]?: (
+    ctx: McpToolContext<ToolArgs<N>>
+  ) => Promise<CallToolResult>;
+};

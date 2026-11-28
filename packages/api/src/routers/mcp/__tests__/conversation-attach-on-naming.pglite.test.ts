@@ -72,9 +72,13 @@ import { focusSessions, proposals } from "@synap/database/schema";
 import { findClientSession, runWithClientKey } from "@synap/database";
 
 const { resolveSessionHandle } = await import("../handlers/shared.js");
-const { newSessionClientKey, SESSION_ACTED_ON_TOOLS } =
+const { newSessionClientKey } =
   await import("../../../services/focus-sessions/session-client-binding.js");
-const { DOOR_TOOL_NAMES } = await import("../door-tool-names.generated.js");
+const { definedToolNames, toolDefinition } = await import("../define-tool.js");
+/** The tools whose `sessionId` is the session they act on (`actsOnSession`). */
+const SESSION_ACTED_ON_TOOLS = definedToolNames().filter(
+  (n) => toolDefinition(n)?.actsOnSession
+);
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -229,11 +233,8 @@ describe("CONTROLS: what never attaches (the named session is used for that call
     expect(ambient?.session?.sessionId).toBe(own);
   });
 
-  it("every acted-on tool is a real MCP tool (a rename cannot empty the list)", () => {
-    expect(SESSION_ACTED_ON_TOOLS.size).toBeGreaterThanOrEqual(7);
-    for (const tool of SESSION_ACTED_ON_TOOLS) {
-      expect(DOOR_TOOL_NAMES, tool).toHaveProperty(tool);
-    }
+  it("the acted-on tools are declared on their definitions (non-vacuity)", () => {
+    expect(SESSION_ACTED_ON_TOOLS.length).toBeGreaterThanOrEqual(7);
   });
 
   it.each([...SESSION_ACTED_ON_TOOLS])(

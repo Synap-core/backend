@@ -31,8 +31,7 @@
  * a skill, a copy or catalog line, or a string literal of `packages/api/src`
  * or `packages/types/src` that holds other words beside it. A literal that IS
  * the name (an alias table key, a door-name row, a profile list) is a wire
- * value and passes; the alias tables (`tool-aliases.ts`,
- * `tool-verb-aliases.ts`) are not scanned at all.
+ * value and passes (an alias or teaching key on a tool definition).
  *
  * WHAT IT DOES NOT SEE, stated rather than implied: "widget" in error strings
  * and other literals of `packages/api/src` (only the old TOOL NAME is
@@ -130,15 +129,13 @@ const skillFiles = filesUnder(
 );
 const copyFiles = filesUnder(POD_ADMIN, (name) => name === "copy.ts");
 /** The TS sources whose literals reach agents and people (tests excluded). */
-const ALIAS_TABLES = new Set(["tool-aliases.ts", "tool-verb-aliases.ts"]);
 const sourceFiles = ["packages/api/src", "packages/types/src"].flatMap((dir) =>
   filesUnder(
     join(REPO, dir),
     (name) =>
       /\.tsx?$/.test(name) &&
       !/\.test\.tsx?$/.test(name) &&
-      !name.endsWith(".d.ts") &&
-      !ALIAS_TABLES.has(name)
+      !name.endsWith(".d.ts")
   )
 );
 
@@ -220,9 +217,6 @@ describe("tripwire: no user- or agent-facing 'widget'", () => {
     const sources = sourceFiles.map((f) => relative(REPO, f));
     expect(sources.length).toBeGreaterThan(1000);
     expect(sources).toContain("packages/api/src/services/surfaces/create.ts");
-    expect(sources).not.toContain(
-      "packages/api/src/routers/mcp/tool-aliases.ts"
-    );
     const texts = manifestTexts();
     expect(texts.length).toBeGreaterThan(500);
     expect(texts.map((t) => t.where)).toContain("synap_list_cells.description");

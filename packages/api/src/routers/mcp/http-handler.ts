@@ -46,10 +46,11 @@ import {
   checkHubRateLimit,
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
-import { tools, openWorldToolNames } from "./tools/index.js";
+import { tools } from "./tools/index.js";
+import { toolUntimed } from "./define-tool.js";
 import { effectiveToolCall } from "./call-tool-name.js";
 import {
-  classifyMcpToolCall,
+  type HubGuardExemption,
   REQUEST_TIMEOUT,
   runGuarded,
   TOO_MANY_IN_FLIGHT,
@@ -392,18 +393,20 @@ function jsonRpcTimedOut(id: unknown, timeoutMs: number) {
 }
 
 /**
- * The tools that declare `openWorldHint` (static list). A failed read is not
- * cached and not hidden: it is logged, and the call is guarded like any other.
+ * The exemption of one MCP `tools/call`, from the tool's definition
+ * (`toolUntimed`: its `untimed`, or `openWorldHint`). A failed read is not
+ * hidden: it is logged, and the call is guarded like any other.
  */
-let openWorldTools: Promise<Set<string>> | undefined;
-async function mcpOpenWorldTools(): Promise<ReadonlySet<string>> {
+function mcpCallExemption(
+  toolName: string | undefined,
+  args: Record<string, unknown>
+): HubGuardExemption | null {
+  if (!toolName) return null;
   try {
-    openWorldTools ??= openWorldToolNames();
-    return await openWorldTools;
+    return toolUntimed(toolName, args);
   } catch (err) {
-    openWorldTools = undefined;
-    logger.warn({ err }, "could not read the open-world MCP tool list");
-    return new Set();
+    logger.warn({ err }, "could not read the MCP tool definitions");
+    return null;
   }
 }
 
@@ -747,17 +750,17 @@ mcpHttpApp.post("/", async (c) => {
     method?: string;
     params?: { name?: unknown; arguments?: unknown };
   } | null;
-  const calledName =
+  const called =
     rpc?.method === "tools/call"
-      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments).name
+      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments)
       : undefined;
-  const toolName = typeof calledName === "string" ? calledName : undefined;
+  const toolName = typeof called?.name === "string" ? called.name : undefined;
   const rpcId = rpc?.id ?? null;
   return runGuarded(
     {
       key: UNCOUNTED_KEY_TYPES.has(keyRecord.keyType) ? null : keyRecord.id,
       route: `MCP ${rpc?.method ?? "?"}${toolName ? ` ${toolName}` : ""}`,
-      exemption: classifyMcpToolCall(toolName, await mcpOpenWorldTools()),
+      exemption: mcpCallExemption(toolName, called?.args ?? {}),
     },
     () => mcpCall(),
     {
