@@ -26,6 +26,11 @@
  * It is a closed list on purpose. A subject joins it only as a READ, for what
  * the person already reads (grant ∩ floor), and never adds a write: every
  * write, gate verb and act (`playbook.run`, `chat.stream`) stays per space.
+ *
+ * Widened again on 2026-11-27 (founder, decision 153b612c): `artifact` (what
+ * runs made), `widget` (the widgets a space keeps), `track` (goals) and
+ * `agent`. Under an All spaces consent a read off this list was dropped
+ * without a word, so Synap AI Chat could list none of them.
  */
 export const POD_WIDE_READ_SUBJECTS = [
   "playbook",
@@ -37,6 +42,10 @@ export const POD_WIDE_READ_SUBJECTS = [
   "automation",
   "proposal",
   "channel",
+  "artifact",
+  "widget",
+  "track",
+  "agent",
 ] as const;
 
 /**
@@ -59,7 +68,7 @@ export const POD_WIDE_READ_SUBJECTS = [
 export function isPodWideReadPermission(permission: string): boolean {
   // The SDK tripwire reads this literal on one line, so it is not wrapped:
   // prettier-ignore
-  return /^(?:entity\.(?:[a-z0-9][a-z0-9_-]*\.)?read|(?:playbook|session|view|document|relation|project|automation|proposal|channel)\.read)$/.test(permission);
+  return /^(?:entity\.(?:[a-z0-9][a-z0-9_-]*\.)?read|(?:playbook|session|view|document|relation|project|automation|proposal|channel|artifact|widget|track|agent)\.read)$/.test(permission);
 }
 
 /**

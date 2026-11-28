@@ -918,7 +918,7 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
     ["a whole subject (every verb)", "playbook"],
     ["a chat turn (an act, per space)", "chat.stream"],
     ["a write on a pod-wide-readable subject", "view.create"],
-    ["a subject outside the closed list", "agent.read"],
+    ["a subject outside the closed list", "skill.read"],
     ["a proposal decision", "proposal.approve"],
   ])("refuses %s asked pod-wide (%s)", (_label, permission) => {
     expect(() => asked({ permission, scope: "pod" })).toThrow(

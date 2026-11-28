@@ -556,25 +556,26 @@ describe("backfillAppAccess — dry run, then apply", () => {
       liftable: 3,
       already: 0,
       written: 0,
-      // W3c: the old synap-chat fixture (no write in its spaces) now
-      // re-consents because it NARROWS (track.read per space, and the two
-      // spaces it only reads), not because a key differs.
-      reconsent: { total: 5, widens: 2, narrows: 2, unplaceable: 1 },
+      // track.read is pod-wide-eligible since 2026-11-27 (decision
+      // 153b612c): the old synap-chat fixture no longer loses it under "all"
+      // spaces, it WIDENS (track.read in pod) instead of narrowing.
+      reconsent: { total: 5, widens: 3, narrows: 1, unplaceable: 1 },
     });
     const row = (id: string) => report.rows.find((r) => r.appId === id);
     for (const id of [ids.studio, ids.subsumed, ids.podBesideWrite])
       expect(row(id)?.outcome).toBe("would-lift");
     expect(row(ids.chat)).toMatchObject({
       outcome: "reconsent",
-      reason: "narrows",
-      example: `would lose track.read in space:${CONTENT}`,
+      reason: "widens",
+      example: "would allow track.read in pod",
     });
     // synap-chat as it asks today cannot lift without widening: "all"
-    // spaces would read every kind everywhere.
+    // spaces would read its per-space reads everywhere (agent.read is the
+    // first of them since it became pod-wide-eligible, decision 153b612c).
     expect(row(ids.chatToday)).toMatchObject({
       outcome: "reconsent",
       reason: "widens",
-      example: "would allow entity.read in pod",
+      example: "would allow agent.read in pod",
     });
     expect(
       report.rows.find((r) => r.appId === ids.byTemplate)?.example

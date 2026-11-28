@@ -62,7 +62,7 @@ describe("isPodWideReadPermission", () => {
       "entity.deal.transition",
       "chat.stream",
       "playbook.run",
-      "agent.read",
+      "skill.read",
       "key.read",
       "grant.read",
       "ai_provider.read",
