@@ -570,11 +570,12 @@ describe("backfillAppAccess — dry run, then apply", () => {
       example: "would allow track.read in pod",
     });
     // synap-chat as it asks today cannot lift without widening: "all"
-    // spaces would read every kind everywhere.
+    // spaces would read its per-space reads everywhere (agent.read is the
+    // first of them since it became pod-wide-eligible, decision 153b612c).
     expect(row(ids.chatToday)).toMatchObject({
       outcome: "reconsent",
       reason: "widens",
-      example: "would allow entity.read in pod",
+      example: "would allow agent.read in pod",
     });
     expect(
       report.rows.find((r) => r.appId === ids.byTemplate)?.example
