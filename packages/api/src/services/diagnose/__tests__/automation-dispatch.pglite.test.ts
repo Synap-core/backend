@@ -72,15 +72,19 @@ async function run(automationId: string, hoursAgo: number, ai: number) {
   );
   return id;
 }
-async function child(parentRunId: string, status: string) {
+async function child(
+  parentRunId: string,
+  status: string,
+  stopReason: string | null = null
+) {
   const sessionId = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, metadata) values ($1, $2, 'g', 'closed', $3::jsonb)`,
     [sessionId, USER, JSON.stringify({ automationRunId: parentRunId })]
   );
   await q(
-    `insert into playbook_runs (id, playbook_id, session_id, status, started_at) values ($1, $2, $3, $4, now())`,
-    [randomUUID(), randomUUID(), sessionId, status]
+    `insert into playbook_runs (id, playbook_id, session_id, status, started_at, stop_reason) values ($1, $2, $3, $4, now(), $5)`,
+    [randomUUID(), randomUUID(), sessionId, status, stopReason]
   );
 }
 
@@ -135,6 +139,22 @@ describe("automationDispatchFootprints", () => {
       aiDispatchCapPerDay: 7,
       childRuns7d: 1,
       childFailed7d: 0,
+    });
+  });
+
+  it("a child that STOPPED at its budget is counted apart, never as failed", async () => {
+    const a = await automation("Follow up on leads");
+    const r = await run(a, 1, 1);
+    await child(r, "failed", "budget");
+    await child(r, "failed", "budget");
+    await child(r, "failed"); // a real failure
+    await child(r, "failed", "stages_left"); // a fault, not a budget stop
+
+    const [row] = await automationDispatchFootprints({ userId: USER });
+    expect(row).toMatchObject({
+      childRuns7d: 4,
+      childFailed7d: 2,
+      childStopped7d: 2,
     });
   });
 

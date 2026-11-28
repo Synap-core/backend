@@ -255,7 +255,7 @@ export const LINK_EDGE_ROLES = {
   // runs through — configuration, like `dispatched_via`, not work or lineage.
   extends: RELATED,
   // <anchor> --attaches--> view|document|cell_instance: a screen put on the
-  // object (Surfaces P3) — what it shows, not work or lineage. Read as a
+  // object — what it shows, not work or lineage. Read as a
   // surface by `surfaces.forObject`; a plain tie in the neighbourhood.
   attaches: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;

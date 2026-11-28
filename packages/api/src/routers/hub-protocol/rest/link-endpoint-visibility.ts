@@ -252,7 +252,7 @@ async function endpointVisible(
     // workspace rows in visible workspaces, user rows the caller's own.
     case "profile":
       return rowVisible(profiles, profiles.id, id, visibleProfileWhere(userId));
-    // The SURFACE ends of an `attaches` edge (Surfaces P3), each through its
+    // The SURFACE ends of an `attaches` edge, each through its
     // registered rule: a view is readable by its owner, its space's members
     // and, when exposed, its project's members (`viewReadableWhere`); a cell
     // instance follows its space.

@@ -131,12 +131,21 @@ export async function settleTransitionOutbox(
       emittedAt: outcome.complete ? sql`now()` : null,
       claimedUntil: outcome.complete
         ? null
-        : sql`now() + make_interval(secs => least(power(2, ${lifecycleTransitionOutbox.attempts})::int, ${TRANSITION_OUTBOX_MAX_BACKOFF_SECONDS}))`,
+        : // Cap BEFORE the cast: `power(2, 31)::int` overflows, the settle
+          // fails, and the row comes back every lease instead of every hour
+          // (finding 5226a61b: 400 such rows starved the sweep for 10 days).
+          sql`now() + make_interval(secs => least(power(2, ${lifecycleTransitionOutbox.attempts}), ${TRANSITION_OUTBOX_MAX_BACKOFF_SECONDS})::int)`,
     })
     .where(eq(lifecycleTransitionOutbox.transitionId, transitionId));
 }
 
-/** Pending rows whose lease or backoff has lapsed, oldest first. */
+/**
+ * Pending rows whose lease or backoff has lapsed: the least-tried first, then
+ * the oldest. A row that keeps failing is retried at most hourly (the capped
+ * backoff, its `last_error` kept) and queues BEHIND every row tried fewer
+ * times, so no number of poison rows can fill the sweep ahead of a new move
+ * (finding 5226a61b: oldest-first let 400 failing rows take every slot).
+ */
 export async function listDueTransitions(
   db: Db,
   limit = 100
@@ -157,7 +166,10 @@ export async function listDueTransitions(
         )
       )
     )
-    .orderBy(asc(lifecycleTransitionOutbox.createdAt))
+    .orderBy(
+      asc(lifecycleTransitionOutbox.attempts),
+      asc(lifecycleTransitionOutbox.createdAt)
+    )
     .limit(limit);
   return rows.map((r) => r.id);
 }

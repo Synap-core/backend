@@ -155,7 +155,7 @@ describe("defineCell — externalHosts", () => {
       ...BASE,
       externalHosts: ["https://api.vendor.com"],
     });
-    // Not the egress demotion. Since Surfaces P6a a non-install write always
+    // Not the egress demotion. A non-install write always
     // carries the SQL that demotes only an `installed` row (its content is no
     // longer what a person installed); a `trusted` or `generated` row keeps
     // its level. That CASE runs for real in cells.install-retire-gate.pglite.

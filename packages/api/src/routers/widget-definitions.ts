@@ -11,6 +11,7 @@
  * the seeder can create them. Workspace widgets require owner/admin role.
  */
 
+import { resolveConfinedWorkspace } from "./hub-protocol/confine-workspace.js";
 import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -431,7 +432,12 @@ export const widgetDefinitionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       requireAdminRole(ctx.workspaceRole);
-      const workspaceId = ctx.workspaceId!;
+      // A key bound to one space writes cells in that space only (review H3).
+      const workspaceId = resolveConfinedWorkspace(
+        ctx.keyType,
+        ctx.keyWorkspaceId,
+        ctx.workspaceId!
+      )!;
 
       // UN-ROUTED (security): the `native` arity check is unreachable —
       // `rendererType: "native"` fails schema validation with
@@ -536,6 +542,12 @@ export const widgetDefinitionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireUserId(ctx.userId);
       requireAdminRole(ctx.workspaceRole);
+      // A key bound to one space retires cells in that space only (review H3).
+      resolveConfinedWorkspace(
+        ctx.keyType,
+        ctx.keyWorkspaceId,
+        ctx.workspaceId
+      );
 
       const db = await getDb();
       await db

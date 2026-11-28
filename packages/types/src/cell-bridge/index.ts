@@ -100,10 +100,13 @@ export {
 export {
   CELL_BRIDGE_ANY_VALUE,
   CELL_BRIDGE_DECLARED_MAX,
+  CELL_BRIDGE_PUBLISHABLE_READ_OPS,
   FRAME_READ_UNDECLARED,
+  describeDeclaredRead,
   isReadDeclared,
   parseDeclaredReads,
   parseDeclaredWrites,
+  publishedReadRefusal,
   storedDeclaredReads,
   type CellBridgeDeclaredRead,
   type CellBridgeDeclaredReads,
@@ -135,9 +138,11 @@ export {
   FRAME_NAVIGATE_TYPE,
   FRAME_OPEN_KINDS,
   FRAME_SURFACE_OPEN_TYPE,
+  frameExternalLink,
   parseFrameNavigate,
   parseFrameOpen,
   resolveFrameLink,
+  type FrameExternalLink,
   type FrameLinkAction,
   type FrameNavigateMessage,
   type FrameOpenKind,
@@ -186,6 +191,19 @@ export {
   type CellBridgeTarget,
 } from "./host.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
+export {
+  CELL_FRAME_CHANNEL_SCRIPT,
+  FRAME_CHANNEL_MAX_QUEUED,
+  FRAME_CHANNEL_READY_TYPE,
+  FRAME_HELLO_TYPE,
+  acceptFrameHello,
+  frameReplyTo,
+  isFrameHello,
+  postToFrame,
+  resetFrameChannel,
+  type CellBridgePort,
+  type FrameHelloEventLike,
+} from "./frame-channel.js";
 export {
   FRAME_SLIDE_ATTRIBUTE,
   FRAME_SLIDE_CHANGED_TYPE,

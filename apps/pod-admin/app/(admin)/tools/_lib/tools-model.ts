@@ -24,7 +24,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
-import { isRuleSkill } from "../../../../lib/rule-skill";
+import { isRuleSkill } from "@synap-core/types/skill-rule";
 import { toolsT } from "./copy";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
@@ -115,7 +115,7 @@ export interface SkillLike {
   category?: string | null;
 }
 
-/** A rule is listed under Rules, never here (`lib/rule-skill.ts`, the one predicate). */
+/** A rule is listed under Rules, never here (`@synap-core/types/skill-rule`, the one predicate). */
 export { isRuleSkill };
 
 const CODE_KINDS: ReadonlySet<string> = new Set([

@@ -46,13 +46,42 @@ export const EVENT_SOURCES = [
 
 export type SynapEventSource = (typeof EVENT_SOURCES)[number];
 
+const SUBJECT_UUID = z.string().uuid();
+
+/**
+ * The one subject whose id is not a uuid: an owed slot of a session has no
+ * row of its own, so its transition (`slot.transition.completed`) names it
+ * `<session id>/<slot key>` (`slotSubjectId`, @synap-core/types/units), and
+ * every reader parses that spelling (`status-floor.ts`, holds `slot:`). The
+ * `events.subject_id` column is text. Every OTHER subject stays uuid-checked.
+ * Until 27 Nov 2026 the uuid check refused every slot transition's log row,
+ * so each one failed forever in the transition outbox (finding 5226a61b).
+ */
+const SLOT_SUBJECT_TYPE = "slot";
+
+/** Is `subjectId` a valid event subject for `subjectType`? */
+function isEventSubjectId(
+  subjectType: string | undefined,
+  subjectId: string
+): boolean {
+  if (subjectType !== SLOT_SUBJECT_TYPE) {
+    return SUBJECT_UUID.safeParse(subjectId).success;
+  }
+  const slash = subjectId.indexOf("/");
+  return (
+    slash > 0 &&
+    slash < subjectId.length - 1 &&
+    SUBJECT_UUID.safeParse(subjectId.slice(0, slash)).success
+  );
+}
+
 /**
  * SynapEvent v1 Schema
  *
  * The immutable contract that all events must satisfy.
  * This schema is validated at the EventRepository level before insertion.
  */
-export const SynapEventSchema = z.object({
+const SynapEventFields = z.object({
   // Event Identity
   id: z.string().uuid(),
   version: z.literal("v1"), // Schema version for future migrations
@@ -61,7 +90,9 @@ export const SynapEventSchema = z.object({
   type: z.string().min(1).max(128), // e.g., 'note.creation.requested', 'task.completed'
 
   // Event Sourcing: What is this event about?
-  subjectId: z.string().uuid().optional(), // Optional for system events
+  // Optional for system events. A uuid, except a slot's `<session id>/<slot
+  // key>` (`isEventSubjectId` above).
+  subjectId: z.string().optional(),
   subjectType: z.string().optional(), // e.g., 'tag', 'entity', 'document'
 
   // Event Data (the core payload - what happened)
@@ -138,6 +169,19 @@ export const SynapEventSchema = z.object({
   // daily write count skips it. Declared HERE for the same reason as the
   // fields above: `EventRepository.append` strips what this schema omits.
   ceilingExempt: z.boolean().optional(),
+});
+
+export const SynapEventSchema = SynapEventFields.superRefine((event, ctx) => {
+  if (event.subjectId === undefined) return;
+  if (isEventSubjectId(event.subjectType, event.subjectId)) return;
+  ctx.addIssue({
+    code: "custom",
+    path: ["subjectId"],
+    message:
+      event.subjectType === SLOT_SUBJECT_TYPE
+        ? "a slot's subjectId is `<session uuid>/<slot key>`"
+        : "subjectId must be a uuid",
+  });
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;

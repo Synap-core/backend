@@ -29,6 +29,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  channels,
   focusSessions,
   playbookRuns,
   messages,
@@ -93,6 +94,8 @@ const statusOf = async (id: string) =>
 
 beforeAll(async () => {
   for (const t of [
+    // The run reaper reads the session's room (a post is activity).
+    channels,
     focusSessions,
     playbookRuns,
     messages,

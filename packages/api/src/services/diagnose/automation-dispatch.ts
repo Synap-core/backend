@@ -9,7 +9,10 @@
  *   aiDispatches24h — `automation_runs.ai_dispatch_count` summed over 24h, next
  *                     to the rule's daily cap (`maxAiDispatchesPerDay`);
  *   childRuns7d / childFailed7d — playbook runs whose session names one of the
- *                     rule's runs (`metadata.automationRunId`, indexed by 0303).
+ *                     rule's runs (`metadata.automationRunId`, indexed by 0303);
+ *   childStopped7d — those that stopped at their token budget or step limit
+ *                     (`failed` + `stop_reason = 'budget'`): nothing broke, so
+ *                     they are counted apart, never in childFailed7d.
  *
  * Only automations with a run in the last 7 days are listed. Visibility is the
  * automations table's own floor (`userVisibleWhere`).
@@ -40,6 +43,7 @@ export interface AutomationDispatchFootprint {
   aiDispatchCapPerDay: number;
   childRuns7d: number;
   childFailed7d: number;
+  childStopped7d: number;
 }
 
 export async function automationDispatchFootprints(input: {
@@ -83,11 +87,17 @@ export async function automationDispatchFootprints(input: {
     .select({
       automationId: automationRuns.automationId,
       total: drizzleSql<number>`COUNT(${playbookRuns.id})::int`,
-      failed: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed')::int`,
+      failed: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed' AND ${playbookRuns.stopReason} IS DISTINCT FROM 'budget')::int`,
+      stopped: drizzleSql<number>`COUNT(${playbookRuns.id}) FILTER (WHERE ${playbookRuns.status} = 'failed' AND ${playbookRuns.stopReason} = 'budget')::int`,
     })
     .from(automationRuns)
     .innerJoin(
       focusSessions,
+      // The cast stays on purpose: `automation_runs` DRIVES this join (its
+      // rule ids and 7-day window), and the probe into `focus_sessions` is
+      // exactly the expression of `idx_focus_sessions_automation_run_id`
+      // (migration 0303). `uuidFromTextSql` on the metadata side would hide
+      // that index.
       drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${automationRuns.id}::text`
     )
     .innerJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
@@ -118,6 +128,7 @@ export async function automationDispatchFootprints(input: {
           : AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault,
         childRuns7d: Number(child.get(a.id)?.total ?? 0),
         childFailed7d: Number(child.get(a.id)?.failed ?? 0),
+        childStopped7d: Number(child.get(a.id)?.stopped ?? 0),
       };
     })
     .sort(

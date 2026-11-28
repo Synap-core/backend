@@ -175,6 +175,11 @@ export interface ResolveAgentGovernanceInput {
    */
   podAdminSchemaChange?: boolean;
   /**
+   * Rung 2.09 (page) — the write makes an executable HTML page
+   * (`writesHtmlPage`, resolved in `permission-check.ts`). Automation omits.
+   */
+  agentHtmlPage?: boolean;
+  /**
    * The acting channel id, when the write is evaluated in a channel context
    * (chat door — an inbound-message agent turn). Threaded to rung 2.55's
    * origin-trust resolver (`resolveOriginTrust`). Absent → no channel context →
@@ -2300,6 +2305,7 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
     possibleDuplicate: input.possibleDuplicate,
     lifecycleMove: input.lifecycleMove,
     podAdminSchemaChange: input.podAdminSchemaChange,
+    agentHtmlPage: input.agentHtmlPage,
     floorsYield,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,

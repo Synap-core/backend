@@ -1,5 +1,5 @@
 /**
- * The static checks of `surfaces.inspect` (Surfaces P7): what a framed
+ * The static checks of `surfaces.inspect`: what a framed
  * surface's stored code does that a reader will see wrong, found by reading
  * the text alone (no browser on the pod).
  *
@@ -139,7 +139,7 @@ function propertyBefore(line: string, column: number): string | null {
   return m ? m[1]! : null;
 }
 
-export function colourTokenFor(property: string | null): string {
+function colourTokenFor(property: string | null): string {
   const p = (property ?? "").toLowerCase();
   if (p.includes("shadow")) return "var(--synap-elevation-card)";
   if (p.includes("background")) return "var(--synap-background)";
@@ -150,7 +150,7 @@ export function colourTokenFor(property: string | null): string {
   return "a colour token: var(--synap-primary), var(--synap-color), var(--synap-background) or var(--synap-muted)";
 }
 
-export function fontTokenFor(value: string, line: string): string {
+function fontTokenFor(value: string, line: string): string {
   if (/mono|courier|consolas|menlo/i.test(value))
     return "var(--synap-font-mono)";
   if (/<h[1-6]\b|\bh[1-6]\b|heading|title|display/i.test(line))

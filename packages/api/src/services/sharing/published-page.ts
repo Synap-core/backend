@@ -33,12 +33,14 @@
  * public body.
  */
 
-import { and, eq } from "@synap/database";
-import type { getDb } from "@synap/database";
-import { documents, links } from "@synap/database/schema";
+import { and, eq, GrantRepository, runWithGrant } from "@synap/database";
+import type { getDb, KeyGrant } from "@synap/database";
+import { apiKeys, documents, links, proposals } from "@synap/database/schema";
 import {
   buildCellFrameCsp,
+  describeDeclaredRead,
   frameTokensWithBrand,
+  publishedReadRefusal,
   storedDeclaredReads,
 } from "@synap-core/types/cell-bridge";
 import { isUuid } from "@synap-core/types/property-render";
@@ -99,21 +101,96 @@ async function pageAnchor(
   return { kind: "document", id: documentId };
 }
 
+/** An agent in the publish chain, and the key it acted with (when known). */
+export interface PublishAgent {
+  agentUserId: string;
+  apiKeyId: string | null;
+}
+
+/**
+ * The agent whose reach the publish-time reads are NARROWED to (decision D2
+ * default, surfaces review 27 Nov 2026): the agent that proposed the publish
+ * (its proposal's key), else the agent that wrote the page (the key of the
+ * proposal that created it, `documents.source_proposal_id`). Null when no
+ * agent is in the chain: the person publishes their own page at their floor.
+ */
+async function publishAgentOf(
+  database: Db,
+  proposer: PublishAgent | null | undefined,
+  page: { agentUserId: string | null; sourceProposalId: string | null }
+): Promise<PublishAgent | null> {
+  if (proposer) return proposer;
+  if (!page.agentUserId) return null;
+  let apiKeyId: string | null = null;
+  if (page.sourceProposalId) {
+    const [row] = await database
+      .select({ apiKeyId: proposals.apiKeyId })
+      .from(proposals)
+      .where(eq(proposals.id, page.sourceProposalId))
+      .limit(1);
+    apiKeyId = row?.apiKeyId ?? null;
+  }
+  return { agentUserId: page.agentUserId, apiKeyId };
+}
+
+/**
+ * What bounds an agent's publish-time reads: its key's grant and the space
+ * the key is bound to. Null when the key cannot be found or no longer acts
+ * (revoked, inactive): then nothing is read for it, never the owner's whole
+ * floor.
+ */
+async function agentKeyReach(
+  database: Db,
+  apiKeyId: string | null
+): Promise<{ grant: KeyGrant; keyWorkspaceId: string | null } | null> {
+  if (!apiKeyId) return null;
+  const [key] = await database
+    .select({
+      workspaceId: apiKeys.workspaceId,
+      isActive: apiKeys.isActive,
+      revokedAt: apiKeys.revokedAt,
+    })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, apiKeyId))
+    .limit(1);
+  if (!key || !key.isActive || key.revokedAt) return null;
+  return {
+    grant: await new GrantRepository(database as never).resolveForKey(apiKeyId),
+    keyWorkspaceId: key.workspaceId ?? null,
+  };
+}
+
 /**
  * Run the page's declared reads as the publisher and take its brand: the
  * snapshot a publication of `documentId` keeps. Each read's refusal is kept
  * as that read's error (the page shows it); a failed brand or attachment read
  * throws (the publish fails, nothing half-published).
+ *
+ * Two bounds on top of the publisher's floor (decision D2 default):
+ *   - only a PUBLISHABLE read runs (`publishedReadRefusal`, the one
+ *     allowlist beside the declared-reads parser); any other is kept as its
+ *     error;
+ *   - when an agent is in the chain (`publishAgentOf`), each read runs with
+ *     that agent's identity, its key's grant and its key's binding, so the
+ *     public page never holds what the agent itself could not read. An agent
+ *     whose key cannot be found reads nothing.
  */
 export async function buildPublishedPage(
   database: Db,
-  args: { publisherUserId: string; documentId: string }
+  args: {
+    publisherUserId: string;
+    documentId: string;
+    /** The agent that proposed this publish, with its proposal's key. */
+    proposedBy?: PublishAgent | null;
+  }
 ): Promise<PublishedPagePayload> {
   const [doc] = await database
     .select({
       id: documents.id,
       workspaceId: documents.workspaceId,
       metadata: documents.metadata,
+      agentUserId: documents.agentUserId,
+      sourceProposalId: documents.sourceProposalId,
     })
     .from(documents)
     .where(eq(documents.id, args.documentId))
@@ -124,17 +201,57 @@ export async function buildPublishedPage(
       )
     : null;
 
-  // The publisher's own context: the frame door floors every read to it.
+  const agent =
+    doc && (declared ?? []).length > 0
+      ? await publishAgentOf(database, args.proposedBy, {
+          agentUserId: doc.agentUserId ?? null,
+          sourceProposalId: doc.sourceProposalId ?? null,
+        })
+      : null;
+  const reach = agent ? await agentKeyReach(database, agent.apiKeyId) : null;
+
+  // The publisher's own context: the frame door floors every read to it,
+  // and to the agent's key when an agent is in the chain.
   const ctx = {
     db: database,
     authenticated: true,
     userId: args.publisherUserId,
     workspaceId: doc?.workspaceId ?? null,
+    ...(agent
+      ? {
+          agentUserId: agent.agentUserId,
+          keyWorkspaceId: reach?.keyWorkspaceId ?? null,
+        }
+      : {}),
   } as unknown as Context;
 
   const reads: PublishedPageRead[] = [];
   let used = 0;
   for (const entry of declared ?? []) {
+    const refusal = publishedReadRefusal(entry);
+    if (agent && !reach) {
+      reads.push({
+        op: entry.op,
+        ...(entry.params
+          ? { params: entry.params as Record<string, string> }
+          : {}),
+        ok: false,
+        error:
+          "This page was written or proposed by an agent whose key the pod cannot find, so none of its reads are published.",
+      });
+      continue;
+    }
+    if (refusal) {
+      reads.push({
+        op: entry.op,
+        ...(entry.params
+          ? { params: entry.params as Record<string, string> }
+          : {}),
+        ok: false,
+        error: refusal,
+      });
+      continue;
+    }
     const pinned: Record<string, string> = {};
     for (const [name, value] of Object.entries(entry.params ?? {})) {
       if (typeof value === "string" && value !== "*") pinned[name] = value;
@@ -156,12 +273,15 @@ export async function buildPublishedPage(
     }
     let data: unknown;
     try {
-      data = await frameRead(ctx, {
-        surface: { kind: "document", id: args.documentId },
-        op: entry.op,
-        params: pinned,
-        workspaceId: doc?.workspaceId ?? null,
-      });
+      const read = () =>
+        frameRead(ctx, {
+          surface: { kind: "document", id: args.documentId },
+          op: entry.op,
+          params: pinned,
+          workspaceId: doc?.workspaceId ?? null,
+        });
+      // An agent in the chain: its key's grant bounds the read.
+      data = await (reach ? runWithGrant(reach.grant, read) : read());
     } catch (err) {
       reads.push({
         ...base,
@@ -195,6 +315,46 @@ export async function buildPublishedPage(
   const brandCss = context.ok ? (context.context.brand?.css ?? null) : null;
 
   return { v: 1, reads, brandCss, capturedAt: new Date().toISOString() };
+}
+
+/**
+ * What publishing a page will freeze onto the public web, for the person who
+ * reviews it (surfaces review D2 / S2): each declared read as words, split by
+ * the publish allowlist. `undeclared` when the page declares nothing (its
+ * public snapshot is then empty).
+ */
+export interface PageReadsForReview {
+  /** Reads whose answers will be frozen into the public page. */
+  public: string[];
+  /** Reads the publish door will NOT run, each with why. */
+  withheld: string[];
+  undeclared: boolean;
+}
+
+export async function pageReadsForReview(
+  database: Db,
+  documentId: string
+): Promise<PageReadsForReview> {
+  const [doc] = await database
+    .select({ metadata: documents.metadata })
+    .from(documents)
+    .where(eq(documents.id, documentId))
+    .limit(1);
+  const declared = storedDeclaredReads(
+    (doc?.metadata as Record<string, unknown> | null)?.reads
+  );
+  const out: PageReadsForReview = {
+    public: [],
+    withheld: [],
+    undeclared: declared === null,
+  };
+  for (const entry of declared ?? []) {
+    const refusal = publishedReadRefusal(entry);
+    if (refusal)
+      out.withheld.push(`${describeDeclaredRead(entry)}: ${refusal}`);
+    else out.public.push(describeDeclaredRead(entry));
+  }
+  return out;
 }
 
 /** Decode a stored payload, fail-closed: anything unreadable is null (the page then has no data). */

@@ -91,8 +91,8 @@ const READERS: Record<string, Handling> = {
     why: "GET /rules lists a prose rule (form 'prose'), as skills.listRules does",
     evidence: [/readRuleView\(/],
   },
-  "apps/pod-admin/lib/rule-skill.ts": {
-    why: "pod admin's Rules list: the category alone makes a skill a rule (plus the rules/ slug stopgap, kept until the pod data is marked)",
+  "packages/types/src/skill-rule/index.ts": {
+    why: "the one rule predicate (pod admin's Tools and Rules lists, a skill's page, the proposal titles): the category alone makes a skill a rule (plus the rules/ slug stopgap, kept until the pod data is marked)",
     evidence: [/skill\.category === RULE_CATEGORY/],
   },
 

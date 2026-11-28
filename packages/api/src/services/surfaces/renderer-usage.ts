@@ -126,12 +126,7 @@ export interface RendererUsageReport {
    * entity floor. `null` when the count could not be taken.
    */
   perEntityOverrideCount: number | null;
-  /**
-   * The stores that could not be read, with their error: NOT "no bindings".
-   * Always set by this builder; optional on the type because the field joined
-   * an existing door's output (an older pod omits it, and typed fixtures in
-   * dependent repos predate it).
-   */
+  /** Stores that could not be read: not "no bindings". */
   unavailable?: { source: string; error: string }[];
 }
 

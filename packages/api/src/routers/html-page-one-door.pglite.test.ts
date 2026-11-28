@@ -1,5 +1,5 @@
 /**
- * ONE HTML WRITE DOOR (founder decision, 27 Nov 2026, session 53d7cbed):
+ * ONE HTML WRITE DOOR:
  * every entry point that makes an HTML page writes it through the HTML page
  * door (`createHtmlPage`), so every page is stored the same way and refused
  * for the same reasons.
@@ -713,5 +713,48 @@ describe("a placement is of the caller's own html page of the space, under the s
     expect(cellIdPlaced).not.toBe(foreignId);
     expect((await cellOf(cellIdPlaced!)).source_document_id).toBe(data.id);
     expect(await cellOf(foreignId)).toEqual(foreignBefore);
+  });
+
+  it("two placements of one page at once make ONE cell", async () => {
+    const page = await pageIn(WS, OWNER, "Placed twice at once");
+    const [a, b] = await Promise.all([
+      placeHtmlPage({ documentId: page.id, workspaceId: WS, userId: OWNER }),
+      placeHtmlPage({ documentId: page.id, workspaceId: WS, userId: OWNER }),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect(await cellsOf(page.id)).toHaveLength(1);
+  });
+
+  it("a caller's id taken by another cell as it is placed: a clean 409, nothing placed", async () => {
+    const page = await pageIn(WS, OWNER, "Id taken meanwhile");
+    const id = randomUUID();
+    // Another cell takes the id between the check and the insert.
+    await h.client!.exec(`
+      create or replace function take_cell_id() returns trigger
+        language plpgsql as $$ begin
+          if new.cell_type = 'html-embed' then
+            insert into cell_instances (id, workspace_id, user_id, cell_type)
+            values (new.id, new.workspace_id, new.user_id, 'entity-header');
+          end if;
+          return new;
+        end $$;
+      create trigger take_cell_id before insert on cell_instances
+        for each row execute function take_cell_id();
+    `);
+    try {
+      await expect(
+        placeHtmlPage({
+          id,
+          documentId: page.id,
+          workspaceId: WS,
+          userId: OWNER,
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    } finally {
+      await h.client!.exec(
+        `drop trigger if exists take_cell_id on cell_instances`
+      );
+    }
+    expect(await cellsOf(page.id)).toEqual([]);
   });
 });

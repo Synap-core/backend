@@ -61,10 +61,7 @@ import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { readUsageForCaller } from "../usage/read-usage.js";
 import { TRPCError } from "@trpc/server";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
-import {
-  collapseProposalsToClusters,
-  type ClusterInputRow,
-} from "../proposals/fingerprint.js";
+import { findProposalTwins } from "../proposals/twin-key.js";
 import { AGENT_PENDING_PROPOSAL_CAP } from "../../utils/permission-check.js";
 import {
   getObjectGraph,
@@ -87,6 +84,8 @@ import {
   type CapabilityShadow,
 } from "../capabilities/capability-shadows.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
+import { summarizeProposalClass } from "./review-queue.js";
+import { RUNNING_RUNS_LIMIT, cappedCount } from "./stall.js";
 import { readPlaybookSkillReadiness } from "../playbooks/playbook-skill-preflight.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
@@ -902,6 +901,9 @@ async function diagnoseObject(
   }
 }
 
+/** Rows the proposal class scans for duplicate clusters (not for the count). */
+const PROPOSAL_CLASS_SCAN_LIMIT = 1000;
+
 // ── CLASS usage (0364) ───────────────────────────────────────────────────────
 
 /** Calls per key / client / conversation / class / outcome — pod admins only. */
@@ -950,37 +952,36 @@ async function diagnoseClass(
   workspaceId?: string
 ): Promise<ClassReport | { error: string }> {
   switch (type) {
-    // The review queue as a product: backlog + duplicate clusters.
+    // The review queue as a product: backlog + duplicate clusters (real twins:
+    // the same change proposed twice, `findProposalTwins`).
     case "proposal": {
+      const lensWhere = and(
+        userVisibleWhere(proposals.workspaceId, userId),
+        eq(proposals.status, ProposalStatus.PENDING),
+        workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
+      );
+      // EXACT count + oldest: the scan below is capped and feeds only the
+      // duplicate clusters, so its length is never the number reported.
+      const [exactRow] = await db
+        .select({
+          pending: drizzleSql<number>`count(*)::int`,
+          oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+        })
+        .from(proposals)
+        .where(lensWhere);
       const rows = await db
         .select({
-          id: proposals.id,
           proposalType: proposals.proposalType,
           targetType: proposals.targetType,
           targetId: proposals.targetId,
+          dedupHash: proposals.dedupHash,
           data: proposals.data,
-          createdAt: proposals.createdAt,
           workspaceId: proposals.workspaceId,
         })
         .from(proposals)
-        .where(
-          and(
-            userVisibleWhere(proposals.workspaceId, userId),
-            eq(proposals.status, ProposalStatus.PENDING),
-            workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
-          )
-        )
+        .where(lensWhere)
         .orderBy(desc(proposals.createdAt))
-        .limit(1000);
-      const clusterRows: ClusterInputRow[] = rows.map((r) => ({
-        id: r.id,
-        proposalType: r.proposalType,
-        targetType: r.targetType,
-        targetId: r.targetId,
-        data: r.data,
-        createdAt: r.createdAt,
-        workspaceId: r.workspaceId ?? null,
-      }));
+        .limit(PROPOSAL_CLASS_SCAN_LIMIT);
       // Same lens gap the GLOBAL door now names (`services/diagnose/global.ts`,
       // `mineOutsideLens`). `userVisibleWhere` is a WORKSPACE-membership
       // predicate, so a pending row whose `workspaceId` does not resolve to a
@@ -1001,33 +1002,20 @@ async function diagnoseClass(
             workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
           )
         );
-      // Clamped: the author floor is not a superset of the workspace floor (a
-      // teammate's row in a shared workspace is workspace-visible, not mine).
-      const mineOutsideLens = Math.max(0, (mineRow?.mine ?? 0) - rows.length);
-
-      const clusters = collapseProposalsToClusters(clusterRows);
-      const duplicates = clusters.filter((c) => c.count > 1);
-      const oldest = rows.length > 0 ? rows[rows.length - 1]!.createdAt : null;
-      return {
-        mode: "class",
-        type,
-        summary:
-          rows.length === 0
-            ? "No pending proposals in the review queue."
-            : `${rows.length} pending proposal(s), ${duplicates.length} duplicate cluster(s).` +
-              (mineOutsideLens > 0
-                ? ` ${mineOutsideLens} more of yours sit outside your workspace lens (unresolvable placement).`
-                : ""),
-        detail: {
-          pending: rows.length,
-          mineOutsideLens,
-          oldestCreatedAt: oldest,
-          duplicateClusters: duplicates
-            .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 20),
-        },
-      };
+      // Twins, not the review fingerprint's groups: seven runs of one delete
+      // verb on seven different notes share a capability target but are seven
+      // different proposals (finding 9ae52db7). The agent scorecard's
+      // `duplicateRate` counts with the same function.
+      const duplicates = findProposalTwins(rows);
+      const { summary, detail } = summarizeProposalClass({
+        pending: exactRow?.pending ?? 0,
+        mine: mineRow?.mine ?? 0,
+        oldestCreatedAt: exactRow?.oldest ?? null,
+        scanned: rows.length,
+        scanLimit: PROPOSAL_CLASS_SCAN_LIMIT,
+        duplicateClusters: duplicates,
+      });
+      return { mode: "class", type, summary, detail };
     }
 
     // Stuck-session list — running sessions, oldest first.
@@ -1037,8 +1025,9 @@ async function diagnoseClass(
         flowType: "session",
         status: "running",
         scope: workspaceId ? { workspaceId } : undefined,
-        limit: 100,
+        limit: RUNNING_RUNS_LIMIT,
       });
+      const capped = runs.length >= RUNNING_RUNS_LIMIT;
       const sessions = runs
         .map((r) => ({
           id: r.id,
@@ -1053,8 +1042,8 @@ async function diagnoseClass(
         summary:
           sessions.length === 0
             ? "No running sessions."
-            : `${sessions.length} running session(s); oldest ${Math.round(sessions[0]!.ageHours)}h.`,
-        detail: { running: sessions },
+            : `${cappedCount(sessions.length, capped)} running session(s); oldest ${Math.round(sessions[0]!.ageHours)}h.`,
+        detail: { running: sessions, capped },
       };
     }
 

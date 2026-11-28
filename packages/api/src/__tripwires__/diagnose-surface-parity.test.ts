@@ -47,9 +47,17 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GLOBAL = join(HERE, "../services/diagnose/global.ts");
 const CLASS = join(HERE, "../services/diagnose/index.ts");
+// The class door's proposal summary (lens gap included) is computed in
+// review-queue.ts's `summarizeProposalClass`, which index.ts calls: the class
+// surface is both files, and the call itself is asserted below.
+const CLASS_SUMMARY = join(HERE, "../services/diagnose/review-queue.ts");
 
 const globalSrc = stripComments(readFileSync(GLOBAL, "utf8"), "ts");
-const classSrc = stripComments(readFileSync(CLASS, "utf8"), "ts");
+const classDoorSrc = stripComments(readFileSync(CLASS, "utf8"), "ts");
+const classSrc =
+  classDoorSrc +
+  "\n" +
+  stripComments(readFileSync(CLASS_SUMMARY, "utf8"), "ts");
 
 describe("tripwire: diagnose's two surfaces agree", () => {
   it("scans real files — not passing over nothing", () => {
@@ -59,6 +67,8 @@ describe("tripwire: diagnose's two surfaces agree", () => {
     // would hold vacuously over an unrelated file.
     expect(globalSrc).toContain("proposals");
     expect(classSrc).toContain("proposals");
+    // The class door must actually use the summary the lens-gap checks read.
+    expect(classDoorSrc).toContain("summarizeProposalClass(");
   });
 
   it("the per-agent cap is RESOLVED, never the hardcoded base constant", () => {
@@ -104,6 +114,34 @@ describe("tripwire: diagnose's two surfaces agree", () => {
           "workspace is workspace-visible but not author-mine), so the " +
           "difference can legitimately go negative."
       ).toBe(true);
+    }
+  });
+});
+
+describe("both surfaces mean ONE thing by a duplicate proposal", () => {
+  /*
+   * FIFTH divergence: the class door listed twins (`findProposalTwins`, the
+   * same change filed twice) while the global door still marked the review
+   * GROUPING (`collapseProposalsToClusters`), which keys every capability run
+   * on the capability: seven deletes of seven different notes raised the
+   * global "duplicate" mark as one group of 7 (findings 9ae52db7, fb1e620a).
+   */
+  it("both count duplicates with the twin key, never the review grouping", () => {
+    for (const [name, src] of [
+      ["global", globalSrc],
+      ["class", classSrc],
+    ] as const) {
+      expect(
+        src,
+        `${name} diagnose must count duplicate proposals with ` +
+          "findProposalTwins (services/proposals/twin-key.ts), the key the " +
+          "other surface and the agent duplicateRate use."
+      ).toContain("findProposalTwins(");
+      expect(
+        src.includes("collapseProposalsToClusters("),
+        `${name} diagnose calls collapseProposalsToClusters: that is the ` +
+          "review inbox's GROUPING, not a duplicate count. Use findProposalTwins."
+      ).toBe(false);
     }
   });
 });

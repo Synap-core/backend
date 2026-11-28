@@ -412,7 +412,7 @@ const ALL_QUEUES = [
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   // API usage telemetry: 30-day retention of api_usage_buckets (0364).
   API_USAGE_RETENTION_QUEUE,
-  // Frame read log: 30-day retention of frame_read_log (0456, Surfaces P7).
+  // Frame read log: 30-day retention of frame_read_log (0456).
   FRAME_READ_LOG_RETENTION_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
   PUSH_RECEIPTS_QUEUE,

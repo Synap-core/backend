@@ -566,6 +566,55 @@ describe("focusSessions.get returns the continuation packet", () => {
     expectSamePacket(mcp.continuation, trpc);
   });
 
+  it("a child names the parent output it was spawned to deliver (W7 forOutput) — the same on both doors", async () => {
+    await h.client!.exec("delete from links;");
+    const parent = await seed({ owed: false });
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        parent,
+        JSON.stringify([
+          { key: "pull-request", kind: "pull_request", label: "Pull request" },
+        ]),
+      ]
+    );
+    const lane = randomUUID();
+    const gone = randomUUID();
+    const plain = randomUUID();
+    for (const [id, goal, metadata] of [
+      [lane, "Open the pull request", { forOutput: "pull-request" }],
+      [gone, "Write the notes", { forOutput: "release-notes" }],
+      [plain, "Look around", {}],
+    ] as const) {
+      await q(
+        `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+         values ($1, $2, $3, 'active', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+        [id, USER, goal]
+      );
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata)
+         values ($1, 'session', $2, 'session', $3, 'spawned_from', $4::jsonb)`,
+        [randomUUID(), id, parent, JSON.stringify(metadata)]
+      );
+    }
+
+    const trpc = (await get(parent)).continuation;
+    if (trpc.children.status !== "ok") throw new Error("children unavailable");
+    const byId = new Map(trpc.children.items.map((c) => [c.id, c]));
+    expect(byId.get(lane)).toMatchObject({
+      forOutput: "pull-request",
+      forOutputLabel: "Pull request",
+    });
+    // The parent no longer declares that key: the key, and no label.
+    expect(byId.get(gone)?.forOutput).toBe("release-notes");
+    expect(byId.get(gone)).not.toHaveProperty("forOutputLabel");
+    // Spawned for no output: both absent, never an empty string.
+    expect(byId.get(plain)).not.toHaveProperty("forOutput");
+    expect(byId.get(plain)).not.toHaveProperty("forOutputLabel");
+    const mcp = await mcpGet(parent);
+    expectSamePacket(mcp.continuation, trpc);
+  });
+
   it("parent and blockedBy arrive from the edges, owner-floored — the same on both doors", async () => {
     await h.client!.exec("delete from links;");
     const session = await seed({ owed: false });

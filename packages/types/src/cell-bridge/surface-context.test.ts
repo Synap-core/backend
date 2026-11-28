@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CELL_BRIDGE_SDK,
+  CELL_FRAME_CHANNEL_SCRIPT,
   FRAME_NO_CONTEXT,
   SYNAP_WIDGET_SDK,
   brandFrameCss,
@@ -44,8 +45,10 @@ const CONTEXT: SurfaceContext = {
 
 /**
  * Runs an in-frame SDK against a fake frame window whose parent is a real
- * host: every message the frame posts goes to `host`, every answer comes back
- * to the frame's listeners from its parent.
+ * host: the reply channel's frame half runs first, as in every real frame
+ * (`CELL_FRAME_CHANNEL_SCRIPT`), so every message the frame posts goes to
+ * `host`, and every answer comes back on the frame's port, re-dispatched to
+ * its listeners as from its parent.
  */
 function wire(
   sdk: string,
@@ -55,31 +58,70 @@ function wire(
     source: unknown;
     origin: string;
     data: unknown;
+    ports?: ReadonlyArray<unknown>;
   }) => Promise<void>
 ) {
   const listeners: Array<(e: { source: unknown; data: unknown }) => void> = [];
+  class Port {
+    other: Port | null = null;
+    onmessage: ((e: { data: unknown }) => void) | null = null;
+    postMessage(data: unknown) {
+      this.other?.onmessage?.({ data });
+    }
+  }
+  class Channel {
+    port1 = new Port();
+    port2 = new Port();
+    constructor() {
+      this.port1.other = this.port2;
+      this.port2.other = this.port1;
+    }
+  }
+  class Message {
+    data: unknown;
+    source: unknown;
+    constructor(_t: string, init: { data: unknown; source: unknown }) {
+      this.data = init.data;
+      this.source = init.source;
+    }
+  }
   const parent = {
-    postMessage: (msg: unknown) => {
-      void host({ source: frameWindow, origin: "null", data: msg });
+    postMessage: (msg: unknown, _target: string, transfer?: unknown[]) => {
+      void host({
+        source: frameWindow,
+        origin: "null",
+        data: msg,
+        ports: transfer ?? [],
+      });
     },
   };
+  // Nothing may reach the frame on its window: answers ride the port.
   const frameWindow: CellBridgeTarget = {
-    postMessage: (msg: unknown) =>
-      listeners.forEach((fn) => fn({ source: parent, data: msg })),
+    postMessage: () => {
+      throw new Error("a host posted to the frame's window");
+    },
   };
   const host = makeHost(() => frameWindow);
   const win: Record<string, unknown> = {
     parent,
+    MessageChannel: Channel,
+    MessageEvent: Message,
+    setTimeout: () => {},
     addEventListener: (
       type: string,
       fn: (e: { source: unknown; data: unknown }) => void
     ) => {
       if (type === "message") listeners.push(fn);
     },
+    dispatchEvent: (e: { source: unknown; data: unknown }) => {
+      listeners.forEach((fn) => fn(e));
+      return true;
+    },
     // SYNAP_WIDGET_SDK posts through `window.parent.postMessage`.
     document: { documentElement: { setAttribute: () => {} } },
   };
-  new Function("window", "document", sdk)(win, win.document);
+  for (const script of [CELL_FRAME_CHANNEL_SCRIPT, sdk])
+    new Function("window", "document", script)(win, win.document);
   return win;
 }
 

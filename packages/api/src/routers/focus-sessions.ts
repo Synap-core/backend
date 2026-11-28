@@ -2079,6 +2079,14 @@ export const focusSessionsRouter = router({
          * is reported on `parentLink`, never silently dropped.
          */
         parentSessionId: z.string().uuid().optional(),
+        /**
+         * With `parentSessionId`: the key of the parent's outcome this session
+         * delivers (W7), as on the MCP and Hub start doors. Checked and
+         * recorded by `createFocusSession` (blank or parentless is refused;
+         * the edge records it only when the caller may write the parent and
+         * the parent declares it); `parentLink.forOutput` says which.
+         */
+        forOutput: z.string().min(1).max(120).optional(),
         /** Sessions this one waits on — `blocked_by` edges, reported per id. */
         blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
         templateId: z.string().optional(),
@@ -2148,6 +2156,7 @@ export const focusSessionsRouter = router({
         channelId: input.channelId ?? null,
         agentIds: input.agentIds,
         parentSessionId: input.parentSessionId ?? null,
+        forOutput: input.forOutput ?? null,
         blockedBySessionIds: input.blockedBySessionIds ?? [],
         targets: input.targets,
         forceCreate: input.forceCreate,

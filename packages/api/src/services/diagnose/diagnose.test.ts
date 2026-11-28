@@ -173,14 +173,18 @@ describe("computeAgentScorecard", () => {
     );
   });
 
-  it("derives duplicateRate from the shared structural fingerprint", () => {
-    // Three identical "create company Acme" attempts + one distinct → 3 of 4
-    // land in a size>1 cluster.
+  it("derives duplicateRate from the twin key: the same change filed again", () => {
+    // Three attempts at the same "create company Acme" (each with its own
+    // minted target id, keys in another order) + one distinct → 3 of 4 have
+    // a twin.
     const rows: ScorecardProposalRow[] = [
-      proposalRow({ data: { name: "Acme" }, targetId: "x1" }),
-      proposalRow({ data: { name: "acme" }, targetId: "x2" }),
-      proposalRow({ data: { name: " Acme " }, targetId: "x3" }),
-      proposalRow({ data: { name: "Globex" }, targetId: "x4" }),
+      proposalRow({ data: { name: "Acme", kind: "company" }, targetId: "x1" }),
+      proposalRow({ data: { kind: "company", name: "Acme" }, targetId: "x2" }),
+      proposalRow({ data: { name: "Acme", kind: "company" }, targetId: "x3" }),
+      proposalRow({
+        data: { name: "Globex", kind: "company" },
+        targetId: "x4",
+      }),
     ];
     const card = computeAgentScorecard(rows, {
       agentId: "a",
@@ -189,6 +193,44 @@ describe("computeAgentScorecard", () => {
       pendingCount: 0,
     });
     expect(card.rates.duplicateRate).toBeCloseTo(0.75, 5);
+  });
+
+  // Finding 9ae52db7: every run of one capability shares the capability as
+  // its target, so the review fingerprint read seven deletes of seven
+  // different notes as one cluster of 7, and the card as 100% duplicates.
+  const deleteRun = (noteId: string) =>
+    proposalRow({
+      proposalType: "capability.run",
+      targetType: "capability",
+      targetId: "cap-delete",
+      data: { verbId: "entities.delete", params: { entityId: noteId } },
+    });
+
+  it("seven deletes of seven different notes are not duplicates", () => {
+    const rows = Array.from({ length: 7 }, (_, i) => deleteRun(`note-${i}`));
+    const card = computeAgentScorecard(rows, {
+      agentId: "a",
+      agentName: null,
+      agentType: null,
+      pendingCount: 0,
+    });
+    expect(card.rates.duplicateRate).toBe(0);
+  });
+
+  it("the same delete of the same note proposed twice counts both", () => {
+    const rows = [
+      deleteRun("note-a"),
+      deleteRun("note-a"),
+      deleteRun("note-b"),
+      deleteRun("note-c"),
+    ];
+    const card = computeAgentScorecard(rows, {
+      agentId: "a",
+      agentName: null,
+      agentType: null,
+      pendingCount: 0,
+    });
+    expect(card.rates.duplicateRate).toBe(0.5);
   });
 
   it("reads the duplicate rate from the newest DUPLICATE_SAMPLE_LIMIT rows and divides by the sample", () => {
@@ -285,6 +327,44 @@ describe("summarizeGlobalHealth", () => {
       failedTotal: 273,
       windowDays: 7,
     });
+  });
+
+  it("names flows stopped at their budget as information: the section stays ok", () => {
+    const report = summarizeGlobalHealth(
+      { ...clean, budgetStopped: { flows: 2, runs: 5 } },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "failed_flows")!;
+    expect(section.status).toBe("ok");
+    expect(section.headline).toBe(
+      "No flow failed in the last 7 days; 2 flow(s) stopped at their budget (not failures)"
+    );
+    expect(section.detail).toMatchObject({
+      failingFlows: 0,
+      stoppedFlows: 2,
+      stoppedRuns: 5,
+    });
+    expect(report.status).toBe("ok");
+  });
+
+  it("marks duplicate proposals by twins, naming the copies", () => {
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        duplicateClusters: [
+          { targetLabel: "Delete note A", count: 2 },
+          { targetLabel: "Set status", count: 3 },
+        ],
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find(
+      (s) => s.key === "duplicate_proposals"
+    )!;
+    expect(section.status).toBe("attention");
+    expect(section.headline).toBe(
+      "2 pending proposal(s) filed more than once (5 copies)"
+    );
   });
 
   it("rolls up to degraded when a run is stuck", () => {
@@ -551,13 +631,13 @@ describe("capabilities section — counts verbs awaiting enable", () => {
     expect(s.headline).toBe(
       "4 verb(s) in 2 capability(ies) not turned on — they refuse to run until turned on"
     );
-    // `unapproved` survives only as the desktop reader's alias of the verb-based
-    // container count — never the container flag.
+    // The old `unapproved` alias is gone: no reader of it is left (the desktop
+    // reads `verbsAwaitingEnable`).
     expect(s.detail).toMatchObject({
       verbsAwaitingEnable: 4,
       capabilitiesAwaitingEnable: 2,
-      unapproved: 2,
     });
+    expect(s.detail).not.toHaveProperty("unapproved");
     expect(s.detail).not.toHaveProperty("notes");
   });
 

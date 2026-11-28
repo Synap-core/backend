@@ -12,15 +12,17 @@
  *   - its `origin` is "null": the opaque origin of the sandboxed srcdoc. A
  *     page that navigated its frame to a real address (https://…) no longer
  *     has it, so the bridge is shut to it even before the host notices;
- *   - it parses as a bridge message (`parseCellBridgeMessage`).
+ *   - it parses as a bridge message (`parseCellBridgeMessage`), or it is the
+ *     frame's `synap:hello` handing over its reply port (`frame-channel.ts`).
  * Then: `synap:context` is answered with the host's context (`context()`,
  * frame contract v3), or an error when the host gives none; every write is
  * refused (`CELL_BRIDGE_WRITE_REFUSED`); an op outside
  * the shared table is refused; an allowed op is read with only its own params
  * (`pickBridgeParams`), by `read` (the viewer's own session, the host's lens).
- * The answer is posted back to that same window, only while it is still the
- * frame's, with targetOrigin "*" — an opaque-origin frame has no origin to
- * name; what is posted is only the answer the page asked for.
+ * The answer goes back on the PORT the asking document handed over in its
+ * hello (`frameReplyTo`), only while the frame is still this host's: never
+ * to the frame's window with targetOrigin "*", which a page that navigated
+ * its own frame away would still receive (security review H1, 27 Nov 2026).
  *
  * A failed read is answered as an ERROR the page can show, never as an empty
  * answer. An answer too large to hand over is an error too, never a cut list.
@@ -43,6 +45,7 @@ import {
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "./read-ops.js";
+import { acceptFrameHello, frameReplyTo } from "./frame-channel.js";
 
 /** What the host posts to: the frame's `contentWindow`. */
 export interface CellBridgeTarget {
@@ -54,6 +57,8 @@ export interface CellBridgeEventLike {
   source: unknown;
   origin: string;
   data: unknown;
+  /** The ports the message transferred: a hello's reply port. */
+  ports?: ReadonlyArray<unknown>;
 }
 
 export interface CellBridgeHostOptions {
@@ -154,13 +159,16 @@ export function createCellBridgeHost(options: CellBridgeHostOptions) {
     const frame = options.frameWindow();
     if (!frame || event.source !== frame) return;
     if (event.origin !== "null") return;
+    if (acceptFrameHello(frame, event)) return;
     const msg = parseCellBridgeMessage(event.data);
     if (!msg) return;
 
+    // The asking document's own port, captured before the read runs.
+    const answer = frameReplyTo(frame);
     const reply = (message: CellBridgeHostMessage) => {
       // The frame may have been reloaded or torn down while the read ran.
       if (options.frameWindow() !== frame) return;
-      frame.postMessage(message, "*");
+      answer(message);
     };
 
     if (msg.type === "synap:context") {

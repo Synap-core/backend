@@ -53,8 +53,7 @@ export interface ViewIdentity {
  *      `"installed"` (founder decision on backend#1290, 23 Nov 2026: "Trusted +
  *      installed write"). Owning the view does NOT lift it: a `generated` cell
  *      (or a type key with no row) drawing the person's own view runs code
- *      nobody vouched for, and its writes propose (Surfaces P0-fix, finding
- *      d3f3e0df: step 1 used to short-circuit this).
+ *      nobody vouched for, and its writes propose.
  *   2. No `typeKey`: the view is persisted and authored by the acting user
  *      (`views.userId === userId`).
  *

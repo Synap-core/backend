@@ -13,6 +13,7 @@ import { ReceiverShell, type ReceiverWidth } from "../_lib/receiver-shell";
 import { PageSkeleton } from "../(admin)/components/page-header";
 import { ObjectPage, type ObjectPageProps } from "../_lib/object/object-page";
 import type { LoadFailure } from "../_lib/object/load-failure";
+import type { ObjectCrumb } from "../_lib/object/object-header";
 import { OpenInAppLink } from "../_lib/object/open-in-app-link";
 import { objectReadsWide } from "../_lib/object/object-width";
 import type { ObjectFrame } from "../_lib/object/views/object-frame";
@@ -83,12 +84,15 @@ export function OpenMessage({
   message,
   chip,
   appLink,
+  breadcrumb,
 }: {
   kind: string;
   title: string;
   message: string;
   chip: string;
   appLink?: { type: string; id: string };
+  /** The trail back, when the page opened from another object. */
+  breadcrumb?: ObjectCrumb[];
 }) {
   return (
     <OpenObject
@@ -98,6 +102,7 @@ export function OpenMessage({
         title,
         summary: message,
         status: { kind: "unknown", label: chip },
+        breadcrumb,
         secondaryActions: appLink ? (
           <OpenInAppLink type={appLink.type} id={appLink.id} />
         ) : undefined,
@@ -110,10 +115,12 @@ export function OpenFailure({
   kind,
   failure,
   id,
+  breadcrumb,
 }: {
   kind: string;
   failure: LoadFailure;
   id: string;
+  breadcrumb?: ObjectCrumb[];
 }) {
   return (
     <OpenMessage
@@ -122,6 +129,7 @@ export function OpenFailure({
       message={failure.message}
       chip={failure.chip}
       appLink={{ type: kind, id }}
+      breadcrumb={breadcrumb}
     />
   );
 }

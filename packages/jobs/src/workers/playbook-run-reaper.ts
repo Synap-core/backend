@@ -15,7 +15,10 @@
  *
  * Staleness signal: `playbook_runs` has no `updatedAt`, so "actively worked" is
  * read off the linked focus_sessions.updatedAt (every real step touches it) —
- * the same activity signal `focus-session-reaper` keys on. A run older than the
+ * the same activity signal `focus-session-reaper` keys on — OR a post by a
+ * person or an agent in the session's own room (founder Q14, finding
+ * c573d32d: a lane that only posts in its room never moves `updatedAt`, and
+ * was failed while it worked). A run older than the
  * threshold whose session is NO LONGER active/paused-and-fresh is presumed
  * orphaned and force-failed; a genuinely long external-agent run that keeps its
  * session warm is EXEMPT. The threshold is generous (24h) precisely because an
@@ -36,7 +39,11 @@
  * progress 90 landed six hours after the reaper failed its run. Such a run is
  * marked `stale` with its session (not terminal: no `completedAt`, no parent
  * settle, the session stays open), and the next write attributed to that
- * session revives both (`reviveStaleSession`, api).
+ * session revives both (`reviveStaleSession`, api). A run an AGENT holds
+ * (`holder.kind = 'agent'`) on a session bound to no client is the same
+ * external agent: a wave's lane carries no client key, because its lead's
+ * conversation keeps it (`session-client-binding.ts`). It goes stale, never
+ * failed (founder Q14).
  *
  * A RUN NOBODY CLAIMED is `blocked`, never failed. A run is born `queued`
  * with its holder and is `running` only once that holder claims it. Past its
@@ -63,12 +70,18 @@ import {
   stageRunAgentLiveWhere,
   setRunStatus,
   setSessionStatus,
+  MessageAuthorType,
 } from "@synap/database";
+import { SESSION_ROOM_CONTEXT_TYPE } from "@synap/database/channel-visibility";
 import { createLogger } from "@synap-core/core";
 import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
 import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import type { RunHolder } from "@synap-core/types/units";
-import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import {
+  passedOverLine,
+  SESSION_POST_META_KEY,
+  type RunOn,
+} from "@synap-core/types/agents";
 import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
@@ -187,18 +200,46 @@ const STALE_RUN_ERROR_MESSAGE =
 
 /**
  * A run is still being ACTIVELY WORKED (and must NOT be reaped) iff its session
- * is active/paused AND was touched within the stale window. Referencing
+ * is active/paused AND was touched within the window, or its ROOM was: a
+ * person or an agent posted in it (founder Q14, finding c573d32d). An agent
+ * that reports in its room every 20 minutes is working, although a room post
+ * never moves the session's `updatedAt`. Referencing
  * `playbook_runs.session_id` correlates this to the UPDATE target. A run with a
  * null/terminal/stale/quiet session makes the EXISTS false → NOT EXISTS true →
  * reapable. Interval arithmetic in SQL (no bound Date param — postgres.js 3.4.8
  * crashes on Date binds on the pod image, same as automation-run-reaper).
+ *
+ * The room post that counts is narrow, so a dead run is never kept alive by
+ * someone else's words:
+ *   • the session's OWN room (`contextObjectType = 'focus_session'`, its id):
+ *     a borrowed channel other work also posts in is not its activity;
+ *   • written by a person or an agent: the pod's own notices (`bot`: recall,
+ *     dispatch, run summaries, status notices) are not;
+ *   • not a coordination post from another session (`sessionPost` stamp): a
+ *     lead writing to a lane says nothing about the lane's agent;
+ *   • not deleted, not ephemeral.
+ * Read on `messages_channel_timestamp_idx` (channel_id, timestamp).
  */
 function sessionQuietFor(hours: number) {
   return drizzleSql`NOT EXISTS (
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
-    AND fs.updated_at > now() - (${hours}::int * interval '1 hour')
+    AND (
+      fs.updated_at > now() - (${hours}::int * interval '1 hour')
+      OR EXISTS (
+        SELECT 1 FROM channels room
+        JOIN messages m ON m.channel_id = room.id
+        WHERE room.id = fs.channel_id
+          AND room.context_object_type = ${SESSION_ROOM_CONTEXT_TYPE}
+          AND room.context_object_id = fs.id
+          AND m.timestamp > now() - (${hours}::int * interval '1 hour')
+          AND m.author_type IN (${MessageAuthorType.HUMAN}, ${MessageAuthorType.AI_AGENT})
+          AND m.deleted_at IS NULL
+          AND m.ephemeral IS NOT TRUE
+          AND (m.metadata -> ${SESSION_POST_META_KEY}::text) IS NULL
+      )
+    )
 )`;
 }
 
@@ -239,6 +280,13 @@ export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
 );
 
 /**
+ * A run with no holder reads as Synap AI's, as in {@link RUN_UNCLAIMED}. The
+ * `coalesce` is load-bearing: a NULL here would make `NOT RUN_EXTERNAL_HOLDER`
+ * NULL and drop every holder-less run from the IS window.
+ */
+const AGENT_HOLDER: RunHolder["kind"] = "agent";
+
+/**
  * The run is held by an EXTERNAL agent, not by a worker the pod launched:
  *   • `executor = 'external-agent'` — dispatched through an agent binding, or
  *   • its session was OPENED BY an external key-auth client: `metadata.clientKey`
@@ -248,10 +296,24 @@ export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
  *     `agent:<id>` fallback instead. This arm is what catches a session an
  *     agent STARTED from a playbook (`start_session` + `templateId`): that run
  *     copies the playbook's `executor` — `is-agent` on every playbook the pod
- *     has — although nothing was dispatched to the IS.
- * A run `runPlaybook` dispatched to the IS matches neither (its session is
- * minted by `instantiateSession`, which stamps no client) and keeps the
- * failure verdict.
+ *     has — although nothing was dispatched to the IS; or
+ *   • an AGENT holds it (`holder.kind = 'agent'`) and its session is bound to
+ *     NO client (no `metadata.clientKey`): the agent that started it from a
+ *     conversation that keeps another session (a wave's lane, whose lead
+ *     holds the conversation: `decideNewSessionClientKey`), or the agent it
+ *     was handed to. Founder Q14: such a session goes stale, never failed;
+ *     giving lanes a client key was the rejected option (a client key is an
+ *     attachment, not a holder).
+ * A run `runPlaybook` dispatched to the IS matches none (its session is
+ * minted by `instantiateSession`, which stamps no client, and its holder is
+ * `synap_ai`) and keeps the failure verdict. So does an automation's run:
+ * its session carries the automation's `startedByAgentId` stamp and no client
+ * key too, but its run is held by `synap_ai`, which is why the holder — not
+ * the `startedByAgentId` stamp — names an agent-held run here. A session the
+ * IS itself starts carries its `agent:<id>` / `is:` client key, so a run it
+ * holds as an agent keeps the failure verdict as well. Stated limit: a planned
+ * child the IS starts under its OWN session is bound to no client (the lane
+ * rule), so its run waits the 24-hour window and goes stale.
  *
  * AND its session is still OPEN (active / paused / stale): `stale` promises a
  * revival, and only an open session can be written to again. A run under a
@@ -263,6 +325,14 @@ const RUN_EXTERNAL_HOLDER = drizzleSql`(
     SELECT 1 FROM focus_sessions fs
     WHERE fs.id = ${playbookRuns.sessionId}
       AND fs.metadata ->> 'clientKey' LIKE 'key:%'
+  )
+  OR (
+    coalesce(${playbookRuns.holder} ->> 'kind', 'synap_ai') = ${AGENT_HOLDER}
+    AND EXISTS (
+      SELECT 1 FROM focus_sessions fs
+      WHERE fs.id = ${playbookRuns.sessionId}
+        AND fs.metadata ->> 'clientKey' IS NULL
+    )
   )
 )`;
 

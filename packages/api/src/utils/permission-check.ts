@@ -19,6 +19,11 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import {
+  skillObjectKind,
+  skillTitleName,
+  type RuleSkillLike,
+} from "@synap-core/types/skill-rule";
 import { spacesCoveredWhole } from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
@@ -173,6 +178,7 @@ import {
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   classifySettingSensitivity,
+  writesHtmlPage,
   type AgentPolicyInput,
   type ChannelCapabilityGrant,
   type GovernedWritePair,
@@ -1458,6 +1464,8 @@ interface AnonymousPolicyFacts {
     | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
+  /** rung 2.09 (page) — the AI write makes an executable HTML page (`writesHtmlPage`). */
+  agentHtmlPage: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
   governanceRuleVerdict: "auto" | "propose" | "deny" | undefined;
   /** rung 2.8 attribution — the rule behind the verdict (echoed on execute, never decides). */
@@ -1501,6 +1509,8 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *   2.06 ARBITRARY EXEC    — FIRES (previously hand-mirrored here).
  *   2.07 POD-ADMIN SCHEMA  — FIRES. Resolved by 4d on `userId`, the human the
  *                            write acts for — not on an agent row.
+ *   2.09 HTML PAGE         — FIRES. An unattributed AI write of an executable
+ *                            HTML page is reviewed like an agent's (D1).
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
  *   2.1  possibleDuplicate — FIRES (an AI create with a possible twin).
@@ -1561,6 +1571,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     possibleDuplicate: facts.possibleDuplicate,
     lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
+    agentHtmlPage: facts.agentHtmlPage,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
     governanceRuleNamesWrite: facts.governanceRuleNamesWrite,
@@ -2046,6 +2057,16 @@ async function evaluatePermission(
         podAdminSchemaChange = true;
       }
     }
+    // An AI write that makes an executable HTML page is always reviewed
+    // (rung 2.09, decision D1 default): one classification of the write's
+    // data, whatever door it came through. A person's own page never is.
+    const agentHtmlPage =
+      isAiWrite &&
+      writesHtmlPage(
+        subjectType,
+        action,
+        data as Record<string, unknown> | undefined
+      );
 
     // Session-scoped force-propose: an unattended propose-only playbook's session
     // (e.g. CRM hygiene) stamps `metadata.governance.forceProposeWrites` so every
@@ -2233,6 +2254,7 @@ async function evaluatePermission(
         heldAsDraft: opts.heldAsDraft,
         ...(opts.ruleSubject ? { ruleSubject: opts.ruleSubject } : {}),
         podAdminSchemaChange,
+        agentHtmlPage,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
         // a would-be-auto write from an untrusted (external / bridge) channel.
@@ -2781,6 +2803,7 @@ async function evaluatePermission(
           possibleDuplicate: isAgentPossibleDuplicate,
           lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
+          agentHtmlPage,
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,
           governanceRuleNamesWrite: ruleMatch?.namesWrite,
@@ -3657,10 +3680,14 @@ export function buildProposalSummary(
   const composite = labelFromOperations(
     (data as { operations?: unknown }).operations
   );
+  // `targetObjectKind` is what the gate read the target as when its kind is
+  // not its table (a skill that is a rule: `resolveSkillObjectKind`).
   const objectKind =
     typeof data.profileSlug === "string" && data.profileSlug
       ? data.profileSlug
-      : (composite?.objectKind ?? subjectType);
+      : (composite?.objectKind ??
+        payloadName(data.targetObjectKind) ??
+        subjectType);
   // A FOCUS SESSION is named by `resolveSessionTitle` — the ONE display-name
   // door — not by picking `goal` out of the chain below.
   //
@@ -4621,6 +4648,13 @@ async function createProposal(args: {
     targetId,
     data
   );
+  // A skill is named as what it IS: a rule reads `Update Rule "work-units"`,
+  // never "Update Tool" (proposal 0a641510). Display only: the summary input
+  // carries it, the stored payload the executor replays does not.
+  const targetObjectKind =
+    singularType === "skill"
+      ? await resolveSkillObjectKind(targetId, data)
+      : undefined;
   const spaceNames = await resolveSpaceOpNames(
     singularType,
     action,
@@ -4631,6 +4665,7 @@ async function createProposal(args: {
   const summary = buildProposalSummary(singularType, action, {
     ...data,
     ...(targetName ? { targetName } : {}),
+    ...(targetObjectKind ? { targetObjectKind } : {}),
     ...spaceNames,
   });
 
@@ -5376,6 +5411,51 @@ export async function captureEntityPreviousData(
   }
 }
 
+/** What a skill's title reads of its row: its name and what makes it a rule. */
+async function readSkillTitleRow(
+  targetId: string
+): Promise<(RuleSkillLike & { name: string }) | undefined> {
+  const [skill] = await db
+    .select({
+      name: skills.name,
+      slug: skills.slug,
+      category: skills.category,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(eq(skills.id, targetId))
+    .limit(1);
+  return skill;
+}
+
+/**
+ * The object kind a skill proposal names (`skillObjectKind`: "rule" or
+ * "skill"), read from the row as the reviewer knows it now; a create (no row
+ * yet) is judged on the payload it will write. Title only: a failed read
+ * names it a skill, it never blocks the proposal.
+ */
+export async function resolveSkillObjectKind(
+  targetId: string,
+  data: Record<string, unknown>
+): Promise<"rule" | "skill"> {
+  if (isLikelyUUID(targetId)) {
+    try {
+      const skill = await readSkillTitleRow(targetId);
+      if (skill) return skillObjectKind(skill);
+    } catch (err) {
+      logger.warn(
+        { err, targetId },
+        "resolveSkillObjectKind: skill lookup failed"
+      );
+    }
+  }
+  return skillObjectKind({
+    category: typeof data.category === "string" ? data.category : null,
+    metadata: data.metadata,
+    slug: typeof data.slug === "string" ? data.slug : null,
+  });
+}
+
 export async function resolveProposalTargetName(
   subjectType: string,
   targetId: string,
@@ -5390,15 +5470,13 @@ export async function resolveProposalTargetName(
   // A skill is named by the name the reviewer knows it by: its CURRENT name.
   // An update patch carries `name` only when it renames, and then it is the
   // NEW name, so the inline read below would title a rename by a name nobody
-  // knows yet. No row (a create) falls through to the inline name.
+  // knows yet. No row (a create) falls through to the inline name. A rule
+  // kept under `rules/<ref>` is known by its ref (`skillTitleName`).
   if (subjectType === "skill" && isLikelyUUID(targetId)) {
     try {
-      const [skill] = await db
-        .select({ name: skills.name })
-        .from(skills)
-        .where(eq(skills.id, targetId))
-        .limit(1);
-      if (skill?.name) return skill.name;
+      const skill = await readSkillTitleRow(targetId);
+      const name = skill ? skillTitleName(skill) : undefined;
+      if (name) return name;
     } catch (err) {
       // Title only, as for a playbook below: never blocks the proposal.
       logger.warn(

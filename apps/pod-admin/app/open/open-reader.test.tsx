@@ -54,6 +54,29 @@ describe("OpenObject: the card or the reader", () => {
     expect(bar).toContain('aria-label="More about Roadmap board"');
   });
 
+  it("a page opened from another object shows its trail in the bar, each parent a door", () => {
+    const out = renderToStaticMarkup(
+      <OpenObject
+        reader="document"
+        header={{
+          ...header,
+          breadcrumb: [
+            { label: "Acme deal", href: "/open/entity/e1" },
+            { label: "Roadmap board" },
+          ],
+        }}
+      >
+        <p>the board</p>
+      </OpenObject>
+    );
+    const bar = out.slice(0, out.indexOf("</header>"));
+    expect(bar).toContain('aria-label="Breadcrumb"');
+    expect(bar).toMatch(/<a[^>]*href="\/open\/entity\/e1"[^>]*>Acme deal<\/a>/);
+    expect(bar.indexOf("Acme deal")).toBeLessThan(bar.indexOf("Roadmap board"));
+    // The last crumb is the page itself: the title, never a door.
+    expect(bar).not.toMatch(/<a[^>]*>[^<]*Roadmap board/);
+  });
+
   it("the mark leads Home for a member; the title is never a door", () => {
     const out = renderToStaticMarkup(
       <ReceiverIdentityProvider canGoHome>

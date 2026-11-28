@@ -698,6 +698,12 @@ export interface Hold {
 	until?: HoldUntil | null;
 	/** ISO date by which someone looks at it again (never a move). */
 	reviewBy?: string | null;
+	/**
+	 * Wake whoever holds the thing when this hold resumes (a session's pause
+	 * only: the agent working that session). The pauser ASKS for it; absent or
+	 * false wakes nobody, as before. See {@link HOLD_WAKE_HELP}.
+	 */
+	wake?: boolean | null;
 }
 /**
  * A hold as the transition records it: the mover's hold plus what the server
@@ -9773,7 +9779,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
  *   entity|profile|workspace|project|track|playbook|session
  *                       --attaches-->          view | document | cell_instance
- *                                              (an ATTACHED surface, Surfaces P3)
+ *                                              (an ATTACHED surface)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -9924,7 +9930,7 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  | "extends"
 /**
  * <anchor> --attaches--> view | document | cell_instance. An ATTACHED
- * surface (Surfaces P3, founder decision 23 Nov 2026): 0..n extra screens on
+ * surface: 0..n extra screens on
  * ONE object, beside its kind's look (`renders`, kind-level, in
  * `renderer_bindings`) and its one body (`entities.document_id`). The anchor
  * is any of entity · profile · workspace · project · track · playbook ·
@@ -14044,7 +14050,7 @@ export interface CurrentHold extends Required<HoldSubjectRef> {
 	/** The person the paused thing's move was attributed to. */
 	userId: string;
 	workspaceId: string | null;
-	/** `until.date` has come: the hourly sweep resumes it. */
+	/** `until.date` has come: the resume sweep resumes it. */
 	resumeDue: boolean;
 	/** `reviewBy` has passed: a signal for the watcher, never a move. */
 	reviewDue: boolean;
@@ -18150,11 +18156,22 @@ export interface RunGroup {
 	hasRunning: boolean;
 	/** Runs that completed. */
 	completedCount: number;
-	/** Runs that failed (lifetime — the drill-down number). */
+	/**
+	 * Runs that failed (lifetime — the drill-down number). A run that stopped at
+	 * its token budget or step limit is not one: it is in `stoppedCount`.
+	 */
 	failedCount: number;
 	/**
+	 * Runs that STOPPED at their budget (lifetime): `failed` with
+	 * `stopReason: 'budget'` (its token budget or step limit; the run's `error`
+	 * says which). Nothing broke, so it is counted apart from `failedCount` and
+	 * never makes a flow "failing".
+	 */
+	stoppedCount: number;
+	/**
 	 * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
-	 * governance outcome, not a failure) within the last
+	 * governance outcome and a budget stop is in `stoppedCount`, neither is a
+	 * failure) within the last
 	 * `RECENT_FAILURE_WINDOW_DAYS` (7, `@synap-core/types/run-activity`) days,
 	 * each dated by `coalesce(completedAt, startedAt)` — the HEALTH number. A
 	 * flow is "failing" iff this is > 0; a flow that failed 271 times in June
@@ -22130,6 +22147,19 @@ export interface PacketChildItem {
 	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
 	 */
 	skipped?: true;
+	/**
+	 * The key of the parent's output this child was spawned to deliver (W7:
+	 * `forOutput` on the start, recorded on the `spawned_from` edge as
+	 * `metadata.forOutput`; `lane-rollup.ts`). On `children` items only;
+	 * absent when it was spawned for no output.
+	 */
+	forOutput?: string;
+	/**
+	 * That output's label on the parent (`slotLabelForKey`), so a reader draws
+	 * "fills <label>" with no second read. Absent with `forOutput`, and when
+	 * the parent no longer declares that key (a withdrawn or renamed slot).
+	 */
+	forOutputLabel?: string;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -26457,12 +26487,7 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
-	/**
-	 * The stores that could not be read, with their error: NOT "no bindings".
-	 * Always set by this builder; optional on the type because the field joined
-	 * an existing door's output (an older pod omits it, and typed fixtures in
-	 * dependent repos predate it).
-	 */
+	/** Stores that could not be read: not "no bindings". */
 	unavailable?: {
 		error: string;
 		source: string;
@@ -41897,6 +41922,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				homeWorkspaceId?: string | null | undefined;
 				id: string;
@@ -42001,6 +42027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				occurredAt?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
@@ -42088,6 +42115,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								moves: string;
 								to?: string | undefined;
 							} | null | undefined;
+							wake?: boolean | null | undefined;
 						} | undefined;
 						occurredAt?: string | undefined;
 						properties?: Record<string, unknown> | undefined;
@@ -43988,6 +44016,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				forOutput?: string | undefined;
 				forceCreate?: boolean | undefined;
 				goal: string;
 				params?: Record<string, unknown> | undefined;
@@ -45403,6 +45432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;
@@ -63659,6 +63689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						moves: string;
 						to?: string | undefined;
 					} | null | undefined;
+					wake?: boolean | null | undefined;
 				} | undefined;
 				id: string;
 				occurredAt?: string | undefined;

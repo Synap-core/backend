@@ -25,7 +25,7 @@ import { BLOCK_KINDS, type BlockKind } from "@synap-core/types/blocks";
  * WRITTEN in the legacy spelling (`kind: "widget"`, `widgetType`, `config`):
  * every reader accepts the canonical `{ kind: "cell", cellKey, props }`, but a
  * host that predates it drops the tile and saves the bento without it. The
- * spelling flips here once every host reads `cell` (Surfaces P5 follow-up).
+ * spelling flips here once every host reads `cell`.
  */
 const BENTO_BLOCK_KIND_TEACHING: Record<
   BlockKind,

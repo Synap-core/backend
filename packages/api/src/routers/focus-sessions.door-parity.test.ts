@@ -162,6 +162,51 @@ describe("focusSessions.create — the playbook candidates reach the caller", ()
   });
 });
 
+describe("focusSessions.create — a lane names the parent output it delivers (W7)", () => {
+  const PARENT = "22222222-2222-4222-8222-222222222222";
+
+  it("hands `forOutput` to the one create door and returns its `parentLink`", async () => {
+    // The MCP and Hub start doors already took `forOutput`; this door's zod
+    // input stripped it, so a lane started from a screen could never say
+    // which of its parent's outputs it fills. The check and the edge live in
+    // `createFocusSession` (one copy): the door only has to pass it through.
+    createSpy.mockReset();
+    createSpy.mockResolvedValue({
+      status: "created",
+      session: sessionRow(),
+      parentLink: {
+        status: "linked",
+        parentSessionId: PARENT,
+        suspendedIntentRecorded: false,
+        forOutput: { status: "recorded", key: "pull-request" },
+      },
+    });
+
+    const out = await caller().create({
+      workspaceId: WS,
+      goal: "Ship the lane",
+      parentSessionId: PARENT,
+      forOutput: "pull-request",
+    });
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(createSpy.mock.calls[0]![0]).toMatchObject({
+      parentSessionId: PARENT,
+      forOutput: "pull-request",
+    });
+    expect(out).toMatchObject({
+      parentLink: { forOutput: { status: "recorded", key: "pull-request" } },
+    });
+  });
+
+  it("no `forOutput` asked: the service is told none (null), never a guess", async () => {
+    createSpy.mockReset();
+    createSpy.mockResolvedValue({ status: "created", session: sessionRow() });
+    await caller().create({ workspaceId: WS, goal: "Review" });
+    expect(createSpy.mock.calls[0]![0]).toMatchObject({ forOutput: null });
+  });
+});
+
 describe("focusSessions.close — the verdict and the warnings reach the caller", () => {
   it("returns the criteria verdict alongside the row", async () => {
     completeSpy.mockResolvedValue({

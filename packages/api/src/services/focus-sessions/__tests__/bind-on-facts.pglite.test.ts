@@ -343,12 +343,15 @@ describe("at start: a fact binds through the follow door", () => {
     expect(res.binding).toBeUndefined();
   });
 
-  it("templateId: null skips the suggestions, not the facts", async () => {
+  it("templateId: null skips the suggestions and the parent's playbook, not the subject's", async () => {
     const res = await start({
       subjectEntityId: await entityOf(ISSUE_PROFILE),
       templateId: null,
     });
-    expect((await rowOf(res.session.id)).playbook_id).toBe(FIX);
+    const row = await rowOf(res.session.id);
+    expect(row.playbook_id).toBe(FIX);
+    expect(row.metadata.boundBy).toMatchObject({ rung: "subject" });
+    expect(row.metadata.parentPlaybookDeclinedAt).toBeTruthy();
     expect(res.playbooks).toBeUndefined();
   });
 
@@ -372,6 +375,28 @@ describe("at start: a fact binds through the follow door", () => {
     const row = await rowOf(child.session.id);
     expect(row.playbook_id).toBe(OTHER);
     expect(row.metadata.boundBy).toMatchObject({ rung: "parent" });
+    expect(row.metadata.parentPlaybookDeclinedAt).toBeUndefined();
+  });
+
+  it("a lane started with templateId: null does not inherit: no run, no merged criteria (finding 42e4af30)", async () => {
+    const parent = await start({ templateId: OTHER });
+    expect((await rowOf(parent.session.id)).playbook_id).toBe(OTHER);
+    const child = await start({
+      parentSessionId: parent.session.id,
+      templateId: null,
+    });
+    const row = await rowOf(child.session.id);
+    expect(row.playbook_id).toBeNull();
+    expect(row.metadata.boundBy).toBeUndefined();
+    expect(await runsOf(child.session.id)).toEqual([]);
+    expect(child.binding).toBeUndefined();
+    const { criteria } = (
+      await q<{ criteria: Array<{ key: string }> }>(
+        `select criteria from focus_sessions where id = $1`,
+        [child.session.id]
+      )
+    ).rows[0]!;
+    expect(criteria.map((c) => c.key)).not.toContain("something-else-done");
   });
 });
 
@@ -484,6 +509,35 @@ describe("later: the first subject re-runs the facts, once", () => {
     if (back.status !== "updated") throw new Error(back.status);
     expect(back.binding).toBeUndefined();
     expect((await rowOf(res.session.id)).playbook_id).toBeNull();
+  });
+
+  it("a lane started with templateId: null does not inherit later either, when its first subject arrives", async () => {
+    // The parent follows nothing when the lane starts, so nothing binds
+    // there: this case proves the LATE re-resolve honours the decline.
+    const parent = await start();
+    const res = await start({
+      parentSessionId: parent.session.id,
+      templateId: null,
+    });
+    expect((await rowOf(res.session.id)).playbook_id).toBeNull();
+    await updateFocusSession({
+      sessionId: parent.session.id,
+      userId: USER,
+      followPlaybookId: OTHER,
+    });
+    expect((await rowOf(parent.session.id)).playbook_id).toBe(OTHER);
+    // A note: no playbook runs on it, so only the parent rung could bind.
+    const up = await updateFocusSession({
+      sessionId: res.session.id,
+      userId: USER,
+      subjectEntityId: await entityOf(NOTE_PROFILE),
+    });
+    if (up.status !== "updated") throw new Error(up.status);
+    expect(up.binding).toBeUndefined();
+    const row = await rowOf(res.session.id);
+    expect(row.playbook_id).toBeNull();
+    expect(row.metadata.boundBy).toBeUndefined();
+    expect(await runsOf(res.session.id)).toEqual([]);
   });
 
   it("the caller's own follow in the same patch wins over the facts", async () => {

@@ -61,6 +61,22 @@ function harness(surface: FrameSurface | null, refuse = false) {
     surface,
     workspaceId: "ws-1",
   });
+
+  // The frame's document hands over its reply port first (`frame-channel.ts`
+  // in the types leaf): every answer reaches it there, never on its window.
+  void onMessage({
+    source: frame,
+    origin: "null",
+    data: { type: "synap:hello" },
+    ports: [
+      {
+        postMessage: (m: unknown) => {
+          if ((m as { type?: unknown }).type !== "synap:channel:ready")
+            frame.postMessage(m);
+        },
+      },
+    ],
+  });
   const read = () =>
     onMessage({
       source: frame,

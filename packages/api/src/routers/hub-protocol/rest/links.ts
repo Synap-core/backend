@@ -86,7 +86,7 @@ const SYSTEM_WRITTEN_ENDPOINT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The SURFACE ends of an `attaches` edge (Surfaces P3). Nothing but an
+ * The SURFACE ends of an `attaches` edge. Nothing but an
  * attachment names them, and an attachment is written by the surfaces door
  * (`POST /surfaces/attach`), which floors both ends and files a
  * `surface/attach` proposal for an agent. Refused here for every link type.

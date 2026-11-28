@@ -41,6 +41,7 @@ import {
   isLivingDocument,
 } from "../../_lib/object/content/document-model";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import type { ObjectCrumb } from "../../_lib/object/object-header";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenFailure, OpenLoading, OpenObject, openWidth } from "../open-shell";
@@ -58,7 +59,14 @@ const TYPE_LABEL: Record<string, string> = {
   docx: "Word document",
 };
 
-export function DocumentView({ id }: { id: string }) {
+export function DocumentView({
+  id,
+  breadcrumb,
+}: {
+  id: string;
+  /** The trail back, when this document opened on an object (`?surface=`). */
+  breadcrumb?: ObjectCrumb[];
+}) {
   const query = trpc.documents.get.useQuery(
     { documentId: id, format: "raw" },
     { retry: false }
@@ -89,6 +97,7 @@ export function DocumentView({ id }: { id: string }) {
         kind="document"
         id={id}
         failure={fail ?? couldNotLoad("Document")}
+        breadcrumb={breadcrumb}
       />
     );
   }
@@ -111,6 +120,7 @@ export function DocumentView({ id }: { id: string }) {
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
+        breadcrumb,
         status: living
           ? { kind: "healthy", label: t("document.mark.live") }
           : null,

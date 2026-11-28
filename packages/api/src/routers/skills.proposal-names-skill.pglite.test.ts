@@ -9,7 +9,9 @@
  * reviewer does not know yet.
  *
  * `resolveProposalTargetName` reads the skill's CURRENT name by id. The noun
- * stays the vocabulary's ("Tool", founder D2, `resolveObjectNoun`).
+ * stays the vocabulary's ("Tool", founder D2, `resolveObjectNoun`), except for
+ * a rule (`@synap-core/types/skill-rule`): "Rule", called by its `rules/` ref
+ * (proposal 0a641510 read "Update Tool" for an edit of `rules/work-units`).
  *
  * Driven end to end: the REAL `skills` router as an agent → the REAL gate
  * (proposed by the person's own rule) → `createProposal` → the stored proposal
@@ -128,6 +130,8 @@ import { skillsRouter } from "./skills.js";
 const USER = randomUUID();
 const AGENT = randomUUID();
 const SKILL_ID = randomUUID();
+const RULE_BY_REF = randomUUID();
+const RULE_BY_CATEGORY = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -210,6 +214,14 @@ beforeAll(async () => {
      values ($1, $2, 'house-style', 'House style', '# approved body', 'instruction', 'pod', true)`,
     [SKILL_ID, USER]
   );
+  // The pod's rules as they are stored (proposal 0a641510): a `rules/` ref
+  // whose name is a machine token, and a rule marked by its category.
+  await q(
+    `insert into skills (id, user_id, slug, name, body, kind, scope, approved, category)
+     values ($1, $3, 'rules/work-units', 'rules_work_units', '# one unit', 'instruction', 'pod', true, null),
+            ($2, $3, 'no-friday-meetings', 'No meetings on Fridays', 'Never on Friday', 'instruction', 'pod', true, 'rule')`,
+    [RULE_BY_REF, RULE_BY_CATEGORY, USER]
+  );
   // The person's own setting: "ask me before an agent edits or deletes a
   // skill", so every call below is PROPOSED whatever the pod default.
   await q(
@@ -233,6 +245,28 @@ describe("skill proposals name the skill", () => {
       skills().update({ id: SKILL_ID, name: "House voice" })
     );
     expect(await storedSummary(res)).toBe('Update Tool "House style"');
+  });
+
+  it('a rule edit is titled as a rule, by its ref — never "Update Tool"', async () => {
+    // Before: the name `rules_work_units` is a machine token the title door
+    // drops, and the noun was the table's ("Tool"), so the founder read a
+    // bare "Update Tool" for an edit of `rules/work-units`.
+    const res = await asAgent(() =>
+      skills().update({ id: RULE_BY_REF, body: "# one unit, one session" })
+    );
+    expect(await storedSummary(res)).toBe('Update Rule "work-units"');
+  });
+
+  it("a rule marked by its category is a rule too, named by its name", async () => {
+    const res = await asAgent(() =>
+      skills().update({
+        id: RULE_BY_CATEGORY,
+        body: "Never on Friday or Monday",
+      })
+    );
+    expect(await storedSummary(res)).toBe(
+      'Update Rule "No meetings on Fridays"'
+    );
   });
 
   it("a delete names the skill too", async () => {

@@ -6,7 +6,8 @@
  * (ViewFrame's runtime): one copy, here, for every host (the desktop's
  * ViewFrame, pod admin's module frame).
  *
- * Order in the frame: `FRAME_BLOB_URLS_SCRIPT` (host-inlined module sources →
+ * Order in the frame: `CELL_FRAME_CHANNEL_SCRIPT` (`frame-channel.ts`: the
+ * reply port, handed over first) → `FRAME_BLOB_URLS_SCRIPT` (host-inlined module sources →
  * same-origin `blob:null/…` URLs) → `FRAME_IMPORT_MAP_SCRIPT` (the import map
  * from those URLs) → the SDKs → `FRAME_INIT_QUEUE_SCRIPT` (says ready, queues
  * init). Nothing remote: the frame's policy names no origin.

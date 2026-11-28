@@ -50,7 +50,11 @@ import {
   type CreateDocumentInput,
 } from "../repositories/document-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
-import { HTML_PAGE_DOOR_MARK, isHtmlPageBody } from "./html-page-door-token.js";
+import {
+  HTML_PAGE_DOOR_MARK,
+  htmlPageSizeRefusal,
+  isHtmlPageBody,
+} from "./html-page-door-token.js";
 import type { Document } from "../schema/documents.js";
 import type { LensScope } from "@synap-core/types/lens";
 
@@ -252,6 +256,18 @@ export async function claimDocumentRevision(
       "BAD_REQUEST",
       "This document has no stored content (an external reference); there is nothing to write."
     );
+  }
+  // An HTML page is at most 2 MB on EVERY write, not only at create (review
+  // S4): an edit, an approved patch, a restore. Refused inside the claim's
+  // transaction, so the revision bump rolls back and nothing is written. A
+  // stored file (`type: "file"`) is bytes, not a page: not judged here.
+  if (
+    writesContent &&
+    claimed.type !== "file" &&
+    isHtmlPageBody({ type: claimed.type, mimeType: claimed.mimeType })
+  ) {
+    const tooLarge = htmlPageSizeRefusal(options.content!);
+    if (tooLarge) throw new DocumentWriteTargetError("BAD_REQUEST", tooLarge);
   }
   const storageKey = claimed.storageKey;
   const mimeType = options.mimeType || claimed.mimeType || "text/plain";

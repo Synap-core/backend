@@ -5,7 +5,7 @@
  * their seam: the Hub `profiles.setRenderer` caller (renderer_bindings: a
  * kind's records, a view), `bindCapabilityRenderer` (a capability's
  * page-set) and the surface door `createSurface` (a PLAYBOOK's own look is
- * an attached surface since Surfaces P3). What is pinned is the DISPATCH:
+ * an attached surface). What is pinned is the DISPATCH:
  * which door each target reaches, with which subject, and that a
  * capability's other pages survive a one-page bind.
  */

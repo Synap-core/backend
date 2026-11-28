@@ -29,7 +29,8 @@
  *    and "a draft reads more than its person"); another person naming the
  *    same draft id: 403 FRAME_DRAFT_NOT_YOURS, logged refused, and the owner
  *    still reads (rules out "a draft id is anyone's" and "a refused claim
- *    steals it"); a draft in a space the viewer cannot read: 403;
+ *    steals it", and "the claim is lost with the log's retention"); a draft
+ *    in a space the viewer cannot read: 403;
  *  - an op outside the ceiling: 400; an unknown cell or a page the viewer
  *    cannot read: 404, nothing answered; a declared op missing its required
  *    param: 400 (rules out "a frame's bad call is a server error");
@@ -41,7 +42,7 @@
  *
  * NOT COVERED: the tRPC twin `surfaces.frameRead` (a thin wrapper over the
  * same `frameRead`), every op of the table (only `entities.list` runs; the
- * others are the same mapping as pod admin's `readForPage`), and the grant
+ * others go through the same `runFrameReadOp` table), and the grant
  * fence (its classification tripwire covers the route).
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -456,6 +457,31 @@ describe("a person's own unsaved draft (a preview)", () => {
     });
     expect(res.status).toBe(200);
     expect(idsOf(await res.json())).toEqual([P_A]);
+  });
+
+  it("the claim outlives the log: once its person's lines are gone, another person is still refused", async () => {
+    const draftId = randomUUID();
+    const mine = await read({
+      surface: { kind: "draft", draftId },
+      op: "entities.list",
+      params: { profileSlug: "deal" },
+      workspaceId: WA,
+    });
+    expect(mine.status).toBe(200);
+    // What the 30-day retention does to the owner's lines.
+    await q(`delete from frame_read_log where surface_key = $1`, [draftId]);
+    const theirs = await read(
+      {
+        surface: { kind: "draft", draftId },
+        op: "entities.list",
+        params: { profileSlug: "deal" },
+      },
+      B
+    );
+    expect(theirs.status).toBe(403);
+    expect(await theirs.json()).toMatchObject({
+      code: "FRAME_DRAFT_NOT_YOURS",
+    });
   });
 
   it("a draft read in a space the viewer cannot read: 403", async () => {

@@ -20,6 +20,10 @@
  *   PB_CLEAN    — recent completed only, the most recently active flow → absent
  *   PB_HIDDEN   — a recent failure in a workspace the user cannot see → absent
  *   PB_LENS     — a recent failure in the user's own workspace (lens case)
+ *   PB_BUDGET   — recent runs that only STOPPED at their budget (`failed` +
+ *                 stop_reason `budget`) → absent; counted in stoppedCount
+ *   AU_MIXED    — a budget stop, a real failure and a `stages_left` failure
+ *                 → failing, count 2 (the budget stop is not a failure)
  *
  * WHAT THESE TESTS CANNOT SEE: index use and cost (measured on the live pod,
  * EXPLAIN in the PR); the `diagnose` summary wording (diagnose.test.ts).
@@ -108,6 +112,8 @@ const PB_LONG = randomUUID();
 const PB_CLEAN = randomUUID();
 const PB_HIDDEN = randomUUID();
 const PB_LENS = randomUUID();
+const PB_BUDGET = randomUUID();
+const AU_MIXED = randomUUID();
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -120,21 +126,23 @@ async function run(
   status: string,
   startedAgo: number,
   completedAgo: number | null,
-  workspaceId: string | null = null
+  workspaceId: string | null = null,
+  stopReason: string | null = null
 ) {
   const [table, col] =
     ledger === "automation"
       ? ["automation_runs", "automation_id"]
       : ["playbook_runs", "playbook_id"];
   await h.client!.query(
-    `insert into ${table} (id, ${col}, workspace_id, status, started_at, completed_at)
-     values (gen_random_uuid(), $1, $2, $3, $4, $5)`,
+    `insert into ${table} (id, ${col}, workspace_id, status, started_at, completed_at, stop_reason)
+     values (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`,
     [
       flowId,
       workspaceId,
       status,
       ago(startedAgo),
       completedAgo === null ? null : ago(completedAgo),
+      stopReason,
     ]
   );
 }
@@ -170,6 +178,7 @@ beforeAll(async () => {
     [AU_FAILING, "Inbox triage"],
     [AU_OLD_FAIL, "Old failure"],
     [AU_BLOCKED, "Blocked"],
+    [AU_MIXED, "Mixed"],
   ]) {
     await h.client!.query(
       `insert into automations (id, name) values ($1, $2)`,
@@ -182,6 +191,7 @@ beforeAll(async () => {
     [PB_CLEAN, "Clean"],
     [PB_HIDDEN, "Hidden"],
     [PB_LENS, "Lens"],
+    [PB_BUDGET, "Budget"],
   ]) {
     await h.client!.query(`insert into playbooks (id, name) values ($1, $2)`, [
       id,
@@ -213,6 +223,21 @@ beforeAll(async () => {
   await run("playbook", PB_HIDDEN, "failed", 1 * DAY, 1 * DAY, STRANGER_WS);
 
   await run("playbook", PB_LENS, "failed", 6 * HOUR, 6 * HOUR, MY_WS);
+
+  await run("playbook", PB_BUDGET, "failed", 2 * DAY, 2 * DAY, null, "budget");
+  await run("playbook", PB_BUDGET, "failed", 1 * DAY, 1 * DAY, null, "budget");
+
+  await run("automation", AU_MIXED, "failed", 7 * DAY, 7 * DAY, null, "budget");
+  await run("automation", AU_MIXED, "failed", 6 * DAY, 6 * DAY);
+  await run(
+    "automation",
+    AU_MIXED,
+    "failed",
+    5 * DAY,
+    5 * DAY,
+    null,
+    "stages_left"
+  );
 });
 
 describe("listRecentlyFailingFlows — only what diagnose shows", () => {
@@ -222,6 +247,7 @@ describe("listRecentlyFailingFlows — only what diagnose shows", () => {
       AU_FAILING, // newest start 3 h ago
       PB_LENS, // 6 h ago
       PB_RUNNING, // 2 days ago (the running run started 10 days ago)
+      AU_MIXED, // 5 days ago
       PB_LONG, // 9 days ago
     ]);
   });
@@ -248,6 +274,38 @@ describe("listRecentlyFailingFlows — only what diagnose shows", () => {
     expect(ids).not.toContain(AU_OLD_FAIL);
     expect(ids).not.toContain(AU_BLOCKED);
     expect(ids).not.toContain(PB_CLEAN);
+  });
+
+  it("a run that STOPPED at its budget is not a failure: a flow of only budget stops is not failing", async () => {
+    const ids = (await listRecentlyFailingFlows({ userId: USER })).map(
+      (f) => f.flowId
+    );
+    expect(ids).not.toContain(PB_BUDGET);
+    const [g] = (await listRunGroups({ userId: USER, limit: 100 })).filter(
+      (x) => x.flowId === PB_BUDGET
+    );
+    expect(g).toMatchObject({
+      runCount: 2,
+      failedCount: 0,
+      recentFailedCount: 0,
+      stoppedCount: 2,
+    });
+  });
+
+  it("a real failure still counts next to a budget stop (stages_left is a fault)", async () => {
+    const f = (await listRecentlyFailingFlows({ userId: USER })).find(
+      (x) => x.flowId === AU_MIXED
+    );
+    expect(f).toMatchObject({ recentFailedCount: 2 });
+    const [g] = (await listRunGroups({ userId: USER, limit: 100 })).filter(
+      (x) => x.flowId === AU_MIXED
+    );
+    expect(g).toMatchObject({
+      runCount: 3,
+      failedCount: 2,
+      recentFailedCount: 2,
+      stoppedCount: 1,
+    });
   });
 
   it("hasRunning reads a running run of any age, not only recent ones", async () => {

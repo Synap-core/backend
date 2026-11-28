@@ -553,9 +553,11 @@ export {
   HoldRefusedError,
   assertHoldWaitRefOwned,
   listHolds,
+  listSubjectMoves,
   type CurrentHold,
   type HoldFilter,
   type HoldSubjectRef,
+  type SubjectMove,
 } from "./services/lifecycle/holds.js";
 export {
   claimStatusSignals,

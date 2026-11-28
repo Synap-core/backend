@@ -404,7 +404,7 @@ export interface DefineCellInput {
    *
    * CHANGING it on an existing row demotes `trustLevel` to `generated` (see
    * `defineCell`). Load-bearing since the install doors stamp `installed`
-   * (`trustLevel`, Surfaces P6a): a re-push that re-points an installed
+   * (`trustLevel`): a re-push that re-points an installed
    * cell's egress, by any door but an install, loses the installed trust.
    * (`sync.ts` still floors an incoming row to `"generated"`.)
    *
