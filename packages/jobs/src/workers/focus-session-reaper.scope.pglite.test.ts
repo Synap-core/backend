@@ -39,6 +39,7 @@ import {
   focusSessions,
   proposals,
   messages,
+  channels,
   sessionStageRuns,
   lifecycleTransitionOutbox,
 } from "@synap/database/schema";
@@ -97,6 +98,8 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
   await h.client!.exec(ddlFor(proposals as unknown as PgTable));
   await h.client!.exec(ddlFor(messages as unknown as PgTable));
+  // SESSION_IS_STALE reads the session's room (a post is activity).
+  await h.client!.exec(ddlFor(channels as unknown as PgTable));
   // A step that waits keeps its session (0422): SESSION_IS_STALE reads it.
   await h.client!.exec(ddlFor(sessionStageRuns as unknown as PgTable));
   // A session paused on a wait hold keeps itself (SESSION_IS_STALE reads

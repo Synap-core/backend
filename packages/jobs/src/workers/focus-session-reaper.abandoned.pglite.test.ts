@@ -32,6 +32,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   messages,
+  channels,
   events,
   proposals,
   chatTurns,
@@ -112,6 +113,8 @@ beforeAll(async () => {
   for (const t of [
     focusSessions,
     messages,
+    // A post in its own room is activity (the run reaper's rule).
+    channels,
     events,
     proposals,
     chatTurns,
@@ -164,6 +167,27 @@ describe("staleAbandonedAgentSessions", () => {
     expect(await statusOf(mine)).toBe("active");
     expect(await statusOf(recent)).toBe("active");
     expect(await statusOf(closed)).toBe("closed");
+  });
+
+  it("never stales a session whose agent still posts in its own room", async () => {
+    const reporting = await session({ idleDays: OLD });
+    await wrote(reporting, "agent");
+    const room = randomUUID();
+    await q(
+      `insert into channels (id, context_object_type, context_object_id) values ($1, 'focus_session', $2)`,
+      [room, reporting]
+    );
+    await q(`update focus_sessions set channel_id = $1 where id = $2`, [
+      room,
+      reporting,
+    ]);
+    await q(
+      `insert into messages (id, channel_id, author_type, metadata, timestamp)
+       values ($1, $2, 'ai_agent', '{}'::jsonb, now() - interval '2 days')`,
+      [randomUUID(), room]
+    );
+    expect(await staleAbandonedAgentSessions()).toBe(0);
+    expect(await statusOf(reporting)).toBe("active");
   });
 
   it("leaves a session that owes nothing to the main 24 h sweep", async () => {

@@ -44,6 +44,7 @@ import {
   chatTurns,
   chatTurnEvents,
   ChatTurnStatus,
+  sessionRoomLastPostAt,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { PROPOSAL_TRACK_RUN_WINDOW } from "@synap-core/types/proposals";
@@ -127,6 +128,19 @@ import {
 } from "./capability-run-where.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
+
+/**
+ * When a session was last worked: its `updated_at` (every real step touches
+ * it) or the last post in its own room that counts (`sessionRoomLastPostAt`,
+ * the rule the reapers read), whichever is later. NULL only when the session
+ * is not joined (`greatest` skips a NULL room read). Mapped through the
+ * column so it comes back a Date, as the plain column did: a raw SQL
+ * timestamp comes back from postgres.js as a string.
+ */
+const sessionLastActivityAt =
+  drizzleSql<Date | null>`greatest(${focusSessions.updatedAt}, ${sessionRoomLastPostAt(
+    { id: focusSessions.id, channelId: focusSessions.channelId }
+  )})`.mapWith(focusSessions.updatedAt);
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` (the agnostic-capability last-mile executor's
  * `proposals.proposalType`) is imported from `../proposals/proposal-class.js` —
  * the module that classifies on it. A private copy here was one of four. */
@@ -485,10 +499,12 @@ async function listPlaybookRuns(
       subjectEntityId: runSubjectColumn(userId),
       projectId: focusSessions.projectId,
       // Progress signal: `playbook_runs` has no updated_at, so "actively
-      // worked" is read off the linked session — the SAME column
-      // `playbook-run-reaper` uses to decide a run is orphaned. One signal, two
-      // consumers (it reports, the reaper acts), never two definitions.
-      lastActivityAt: focusSessions.updatedAt,
+      // worked" is read off the linked session — the SAME signal
+      // `playbook-run-reaper` uses to decide a run is orphaned: its
+      // `updated_at`, or a post in its own room (`sessionRoomLastPostAt`,
+      // the reaper's rule, #1383). One signal, two consumers (it reports, the
+      // reaper acts), never two definitions.
+      lastActivityAt: sessionLastActivityAt,
       replayOf: playbookRuns.replayOf,
       // NULL snapshot → NULL version (tolerant); ::int for a numeric field.
       definitionVersion: drizzleSql<
@@ -1190,9 +1206,10 @@ async function listSessionRuns(
       projectId: focusSessions.projectId,
       subjectEntityId: focusSessions.subjectEntityId,
       channelId: focusSessions.channelId,
-      // Every real step on a session touches updated_at — this is the only
-      // minutes-scale "is it still moving?" signal a session ledger carries.
-      lastActivityAt: focusSessions.updatedAt,
+      // Every real step on a session touches updated_at, and a lane that
+      // only reports in its room posts there: the minutes-scale "is it still
+      // moving?" signal, the one the session reaper reads.
+      lastActivityAt: sessionLastActivityAt,
     })
     .from(focusSessions)
     .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
@@ -1607,7 +1624,7 @@ export interface ListRunGroupsInput {
  * so it is never a failure: the breakers skip it, the worker mark reads it
  * `skipped`, and every count here keeps it apart from `failedCount`.
  */
-function budgetStopWhere(cols: {
+export function budgetStopWhere(cols: {
   status: AnyPgColumn;
   stopReason: AnyPgColumn;
 }): SQL {

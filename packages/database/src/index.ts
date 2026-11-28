@@ -89,6 +89,7 @@ export * from "./utils/open-room-question.js";
 export * from "./utils/seen-by-agent.js";
 export * from "./utils/stage-run-waiting.js";
 export * from "./utils/needs-you-predicate.js";
+export * from "./utils/session-room-activity.js";
 export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/stage-gate-wait.js";
 export * from "./utils/uuid-from-text.js";
